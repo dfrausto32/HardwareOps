@@ -1,0 +1,197 @@
+package artifacts
+
+import (
+	"archive/tar"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestApplySuccess(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	tarPath, sum := createTestBundle(t, root, "1.0.0")
+
+	server := httptest.NewServer(http.FileServer(http.Dir(filepath.Dir(tarPath))))
+	t.Cleanup(server.Close)
+
+	desired := Desired{
+		ArtifactID:      "artifact-1",
+		SoftwareVersion: "1.0.0",
+		DownloadURL:     server.URL + "/" + filepath.Base(tarPath),
+	}
+	meta := ArtifactMeta{
+		ArtifactID: "artifact-1",
+		SHA256:     sum,
+		Version:    "1.0.0",
+	}
+
+	if err := Apply(root, desired, meta, server.Client()); err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+
+	current := filepath.Join(root, "current")
+	target, err := os.Readlink(current)
+	if err != nil {
+		t.Fatalf("readlink current: %v", err)
+	}
+	if filepath.Base(target) != "1.0.0" {
+		t.Fatalf("expected current version 1.0.0, got %s", target)
+	}
+
+	appliedFile := filepath.Join(root, "versions", "1.0.0", "files", "app.txt")
+	if _, err := os.Stat(appliedFile); err != nil {
+		t.Fatalf("expected file to exist: %v", err)
+	}
+}
+
+func TestRollbackToVersion(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	v1 := filepath.Join(root, "versions", "v1")
+	v2 := filepath.Join(root, "versions", "v2")
+	if err := os.MkdirAll(v1, 0o755); err != nil {
+		t.Fatalf("mkdir v1: %v", err)
+	}
+	if err := os.MkdirAll(v2, 0o755); err != nil {
+		t.Fatalf("mkdir v2: %v", err)
+	}
+
+	current := filepath.Join(root, "current")
+	if err := os.Symlink(v2, current); err != nil {
+		t.Fatalf("symlink current: %v", err)
+	}
+
+	if err := RollbackToVersion(root, "v1"); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+
+	target, err := os.Readlink(current)
+	if err != nil {
+		t.Fatalf("readlink current: %v", err)
+	}
+	if target != v1 {
+		t.Fatalf("expected rollback to %s, got %s", v1, target)
+	}
+}
+
+func createTestBundle(t *testing.T, root, version string) (string, string) {
+	t.Helper()
+
+	bundleDir := filepath.Join(root, "bundle")
+	filesDir := filepath.Join(bundleDir, "files")
+	if err := os.MkdirAll(filesDir, 0o755); err != nil {
+		t.Fatalf("mkdir files: %v", err)
+	}
+
+	filePath := filepath.Join(filesDir, "app.txt")
+	content := []byte("hello hardwareops")
+	if err := os.WriteFile(filePath, content, 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	fileSum, err := fileSHA256(filePath)
+	if err != nil {
+		t.Fatalf("file sha: %v", err)
+	}
+
+	manifest := Manifest{
+		Name:      "agent",
+		Version:   version,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		Files: []ManifestFile{
+			{
+				Path:   "files/app.txt",
+				SHA256: fileSum,
+				Size:   int64(len(content)),
+			},
+		},
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bundleDir, "manifest.json"), manifestBytes, 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	tarPath := filepath.Join(root, "bundle.tar.gz")
+	if err := writeTarGz(tarPath, bundleDir); err != nil {
+		t.Fatalf("write tar: %v", err)
+	}
+	sum, err := sha256File(tarPath)
+	if err != nil {
+		t.Fatalf("tar sha: %v", err)
+	}
+	return tarPath, sum
+}
+
+func writeTarGz(dest, sourceDir string) error {
+	f, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	gz := gzip.NewWriter(f)
+	defer gz.Close()
+
+	tw := tar.NewWriter(gz)
+	defer tw.Close()
+
+	return filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(sourceDir, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		hdr, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		hdr.Name = filepath.ToSlash(rel)
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() {
+			in, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(tw, in); err != nil {
+				in.Close()
+				return err
+			}
+			in.Close()
+		}
+		return nil
+	})
+}
+
+func sha256File(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}

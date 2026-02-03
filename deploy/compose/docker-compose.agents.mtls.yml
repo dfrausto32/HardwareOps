@@ -1,0 +1,15 @@
+version: "3.8"
+
+services:
+  agent:
+    environment:
+      CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:-https://host.docker.internal}
+      DEVICE_CERT_PATH: /certs/device.crt
+      DEVICE_KEY_PATH: /certs/device.key
+      CONTROL_PLANE_CA_CERT_PATH: /certs/dev-ca.crt
+    volumes:
+      - ${DEVICE_CERT_PATH:-/tmp/hardwareops/device.crt}:/certs/device.crt:ro
+      - ${DEVICE_KEY_PATH:-/tmp/hardwareops/device.key}:/certs/device.key:ro
+      - ${CONTROL_PLANE_CA_CERT_PATH:-./dev-ca.crt}:/certs/dev-ca.crt:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

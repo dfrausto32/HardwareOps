@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  caddy:
+    image: caddy:2.8
+    restart: unless-stopped
+    environment:
+      CADDY_DOMAIN: ${CADDY_DOMAIN}
+      CADDY_EMAIL: ${CADDY_EMAIL}
+      CADDY_TLS: ${CADDY_TLS:-}
+      CADDY_CLIENT_CA: /certs/dev-ca.crt
+      CONTROL_PLANE_UPSTREAM: ${CONTROL_PLANE_UPSTREAM:-host.docker.internal:8080}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - ${CADDY_CLIENT_CA_PATH:-../dev-ca.crt}:/certs/dev-ca.crt:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  caddy_data:
+  caddy_config:

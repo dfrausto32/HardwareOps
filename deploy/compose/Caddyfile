@@ -1,0 +1,17 @@
+{
+	email {$CADDY_EMAIL}
+}
+
+{$CADDY_DOMAIN} {
+	tls {$CADDY_TLS} {
+		client_auth {
+			mode request
+			trust_pool file {$CADDY_CLIENT_CA}
+		}
+	}
+
+	reverse_proxy {$CONTROL_PLANE_UPSTREAM} {
+		header_up X-Client-Cert {tls_client_certificate}
+		header_up X-Forwarded-Proto {scheme}
+	}
+}

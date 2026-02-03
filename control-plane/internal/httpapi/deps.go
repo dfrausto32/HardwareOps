@@ -1,0 +1,38 @@
+package httpapi
+
+import (
+	"context"
+	"io"
+	"time"
+
+	"github.com/hardwareops/control-plane/internal/store"
+)
+
+type CertSigner interface {
+	SignDeviceCert(csrPEM []byte, deviceID string, validity time.Duration) (certPEM []byte, fingerprint string, err error)
+	CACertPEM() []byte
+}
+
+type ObjectStore interface {
+	PresignGet(ctx context.Context, bucket, key string, expires time.Duration) (string, error)
+	PutObject(ctx context.Context, bucket, key string, body io.Reader, size int64, contentType string) (int64, error)
+	EnsureBucket(ctx context.Context, bucket string) error
+}
+
+type RateLimitConfig struct {
+	EnrollmentTokenRPM int
+	EnrollRPM          int
+	CheckinRPM         int
+	ApplyResultRPM     int
+}
+
+type Dependencies struct {
+	Store            store.Store
+	Signer           CertSigner
+	ObjectStore      ObjectStore
+	S3Bucket         string
+	PresignExpires   time.Duration
+	TrustProxy       bool
+	ClientCertHeader string
+	RateLimits       RateLimitConfig
+}

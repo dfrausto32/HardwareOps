@@ -1,0 +1,174 @@
+package client
+
+import (
+	"bytes"
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/hardwareops/agent/internal/state"
+)
+
+type Client struct {
+	baseURL string
+	http    *http.Client
+}
+
+func New(baseURL string) *Client {
+	return NewWithTLS(baseURL, nil)
+}
+
+func NewWithTLS(baseURL string, tlsConfig *tls.Config) *Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if tlsConfig != nil {
+		transport.TLSClientConfig = tlsConfig
+	}
+	return &Client{
+		baseURL: baseURL,
+		http: &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: transport,
+		},
+	}
+}
+
+func (c *Client) HTTPClient() *http.Client {
+	return c.http
+}
+
+type CheckinRequest struct {
+	DeviceID     string            `json:"deviceId"`
+	AgentVersion string            `json:"agentVersion"`
+	Current      CheckinCurrent    `json:"current,omitempty"`
+	Capabilities any               `json:"capabilities,omitempty"`
+	Labels       map[string]string `json:"labels,omitempty"`
+}
+
+type CheckinCurrent struct {
+	SoftwareVersion string `json:"softwareVersion,omitempty"`
+	ConfigRev       string `json:"configRev,omitempty"`
+}
+
+type DesiredState struct {
+	ArtifactID      string `json:"artifactId"`
+	SoftwareVersion string `json:"softwareVersion"`
+	ConfigRev       string `json:"configRev"`
+	DownloadURL     string `json:"downloadUrl"`
+	CheckinInterval int    `json:"checkinIntervalSec"`
+}
+
+type CheckinResponse struct {
+	Desired    *DesiredState `json:"desired"`
+	ServerTime time.Time     `json:"serverTime"`
+}
+
+type ArtifactResponse struct {
+	ArtifactID string `json:"artifactId"`
+	Name       string `json:"name"`
+	Version    string `json:"version"`
+	ObjectKey  string `json:"objectKey"`
+	SHA256     string `json:"sha256"`
+	Signature  string `json:"signature"`
+	SizeBytes  int64  `json:"sizeBytes"`
+}
+
+type PresignResponse struct {
+	DownloadURL string `json:"downloadUrl"`
+}
+
+type ApplyResultRequest struct {
+	Status           string `json:"status"`
+	AppliedVersion   string `json:"appliedVersion,omitempty"`
+	AppliedConfigRev string `json:"appliedConfigRev,omitempty"`
+	Error            string `json:"error,omitempty"`
+}
+
+func (c *Client) CheckIn(st state.State) (*CheckinResponse, error) {
+	payload := CheckinRequest{
+		DeviceID:     st.DeviceID,
+		AgentVersion: st.AgentVersion,
+		Current: CheckinCurrent{
+			SoftwareVersion: st.CurrentVersion,
+			ConfigRev:       st.CurrentConfigRev,
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	url := fmt.Sprintf("%s/api/v1/devices/checkin", c.baseURL)
+	resp, err := c.http.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("check-in failed: status=%d", resp.StatusCode)
+	}
+
+	var out CheckinResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) PostApplyResult(deviceID string, req ApplyResultRequest) error {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s/api/v1/devices/%s/apply-result", c.baseURL, deviceID)
+	resp, err := c.http.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("apply result failed: status=%d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (c *Client) GetArtifact(artifactID string) (*ArtifactResponse, error) {
+	url := fmt.Sprintf("%s/api/v1/artifacts/%s", c.baseURL, artifactID)
+	resp, err := c.http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("get artifact failed: status=%d", resp.StatusCode)
+	}
+
+	var out ArtifactResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) PresignArtifact(artifactID string) (*PresignResponse, error) {
+	url := fmt.Sprintf("%s/api/v1/artifacts/%s/presign", c.baseURL, artifactID)
+	resp, err := c.http.Post(url, "application/json", bytes.NewReader([]byte("{}")))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("presign failed: status=%d", resp.StatusCode)
+	}
+
+	var out PresignResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
