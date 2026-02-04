@@ -140,6 +140,12 @@ export DEVICE_KEY_PATH
 if [ "$USE_CA_CERT" = "1" ]; then
   export CONTROL_PLANE_CA_CERT_PATH="$CA_CERT_PATH"
 fi
+if [ -z "${LOG_EXPORT_ADDR:-}" ] && [ "${LOG_EXPORT:-0}" = "1" ]; then
+  export LOG_EXPORT_ADDR="tcp://host.docker.internal:5560"
+fi
+if [ -n "${LOG_LEVEL:-}" ]; then
+  export LOG_LEVEL
+fi
 export MTLS=1
 
 docker compose -f "$BASE_FILE" -f "$MTLS_FILE" up --build --scale agent="$COUNT" "$@"

@@ -5,6 +5,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/hardwareops/control-plane/internal/events"
 	"github.com/hardwareops/control-plane/internal/store"
 )
 
@@ -17,6 +18,7 @@ type ObjectStore interface {
 	PresignGet(ctx context.Context, bucket, key string, expires time.Duration) (string, error)
 	PutObject(ctx context.Context, bucket, key string, body io.Reader, size int64, contentType string) (int64, error)
 	EnsureBucket(ctx context.Context, bucket string) error
+	DeleteObject(ctx context.Context, bucket, key string) error
 }
 
 type RateLimitConfig struct {
@@ -27,12 +29,15 @@ type RateLimitConfig struct {
 }
 
 type Dependencies struct {
-	Store            store.Store
-	Signer           CertSigner
-	ObjectStore      ObjectStore
-	S3Bucket         string
-	PresignExpires   time.Duration
-	TrustProxy       bool
-	ClientCertHeader string
-	RateLimits       RateLimitConfig
+	Store              store.Store
+	Signer             CertSigner
+	ObjectStore        ObjectStore
+	S3Bucket           string
+	PresignExpires     time.Duration
+	TrustProxy         bool
+	ClientCertHeader   string
+	RateLimits         RateLimitConfig
+	LogDir             string
+	Events             *events.Hub
+	CORSAllowedOrigins []string
 }

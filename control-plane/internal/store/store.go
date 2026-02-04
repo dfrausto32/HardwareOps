@@ -12,15 +12,18 @@ type Device struct {
 }
 
 type DeviceState struct {
-	DeviceID         string
-	CurrentVersion   string
-	CurrentConfigRev string
-	ServicesJSON     []byte
-	HealthJSON       []byte
-	UpdatedAt        time.Time
-	LastApplyStatus  string
-	LastApplyError   string
-	LastApplyAt      time.Time
+	DeviceID           string
+	CurrentVersion     string
+	CurrentConfigRev   string
+	ServicesJSON       []byte
+	HealthJSON         []byte
+	UpdatedAt          time.Time
+	LastApplyStatus    string
+	LastApplyError     string
+	LastApplyAt        time.Time
+	LastPreApplyStatus string
+	LastPreApplyError  string
+	LastPreApplyAt     time.Time
 }
 
 type EnrollmentToken struct {
@@ -37,14 +40,16 @@ type Group struct {
 }
 
 type Artifact struct {
-	ArtifactID string
-	Name       string
-	Version    string
-	ObjectKey  string
-	SHA256     string
-	Signature  string
-	SizeBytes  int64
-	CreatedAt  time.Time
+	ArtifactID   string
+	Name         string
+	Version      string
+	Type         string
+	ObjectKey    string
+	SHA256       string
+	Signature    string
+	SizeBytes    int64
+	MetadataJSON []byte
+	CreatedAt    time.Time
 }
 
 type ApplyResult struct {
@@ -54,6 +59,8 @@ type ApplyResult struct {
 	AppliedVersion   string
 	AppliedConfigRev string
 	Error            string
+	PreApplyStatus   string
+	PreApplyError    string
 	CreatedAt        time.Time
 }
 
@@ -94,6 +101,8 @@ type Store interface {
 	GetDeviceByFingerprint(fingerprint string) (Device, bool, error)
 	GetDeviceState(deviceID string) (DeviceState, bool, error)
 	ListDevices(filter ListDevicesFilter) ([]Device, error)
+	DeleteDevice(deviceID string) error
+	DeleteStaleDevices(cutoff time.Time) (int, error)
 	UpsertGroup(group Group) error
 	ListGroups() ([]Group, error)
 	UpsertDesiredStateGroup(state DesiredStateGroup) error
@@ -105,5 +114,6 @@ type Store interface {
 	CreateArtifact(artifact Artifact) error
 	GetArtifact(artifactID string) (Artifact, bool, error)
 	ListArtifacts(name, version string, limit, offset int) ([]Artifact, error)
+	DeleteArtifact(artifactID string) error
 	CreateApplyResult(result ApplyResult) error
 }

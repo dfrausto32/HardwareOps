@@ -65,13 +65,15 @@ type CheckinResponse struct {
 }
 
 type ArtifactResponse struct {
-	ArtifactID string `json:"artifactId"`
-	Name       string `json:"name"`
-	Version    string `json:"version"`
-	ObjectKey  string `json:"objectKey"`
-	SHA256     string `json:"sha256"`
-	Signature  string `json:"signature"`
-	SizeBytes  int64  `json:"sizeBytes"`
+	ArtifactID string          `json:"artifactId"`
+	Name       string          `json:"name"`
+	Version    string          `json:"version"`
+	Type       string          `json:"type"`
+	ObjectKey  string          `json:"objectKey"`
+	SHA256     string          `json:"sha256"`
+	Signature  string          `json:"signature"`
+	SizeBytes  int64           `json:"sizeBytes"`
+	Metadata   json.RawMessage `json:"metadata"`
 }
 
 type PresignResponse struct {
@@ -83,6 +85,8 @@ type ApplyResultRequest struct {
 	AppliedVersion   string `json:"appliedVersion,omitempty"`
 	AppliedConfigRev string `json:"appliedConfigRev,omitempty"`
 	Error            string `json:"error,omitempty"`
+	PreApplyStatus   string `json:"preApplyStatus,omitempty"`
+	PreApplyError    string `json:"preApplyError,omitempty"`
 }
 
 func (c *Client) CheckIn(st state.State) (*CheckinResponse, error) {

@@ -12,6 +12,8 @@ services:
       ARTIFACT_ROOT: /data/artifacts
       CHECKIN_INTERVAL: ${CHECKIN_INTERVAL:-}
       CHECKIN_INTERVAL_SEC: ${CHECKIN_INTERVAL_SEC:-}
+      LOG_EXPORT_ADDR: ${LOG_EXPORT_ADDR:-}
+      LOG_LEVEL: ${LOG_LEVEL:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

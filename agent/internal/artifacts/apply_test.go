@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -19,7 +20,7 @@ func TestApplySuccess(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	tarPath, sum := createTestBundle(t, root, "1.0.0")
+	tarPath, sum := createTestBundle(t, root, "1.0.0", "app_bundle")
 
 	server := httptest.NewServer(http.FileServer(http.Dir(filepath.Dir(tarPath))))
 	t.Cleanup(server.Close)
@@ -33,10 +34,15 @@ func TestApplySuccess(t *testing.T) {
 		ArtifactID: "artifact-1",
 		SHA256:     sum,
 		Version:    "1.0.0",
+		Type:       "app_bundle",
 	}
 
-	if err := Apply(root, desired, meta, server.Client()); err != nil {
+	outcome, err := Apply(root, desired, meta, server.Client(), nil, ApplyOptions{})
+	if err != nil {
 		t.Fatalf("apply failed: %v", err)
+	}
+	if outcome.PreApplyStatus != "skipped" {
+		t.Fatalf("expected preapply skipped, got %s", outcome.PreApplyStatus)
 	}
 
 	current := filepath.Join(root, "current")
@@ -51,6 +57,75 @@ func TestApplySuccess(t *testing.T) {
 	appliedFile := filepath.Join(root, "versions", "1.0.0", "files", "app.txt")
 	if _, err := os.Stat(appliedFile); err != nil {
 		t.Fatalf("expected file to exist: %v", err)
+	}
+}
+
+func TestApplyUnsupportedTypeFails(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	tarPath, sum := createTestBundle(t, root, "1.0.0", "firmware")
+
+	server := httptest.NewServer(http.FileServer(http.Dir(filepath.Dir(tarPath))))
+	t.Cleanup(server.Close)
+
+	desired := Desired{
+		ArtifactID:      "artifact-2",
+		SoftwareVersion: "1.0.0",
+		DownloadURL:     server.URL + "/" + filepath.Base(tarPath),
+	}
+	meta := ArtifactMeta{
+		ArtifactID: "artifact-2",
+		SHA256:     sum,
+		Version:    "1.0.0",
+		Type:       "firmware",
+	}
+
+	_, err := Apply(root, desired, meta, server.Client(), nil, ApplyOptions{})
+	if err == nil {
+		t.Fatalf("expected error for unsupported type")
+	}
+	var notImpl ErrApplyNotImplemented
+	if !errors.As(err, &notImpl) {
+		t.Fatalf("expected ErrApplyNotImplemented, got %v", err)
+	}
+}
+
+func TestApplyUnsupportedTypeAllowed(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	tarPath, sum := createTestBundle(t, root, "2.0.0", "firmware")
+
+	server := httptest.NewServer(http.FileServer(http.Dir(filepath.Dir(tarPath))))
+	t.Cleanup(server.Close)
+
+	desired := Desired{
+		ArtifactID:      "artifact-3",
+		SoftwareVersion: "2.0.0",
+		DownloadURL:     server.URL + "/" + filepath.Base(tarPath),
+	}
+	meta := ArtifactMeta{
+		ArtifactID: "artifact-3",
+		SHA256:     sum,
+		Version:    "2.0.0",
+		Type:       "firmware",
+	}
+
+	outcome, err := Apply(root, desired, meta, server.Client(), nil, ApplyOptions{AllowUnsupported: true})
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	if outcome.PreApplyStatus != "skipped" {
+		t.Fatalf("expected preapply skipped, got %s", outcome.PreApplyStatus)
+	}
+	current := filepath.Join(root, "current")
+	target, err := os.Readlink(current)
+	if err != nil {
+		t.Fatalf("readlink current: %v", err)
+	}
+	if filepath.Base(target) != "2.0.0" {
+		t.Fatalf("expected current version 2.0.0, got %s", target)
 	}
 }
 
@@ -85,7 +160,7 @@ func TestRollbackToVersion(t *testing.T) {
 	}
 }
 
-func createTestBundle(t *testing.T, root, version string) (string, string) {
+func createTestBundle(t *testing.T, root, version, atype string) (string, string) {
 	t.Helper()
 
 	bundleDir := filepath.Join(root, "bundle")
@@ -107,6 +182,7 @@ func createTestBundle(t *testing.T, root, version string) (string, string) {
 	manifest := Manifest{
 		Name:      "agent",
 		Version:   version,
+		Type:      atype,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 		Files: []ManifestFile{
 			{

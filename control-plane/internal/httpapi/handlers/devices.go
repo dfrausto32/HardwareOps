@@ -21,11 +21,17 @@ type DeviceSummary struct {
 }
 
 type DeviceCurrentState struct {
-	SoftwareVersion string          `json:"softwareVersion"`
-	ConfigRev       string          `json:"configRev"`
-	Services        json.RawMessage `json:"services,omitempty"`
-	Health          json.RawMessage `json:"health,omitempty"`
-	UpdatedAt       *time.Time      `json:"updatedAt,omitempty"`
+	SoftwareVersion    string          `json:"softwareVersion"`
+	ConfigRev          string          `json:"configRev"`
+	Services           json.RawMessage `json:"services,omitempty"`
+	Health             json.RawMessage `json:"health,omitempty"`
+	UpdatedAt          *time.Time      `json:"updatedAt,omitempty"`
+	LastApplyStatus    string          `json:"lastApplyStatus,omitempty"`
+	LastApplyError     string          `json:"lastApplyError,omitempty"`
+	LastApplyAt        *time.Time      `json:"lastApplyAt,omitempty"`
+	LastPreApplyStatus string          `json:"lastPreApplyStatus,omitempty"`
+	LastPreApplyError  string          `json:"lastPreApplyError,omitempty"`
+	LastPreApplyAt     *time.Time      `json:"lastPreApplyAt,omitempty"`
 }
 
 type DeviceDetail struct {
@@ -182,11 +188,17 @@ func GetDevice(logger *log.Logger, st store.Store) http.HandlerFunc {
 		var current *DeviceCurrentState
 		if stRec, ok, err := st.GetDeviceState(deviceID); err == nil && ok {
 			current = &DeviceCurrentState{
-				SoftwareVersion: stRec.CurrentVersion,
-				ConfigRev:       stRec.CurrentConfigRev,
-				Services:        json.RawMessage(stRec.ServicesJSON),
-				Health:          json.RawMessage(stRec.HealthJSON),
-				UpdatedAt:       timePtr(stRec.UpdatedAt),
+				SoftwareVersion:    stRec.CurrentVersion,
+				ConfigRev:          stRec.CurrentConfigRev,
+				Services:           json.RawMessage(stRec.ServicesJSON),
+				Health:             json.RawMessage(stRec.HealthJSON),
+				UpdatedAt:          timePtr(stRec.UpdatedAt),
+				LastApplyStatus:    stRec.LastApplyStatus,
+				LastApplyError:     stRec.LastApplyError,
+				LastApplyAt:        timePtr(stRec.LastApplyAt),
+				LastPreApplyStatus: stRec.LastPreApplyStatus,
+				LastPreApplyError:  stRec.LastPreApplyError,
+				LastPreApplyAt:     timePtr(stRec.LastPreApplyAt),
 			}
 		}
 
@@ -203,6 +215,37 @@ func GetDevice(logger *log.Logger, st store.Store) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
+	}
+}
+
+func DeleteDevice(logger *log.Logger, st store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		deviceID := chi.URLParam(r, "deviceId")
+		if deviceID == "" {
+			http.Error(w, "deviceId required", http.StatusBadRequest)
+			return
+		}
+		if _, err := uuid.Parse(deviceID); err != nil {
+			http.Error(w, "deviceId must be uuid", http.StatusBadRequest)
+			return
+		}
+
+		if _, ok, err := st.GetDevice(deviceID); err != nil {
+			logger.Printf("get device error: %v", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		} else if !ok {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+
+		if err := st.DeleteDevice(deviceID); err != nil {
+			logger.Printf("delete device error: %v", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

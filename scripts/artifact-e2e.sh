@@ -8,8 +8,79 @@ INSECURE=${INSECURE:-0}
 ARTIFACT_PATH=${ARTIFACT_PATH:-/tmp/agent-0.0.1.tar.gz}
 ARTIFACT_NAME=${ARTIFACT_NAME:-agent}
 ARTIFACT_VERSION=${ARTIFACT_VERSION:-0.0.1}
+ARTIFACT_TYPE=${ARTIFACT_TYPE:-app_bundle}
+GENERATE_ARTIFACT=${GENERATE_ARTIFACT:-0}
 STATE_PATH=${STATE_PATH:-/tmp/agent-state-e2e.json}
 ARTIFACT_ROOT=${ARTIFACT_ROOT:-/tmp/agent-data-e2e}
+CLEANUP=${CLEANUP:-0}
+
+if [ "$GENERATE_ARTIFACT" = "1" ] || [ ! -f "$ARTIFACT_PATH" ]; then
+  GEN_DIR=$(mktemp -d /tmp/hardwareops-e2e-artifact.XXXXXX)
+  mkdir -p "$GEN_DIR"
+  cat > "$GEN_DIR/readme.txt" <<EOF
+HardwareOps E2E artifact
+type=${ARTIFACT_TYPE}
+version=${ARTIFACT_VERSION}
+EOF
+  cat > "$GEN_DIR/preapply.sh" <<'EOF'
+#!/usr/bin/env sh
+set -eu
+mkdir -p files
+cat > files/preapply.txt <<EOF_TXT
+preapply ok
+type=${HWOPS_ARTIFACT_TYPE}
+version=${HWOPS_ARTIFACT_VERSION}
+time=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+EOF_TXT
+EOF
+  chmod 0755 "$GEN_DIR/preapply.sh"
+  cat > "$GEN_DIR/plan.yaml" <<'EOF'
+version: "v1"
+steps:
+  - id: preapply
+    type: script.preApply
+    onFail: abort
+    params:
+      command: files/preapply.sh
+      timeoutSec: 120
+EOF
+  cat > "$GEN_DIR/index.html" <<EOF
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>HardwareOps E2E Artifact</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 32px; }
+      .card { padding: 20px; border: 2px solid #111; max-width: 520px; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>HardwareOps E2E Artifact</h1>
+      <p>Type: ${ARTIFACT_TYPE}</p>
+      <p>Version: ${ARTIFACT_VERSION}</p>
+      <p id="preapply">Pre-apply: loading...</p>
+    </div>
+    <script>
+      fetch('preapply.txt')
+        .then(r => r.text())
+        .then(t => { document.getElementById('preapply').textContent = `Pre-apply: ${t.trim() || 'ok'}`; })
+        .catch(() => { document.getElementById('preapply').textContent = 'Pre-apply: unavailable'; });
+    </script>
+  </body>
+</html>
+EOF
+  if [ -z "${ARTIFACT_PATH:-}" ]; then
+    ARTIFACT_PATH=/tmp/agent-0.0.1.tar.gz
+  fi
+  python3 "$BASE_DIR/scripts/artifact-pack.py" \
+    --name "$ARTIFACT_NAME" \
+    --version "$ARTIFACT_VERSION" \
+    --type "$ARTIFACT_TYPE" \
+    --input-dir "$GEN_DIR" \
+    --out "$ARTIFACT_PATH" >/dev/null
+fi
 
 if [ ! -f "$ARTIFACT_PATH" ]; then
   echo "Artifact not found: $ARTIFACT_PATH" >&2
@@ -72,6 +143,7 @@ fi
 UPLOAD_JSON=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/artifacts/upload" \
   -F "name=$ARTIFACT_NAME" \
   -F "version=$ARTIFACT_VERSION" \
+  -F "type=$ARTIFACT_TYPE" \
   -F "file=@$ARTIFACT_PATH")
 
 ARTIFACT_ID=$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["artifactId"])' <<<"$UPLOAD_JSON")
@@ -91,11 +163,15 @@ CA_ENV=()
 if [ -n "$CA_CERT_PATH" ]; then
   CA_ENV=("CONTROL_PLANE_CA_CERT_PATH=$CA_CERT_PATH")
 fi
+LOG_ENV=()
+if [ -n "${LOG_EXPORT_ADDR:-}" ]; then
+  LOG_ENV=("LOG_EXPORT_ADDR=$LOG_EXPORT_ADDR")
+fi
 
 (cd "$(dirname "$0")/../agent" && \
   env CONTROL_PLANE_URL="$BASE_URL" ARTIFACT_ROOT="$ARTIFACT_ROOT" STATE_PATH="$STATE_PATH" \
   DEVICE_CERT_PATH="$CSR_DIR/device.crt" DEVICE_KEY_PATH="$CSR_DIR/device.key" \
-  "${CA_ENV[@]}" \
+  "${CA_ENV[@]}" "${LOG_ENV[@]}" \
   go run ./cmd/agent -once)
 
 # Verify
@@ -104,4 +180,16 @@ if [ ! -L "$ARTIFACT_ROOT/current" ]; then
   exit 1
 fi
 
+echo "Device ID: $DEVICE_ID"
+if [ -n "${LOG_EXPORT_ADDR:-}" ]; then
+  echo "Fetch logs: curl -s $BASE_URL/api/v1/logs/$DEVICE_ID -o /tmp/device-logs.csv"
+fi
+if [ "$CLEANUP" = "1" ]; then
+  curl -s "${curl_opts[@]}" -X DELETE "$BASE_URL/api/v1/artifacts/$ARTIFACT_ID" >/dev/null
+  curl -s "${curl_opts[@]}" -X DELETE "$BASE_URL/api/v1/devices/$DEVICE_ID" >/dev/null
+  echo "Cleanup complete."
+else
+  echo "Delete artifact: curl -X DELETE $BASE_URL/api/v1/artifacts/$ARTIFACT_ID"
+  echo "Delete device: curl -X DELETE $BASE_URL/api/v1/devices/$DEVICE_ID"
+fi
 echo "E2E artifact flow complete."

@@ -23,6 +23,12 @@ CONTROL_PLANE_CA_CERT_PATH=/tmp/dev-ca.crt \
 docker compose -f docker-compose.agents.yml -f docker-compose.agents.mtls.yml up --build --scale agent=3 -d
 ```
 
+Enable agent log export:
+```
+LOG_EXPORT_ADDR=tcp://host.docker.internal:5560 \
+docker compose -f docker-compose.agents.yml up --build --scale agent=3 -d
+```
+
 Reverse proxy (Caddy, automatic HTTPS):
 ```
 cp .env.example .env

@@ -98,7 +98,11 @@ export S3_ACCESS_KEY=${S3_ACCESS_KEY:-minio}
 export S3_SECRET_KEY=${S3_SECRET_KEY:-minio123}
 export S3_USE_SSL=${S3_USE_SSL:-0}
 export S3_PRESIGN_TTL=${S3_PRESIGN_TTL:-5m}
+export LOG_INGEST_ADDR=${LOG_INGEST_ADDR:-tcp://0.0.0.0:5560}
+export LOG_DIR=${LOG_DIR:-$BASE_DIR/logs}
 export MIGRATIONS_DIR=${MIGRATIONS_DIR:-$BASE_DIR/control-plane/migrations}
+export DISABLE_HTTP2=${DISABLE_HTTP2:-1}
+export CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
 
 # Quick connectivity check for Postgres
 if ! docker compose -f "$BASE_DIR/deploy/compose/docker-compose.yml" ps >/dev/null 2>&1; then

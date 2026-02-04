@@ -12,6 +12,10 @@ import (
 func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 	r := chi.NewRouter()
 
+	r.Use(RequestLogger(logger))
+	if len(deps.CORSAllowedOrigins) > 0 {
+		r.Use(CORS(deps.CORSAllowedOrigins))
+	}
 	r.Get("/healthz", handlers.Health())
 
 	enrollmentLimiter := NewRateLimiter(deps.RateLimits.EnrollmentTokenRPM, time.Minute, deps.TrustProxy)
@@ -26,17 +30,21 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.Post("/artifacts", handlers.CreateArtifact(logger, deps.Store))
 		r.Post("/artifacts/upload", handlers.UploadArtifact(logger, deps.Store, deps.ObjectStore, deps.S3Bucket))
 		r.Get("/artifacts/{artifactId}", handlers.GetArtifact(logger, deps.Store))
+		r.Delete("/artifacts/{artifactId}", handlers.DeleteArtifact(logger, deps.Store, deps.ObjectStore, deps.S3Bucket))
 		r.Post("/artifacts/{artifactId}/presign", handlers.PresignArtifact(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.PresignExpires))
 		r.Get("/devices", handlers.ListDevices(logger, deps.Store))
 		r.Get("/devices/{deviceId}", handlers.GetDevice(logger, deps.Store))
+		r.Delete("/devices/{deviceId}", handlers.DeleteDevice(logger, deps.Store))
 		r.Patch("/devices/{deviceId}", handlers.PatchDevice(logger, deps.Store))
-		r.With(applyLimiter.Middleware).Post("/devices/{deviceId}/apply-result", handlers.PostApplyResult(logger, deps.Store, deps.TrustProxy, deps.ClientCertHeader))
-		r.With(checkinLimiter.Middleware).Post("/devices/checkin", handlers.DeviceCheckin(logger, deps.Store, deps.TrustProxy, deps.ClientCertHeader))
+		r.With(applyLimiter.Middleware).Post("/devices/{deviceId}/apply-result", handlers.PostApplyResult(logger, deps.Store, deps.Events, deps.TrustProxy, deps.ClientCertHeader))
+		r.With(checkinLimiter.Middleware).Post("/devices/checkin", handlers.DeviceCheckin(logger, deps.Store, deps.Events, deps.TrustProxy, deps.ClientCertHeader))
 		r.With(enrollmentLimiter.Middleware).Post("/enrollments", handlers.CreateEnrollmentToken(logger, deps.Store))
 		r.With(deviceEnrollLimiter.Middleware).Post("/devices/enroll", handlers.DeviceEnroll(logger, deps.Store, deps.Signer, deps.TrustProxy))
 		r.Get("/desired-state", handlers.ListDesiredState(logger, deps.Store))
 		r.Put("/desired-state/groups/{groupId}", handlers.PutDesiredStateGroup(logger, deps.Store))
 		r.Put("/desired-state/devices/{deviceId}", handlers.PutDesiredStateDevice(logger, deps.Store))
+		r.Get("/logs/{deviceId}", handlers.GetDeviceLogs(logger, deps.LogDir))
+		r.Get("/events", handlers.StreamEvents(logger, deps.Events))
 	})
 
 	return r

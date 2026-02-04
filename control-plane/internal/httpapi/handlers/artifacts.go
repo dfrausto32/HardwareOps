@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -19,20 +21,24 @@ import (
 type CreateArtifactRequest struct {
 	Name      string `json:"name"`
 	Version   string `json:"version"`
+	Type      string `json:"type"`
 	ObjectKey string `json:"objectKey"`
 	SHA256    string `json:"sha256"`
 	Signature string `json:"signature"`
 	SizeBytes int64  `json:"sizeBytes"`
+	Metadata  json.RawMessage `json:"metadata"`
 }
 
 type ArtifactResponse struct {
 	ArtifactID string    `json:"artifactId"`
 	Name       string    `json:"name"`
 	Version    string    `json:"version"`
+	Type       string    `json:"type"`
 	ObjectKey  string    `json:"objectKey"`
 	SHA256     string    `json:"sha256"`
 	Signature  string    `json:"signature,omitempty"`
 	SizeBytes  int64     `json:"sizeBytes"`
+	Metadata   json.RawMessage `json:"metadata,omitempty"`
 	CreatedAt  time.Time `json:"createdAt"`
 }
 
@@ -51,6 +57,7 @@ type ObjectStore interface {
 	PresignGet(ctx context.Context, bucket, key string, expires time.Duration) (string, error)
 	PutObject(ctx context.Context, bucket, key string, body io.Reader, size int64, contentType string) (int64, error)
 	EnsureBucket(ctx context.Context, bucket string) error
+	DeleteObject(ctx context.Context, bucket, key string) error
 }
 
 type UploadArtifactResponse struct {
@@ -60,6 +67,7 @@ type UploadArtifactResponse struct {
 	SizeBytes  int64  `json:"sizeBytes"`
 	Name       string `json:"name"`
 	Version    string `json:"version"`
+	Type       string `json:"type"`
 }
 
 func CreateArtifact(logger *log.Logger, st store.Store) http.HandlerFunc {
@@ -73,15 +81,27 @@ func CreateArtifact(logger *log.Logger, st store.Store) http.HandlerFunc {
 			http.Error(w, "name, version, objectKey, sha256, sizeBytes required", http.StatusBadRequest)
 			return
 		}
+		atype, err := normalizeArtifactType(req.Type)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		meta, err := normalizeMetadata(req.Metadata)
+		if err != nil {
+			http.Error(w, "metadata must be valid json", http.StatusBadRequest)
+			return
+		}
 
 		artifact := store.Artifact{
 			ArtifactID: uuid.NewString(),
 			Name:       req.Name,
 			Version:    req.Version,
+			Type:       atype,
 			ObjectKey:  req.ObjectKey,
 			SHA256:     req.SHA256,
 			Signature:  req.Signature,
 			SizeBytes:  req.SizeBytes,
+			MetadataJSON: meta,
 			CreatedAt:  time.Now().UTC(),
 		}
 		if err := st.CreateArtifact(artifact); err != nil {
@@ -94,10 +114,12 @@ func CreateArtifact(logger *log.Logger, st store.Store) http.HandlerFunc {
 			ArtifactID: artifact.ArtifactID,
 			Name:       artifact.Name,
 			Version:    artifact.Version,
+			Type:       artifact.Type,
 			ObjectKey:  artifact.ObjectKey,
 			SHA256:     artifact.SHA256,
 			Signature:  artifact.Signature,
 			SizeBytes:  artifact.SizeBytes,
+			Metadata:   json.RawMessage(artifact.MetadataJSON),
 			CreatedAt:  artifact.CreatedAt,
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -117,8 +139,20 @@ func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 		}
 		name := r.FormValue("name")
 		version := r.FormValue("version")
+		atypeRaw := r.FormValue("type")
+		metaRaw := r.FormValue("metadata")
 		if name == "" || version == "" {
 			http.Error(w, "name and version required", http.StatusBadRequest)
+			return
+		}
+		atype, err := normalizeArtifactType(atypeRaw)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		meta, err := parseMetadataString(metaRaw)
+		if err != nil {
+			http.Error(w, "metadata must be valid json", http.StatusBadRequest)
 			return
 		}
 		file, header, err := r.FormFile("file")
@@ -160,9 +194,11 @@ func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 			ArtifactID: artifactID,
 			Name:       name,
 			Version:    version,
+			Type:       atype,
 			ObjectKey:  objectKey,
 			SHA256:     sha,
 			SizeBytes:  size,
+			MetadataJSON: meta,
 			CreatedAt:  time.Now().UTC(),
 		}
 		if err := st.CreateArtifact(artifact); err != nil {
@@ -178,6 +214,7 @@ func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 			SizeBytes:  size,
 			Name:       name,
 			Version:    version,
+			Type:       atype,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
@@ -204,10 +241,12 @@ func ListArtifacts(logger *log.Logger, st store.Store) http.HandlerFunc {
 				ArtifactID: a.ArtifactID,
 				Name:       a.Name,
 				Version:    a.Version,
+				Type:       a.Type,
 				ObjectKey:  a.ObjectKey,
 				SHA256:     a.SHA256,
 				Signature:  a.Signature,
 				SizeBytes:  a.SizeBytes,
+				Metadata:   json.RawMessage(a.MetadataJSON),
 				CreatedAt:  a.CreatedAt,
 			})
 		}
@@ -244,10 +283,12 @@ func GetArtifact(logger *log.Logger, st store.Store) http.HandlerFunc {
 			ArtifactID: artifact.ArtifactID,
 			Name:       artifact.Name,
 			Version:    artifact.Version,
+			Type:       artifact.Type,
 			ObjectKey:  artifact.ObjectKey,
 			SHA256:     artifact.SHA256,
 			Signature:  artifact.Signature,
 			SizeBytes:  artifact.SizeBytes,
+			Metadata:   json.RawMessage(artifact.MetadataJSON),
 			CreatedAt:  artifact.CreatedAt,
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -299,4 +340,83 @@ func PresignArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, b
 	}
 }
 
+func DeleteArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		artifactID := chi.URLParam(r, "artifactId")
+		if artifactID == "" {
+			http.Error(w, "artifactId required", http.StatusBadRequest)
+			return
+		}
+		if _, err := uuid.Parse(artifactID); err != nil {
+			http.Error(w, "artifactId must be uuid", http.StatusBadRequest)
+			return
+		}
+
+		artifact, ok, err := st.GetArtifact(artifactID)
+		if err != nil {
+			logger.Printf("get artifact error: %v", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		} else if !ok {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+
+		if objStore != nil && bucket != "" && artifact.ObjectKey != "" {
+			if err := objStore.DeleteObject(r.Context(), bucket, artifact.ObjectKey); err != nil {
+				logger.Printf("delete artifact object error: %v", err)
+				http.Error(w, "object delete error", http.StatusInternalServerError)
+				return
+			}
+		}
+
+		if err := st.DeleteArtifact(artifactID); err != nil {
+			logger.Printf("delete artifact error: %v", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 // parseInt lives in devices.go
+
+var allowedArtifactTypes = map[string]struct{}{
+	"app_bundle":     {},
+	"config_bundle":  {},
+	"data_bundle":    {},
+	"firmware":       {},
+	"container_image": {},
+}
+
+func normalizeArtifactType(val string) (string, error) {
+	atype := strings.TrimSpace(strings.ToLower(val))
+	if atype == "" {
+		return "app_bundle", nil
+	}
+	if _, ok := allowedArtifactTypes[atype]; !ok {
+		return "", fmt.Errorf("invalid type: %s", atype)
+	}
+	return atype, nil
+}
+
+func normalizeMetadata(val json.RawMessage) ([]byte, error) {
+	if len(val) == 0 {
+		return nil, nil
+	}
+	if !json.Valid(val) {
+		return nil, fmt.Errorf("invalid metadata")
+	}
+	return val, nil
+}
+
+func parseMetadataString(val string) ([]byte, error) {
+	if strings.TrimSpace(val) == "" {
+		return nil, nil
+	}
+	raw := []byte(val)
+	if !json.Valid(raw) {
+		return nil, fmt.Errorf("invalid metadata")
+	}
+	return raw, nil
+}

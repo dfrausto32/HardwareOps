@@ -7,6 +7,7 @@ require (
 	github.com/google/uuid v1.3.0
 	github.com/jackc/pgx/v5 v5.5.5
 	github.com/minio/minio-go/v7 v7.0.63
+	nhooyr.io/websocket v1.8.17
 )
 
 require (

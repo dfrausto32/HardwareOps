@@ -23,7 +23,7 @@ func TestPostApplyResult(t *testing.T) {
 	req, id = attachMTLSDevice(t, mem, req, id)
 	w := httptest.NewRecorder()
 
-	PostApplyResult(logger, mem, false, "").ServeHTTP(w, req)
+	PostApplyResult(logger, mem, nil, false, "").ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -49,7 +49,25 @@ func TestPostApplyResult_InvalidStatus(t *testing.T) {
 	req, id = attachMTLSDevice(t, mem, req, id)
 	w := httptest.NewRecorder()
 
-	PostApplyResult(logger, mem, false, "").ServeHTTP(w, req)
+	PostApplyResult(logger, mem, nil, false, "").ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestPostApplyResult_InvalidPreApplyStatus(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+
+	id := uuid.NewString()
+	body := []byte(`{"status":"success","appliedVersion":"1.0.0","preApplyStatus":"nope"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+id+"/apply-result", bytes.NewReader(body))
+	req = withURLParam(req, "deviceId", id)
+	req, id = attachMTLSDevice(t, mem, req, id)
+	w := httptest.NewRecorder()
+
+	PostApplyResult(logger, mem, nil, false, "").ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)

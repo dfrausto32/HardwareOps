@@ -3,17 +3,21 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
 type Config struct {
-	ControlPlaneURL string
-	StatePath       string
-	ArtifactRoot    string
-	CheckinInterval time.Duration
-	DeviceCertPath  string
-	DeviceKeyPath   string
-	CACertPath      string
+	ControlPlaneURL       string
+	StatePath             string
+	ArtifactRoot          string
+	CheckinInterval       time.Duration
+	DeviceCertPath        string
+	DeviceKeyPath         string
+	CACertPath            string
+	LogExportAddr         string
+	LogLevel              string
+	AllowUnsupportedApply bool
 }
 
 func FromEnv() Config {
@@ -40,12 +44,25 @@ func FromEnv() Config {
 		}
 	}
 	return Config{
-		ControlPlaneURL: url,
-		StatePath:       statePath,
-		ArtifactRoot:    root,
-		CheckinInterval: interval,
-		DeviceCertPath:  os.Getenv("DEVICE_CERT_PATH"),
-		DeviceKeyPath:   os.Getenv("DEVICE_KEY_PATH"),
-		CACertPath:      os.Getenv("CONTROL_PLANE_CA_CERT_PATH"),
+		ControlPlaneURL:       url,
+		StatePath:             statePath,
+		ArtifactRoot:          root,
+		CheckinInterval:       interval,
+		DeviceCertPath:        os.Getenv("DEVICE_CERT_PATH"),
+		DeviceKeyPath:         os.Getenv("DEVICE_KEY_PATH"),
+		CACertPath:            os.Getenv("CONTROL_PLANE_CA_CERT_PATH"),
+		LogExportAddr:         os.Getenv("LOG_EXPORT_ADDR"),
+		LogLevel:              os.Getenv("LOG_LEVEL"),
+		AllowUnsupportedApply: parseBoolEnv("ALLOW_UNSUPPORTED_APPLY"),
+	}
+}
+
+func parseBoolEnv(key string) bool {
+	raw := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	switch raw {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
 	}
 }

@@ -5,6 +5,7 @@ BASE_URL=${BASE_URL:-http://localhost:8080}
 TMP_DIR=${TMP_DIR:-/tmp/hardwareops}
 CA_CERT=${CA_CERT_PATH:-}
 INSECURE=${INSECURE:-0}
+CLEANUP=${CLEANUP:-0}
 
 mkdir -p "$TMP_DIR"
 
@@ -98,3 +99,11 @@ CHECKIN_JSON=$(curl -s "${checkin_opts[@]}" -X POST "$BASE_URL/api/v1/devices/ch
   -d "{\"deviceId\":\"$DEVICE_ID\",\"agentVersion\":\"0.1.0\",\"current\":{\"softwareVersion\":\"v1\",\"configRev\":\"c1\"}}")
 
 echo "Check-in response: $CHECKIN_JSON"
+
+if [ "$CLEANUP" = "1" ]; then
+  curl -s "${curl_opts[@]}" -X DELETE "$BASE_URL/api/v1/devices/$DEVICE_ID" >/dev/null
+  echo "Deleted device: $DEVICE_ID"
+else
+  echo "Device ID: $DEVICE_ID"
+  echo "Delete: curl -X DELETE $BASE_URL/api/v1/devices/$DEVICE_ID"
+fi

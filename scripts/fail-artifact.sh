@@ -9,6 +9,8 @@ INSECURE=${INSECURE:-0}
 ARTIFACT_NAME=${ARTIFACT_NAME:-agent}
 GOOD_VERSION=${GOOD_VERSION:-1.0.0}
 BAD_VERSION=${BAD_VERSION:-99.0.0}
+GOOD_TYPE=${GOOD_TYPE:-app_bundle}
+BAD_TYPE=${BAD_TYPE:-app_bundle}
 STATE_PATH=${STATE_PATH:-/tmp/agent-state-fail.json}
 ARTIFACT_ROOT=${ARTIFACT_ROOT:-/tmp/agent-data-fail}
 FAIL_ARTIFACT_SIZE_GB=${FAIL_ARTIFACT_SIZE_GB:-5}
@@ -98,16 +100,40 @@ if [ "$SKIP_BASELINE" != "1" ]; then
   rm -rf "$GOOD_DIR"
   mkdir -p "$GOOD_DIR/files"
   dd if=/dev/urandom of="$GOOD_DIR/files/hello.bin" bs=1M count=5 status=none
+  cat > "$GOOD_DIR/preapply.sh" <<'EOF'
+#!/usr/bin/env sh
+set -eu
+mkdir -p files
+cat > files/preapply.txt <<EOF_TXT
+preapply ok
+type=${HWOPS_ARTIFACT_TYPE}
+version=${HWOPS_ARTIFACT_VERSION}
+time=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+EOF_TXT
+EOF
+  chmod 0755 "$GOOD_DIR/preapply.sh"
+  cat > "$GOOD_DIR/plan.yaml" <<'EOF'
+version: "v1"
+steps:
+  - id: preapply
+    type: script.preApply
+    onFail: abort
+    params:
+      command: files/preapply.sh
+      timeoutSec: 120
+EOF
   GOOD_TAR=/tmp/agent-good-"$GOOD_VERSION".tar.gz
   python3 "$BASE_DIR/scripts/artifact-pack.py" \
     --name "$ARTIFACT_NAME" \
     --version "$GOOD_VERSION" \
+    --type "$GOOD_TYPE" \
     --input-dir "$GOOD_DIR/files" \
     --out "$GOOD_TAR" >/dev/null
 
   GOOD_UPLOAD_JSON=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/artifacts/upload" \
     -F "name=$ARTIFACT_NAME" \
     -F "version=$GOOD_VERSION" \
+    -F "type=$GOOD_TYPE" \
     -F "file=@$GOOD_TAR")
   GOOD_ARTIFACT_ID=$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["artifactId"])' <<<"$GOOD_UPLOAD_JSON")
 
@@ -119,16 +145,20 @@ if [ "$SKIP_BASELINE" != "1" ]; then
 {"deviceId":"$DEVICE_ID","agentVersion":"0.1.0","currentVersion":"","currentConfigRev":""}
 EOF_STATE
 
-  CA_ENV=()
-  if [ -n "$CA_CERT_PATH" ]; then
-    CA_ENV=("CONTROL_PLANE_CA_CERT_PATH=$CA_CERT_PATH")
-  fi
+CA_ENV=()
+if [ -n "$CA_CERT_PATH" ]; then
+  CA_ENV=("CONTROL_PLANE_CA_CERT_PATH=$CA_CERT_PATH")
+fi
+LOG_ENV=()
+if [ -n "${LOG_EXPORT_ADDR:-}" ]; then
+  LOG_ENV=("LOG_EXPORT_ADDR=$LOG_EXPORT_ADDR")
+fi
 
-  (cd "$BASE_DIR/agent" && \
-    env CONTROL_PLANE_URL="$BASE_URL" ARTIFACT_ROOT="$ARTIFACT_ROOT" STATE_PATH="$STATE_PATH" \
-    DEVICE_CERT_PATH="$CSR_DIR/device.crt" DEVICE_KEY_PATH="$CSR_DIR/device.key" \
-    "${CA_ENV[@]}" \
-    go run ./cmd/agent -once)
+(cd "$BASE_DIR/agent" && \
+  env CONTROL_PLANE_URL="$BASE_URL" ARTIFACT_ROOT="$ARTIFACT_ROOT" STATE_PATH="$STATE_PATH" \
+  DEVICE_CERT_PATH="$CSR_DIR/device.crt" DEVICE_KEY_PATH="$CSR_DIR/device.key" \
+  "${CA_ENV[@]}" "${LOG_ENV[@]}" \
+  go run ./cmd/agent -once)
 
   if [ ! -L "$ARTIFACT_ROOT/current" ]; then
     echo "Expected symlink at $ARTIFACT_ROOT/current after baseline apply." >&2
@@ -141,6 +171,28 @@ rm -rf "$BAD_DIR"
 mkdir -p "$BAD_DIR/files"
 echo "Creating ${FAIL_ARTIFACT_SIZE_GB}GB artifact (this may take a while)..."
 dd if=/dev/urandom of="$BAD_DIR/files/large.bin" bs=1M count=$((FAIL_ARTIFACT_SIZE_GB * 1024)) status=progress
+cat > "$BAD_DIR/preapply.sh" <<'EOF'
+#!/usr/bin/env sh
+set -eu
+mkdir -p files
+cat > files/preapply.txt <<EOF_TXT
+preapply ok
+type=${HWOPS_ARTIFACT_TYPE}
+version=${HWOPS_ARTIFACT_VERSION}
+time=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+EOF_TXT
+EOF
+chmod 0755 "$BAD_DIR/preapply.sh"
+cat > "$BAD_DIR/plan.yaml" <<'EOF'
+version: "v1"
+steps:
+  - id: preapply
+    type: script.preApply
+    onFail: abort
+    params:
+      command: files/preapply.sh
+      timeoutSec: 120
+EOF
 FILE_SIZE=$(stat_size "$BAD_DIR/files/large.bin")
 CREATED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
@@ -148,6 +200,7 @@ cat > "$BAD_DIR/manifest.json" <<EOF_MANIFEST
 {
   "name": "$ARTIFACT_NAME",
   "version": "$BAD_VERSION",
+  "type": "$BAD_TYPE",
   "createdAt": "$CREATED_AT",
   "files": [
     { "path": "files/large.bin", "sha256": "deadbeef", "size": $FILE_SIZE }
@@ -161,6 +214,7 @@ tar -czf "$BAD_TAR" -C "$BAD_DIR" .
 BAD_UPLOAD_JSON=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/artifacts/upload" \
   -F "name=$ARTIFACT_NAME" \
   -F "version=$BAD_VERSION" \
+  -F "type=$BAD_TYPE" \
   -F "file=@$BAD_TAR")
 BAD_ARTIFACT_ID=$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["artifactId"])' <<<"$BAD_UPLOAD_JSON")
 
@@ -172,12 +226,16 @@ CA_ENV=()
 if [ -n "$CA_CERT_PATH" ]; then
   CA_ENV=("CONTROL_PLANE_CA_CERT_PATH=$CA_CERT_PATH")
 fi
+LOG_ENV=()
+if [ -n "${LOG_EXPORT_ADDR:-}" ]; then
+  LOG_ENV=("LOG_EXPORT_ADDR=$LOG_EXPORT_ADDR")
+fi
 
 echo "Attempting apply of bad artifact (expected to fail)..."
 (cd "$BASE_DIR/agent" && \
   env CONTROL_PLANE_URL="$BASE_URL" ARTIFACT_ROOT="$ARTIFACT_ROOT" STATE_PATH="$STATE_PATH" \
   DEVICE_CERT_PATH="$CSR_DIR/device.crt" DEVICE_KEY_PATH="$CSR_DIR/device.key" \
-  "${CA_ENV[@]}" \
+  "${CA_ENV[@]}" "${LOG_ENV[@]}" \
   go run ./cmd/agent -once) || true
 
 echo "Current symlink:"
@@ -185,4 +243,8 @@ readlink -f "$ARTIFACT_ROOT/current" || true
 echo "Agent state:"
 cat "$STATE_PATH"
 
+echo "Device ID: $DEVICE_ID"
+if [ -n "${LOG_EXPORT_ADDR:-}" ]; then
+  echo "Fetch logs: curl -s $BASE_URL/api/v1/logs/$DEVICE_ID -o /tmp/device-logs.csv"
+fi
 echo "Fail-artifact flow complete. Expect lastApplyStatus=error and current version unchanged."

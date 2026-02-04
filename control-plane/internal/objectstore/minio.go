@@ -59,3 +59,7 @@ func (s *MinIOStore) EnsureBucket(ctx context.Context, bucket string) error {
 	}
 	return s.client.MakeBucket(ctx, bucket, minio.MakeBucketOptions{})
 }
+
+func (s *MinIOStore) DeleteObject(ctx context.Context, bucket, key string) error {
+	return s.client.RemoveObject(ctx, bucket, key, minio.RemoveObjectOptions{})
+}

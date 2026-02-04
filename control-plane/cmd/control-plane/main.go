@@ -7,10 +7,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/hardwareops/control-plane/internal/config"
 	cpcrypto "github.com/hardwareops/control-plane/internal/crypto"
+	"github.com/hardwareops/control-plane/internal/events"
 	"github.com/hardwareops/control-plane/internal/httpapi"
+	"github.com/hardwareops/control-plane/internal/logging"
 	"github.com/hardwareops/control-plane/internal/migrate"
 	"github.com/hardwareops/control-plane/internal/objectstore"
 	"github.com/hardwareops/control-plane/internal/store/postgres"
@@ -70,6 +73,7 @@ func main() {
 		objStore = store
 	}
 
+	hub := events.NewHub(128)
 	deps := httpapi.Dependencies{
 		Store:            postgres.New(pool),
 		Signer:           signer,
@@ -84,6 +88,39 @@ func main() {
 			CheckinRPM:         cfg.CheckinRPM,
 			ApplyResultRPM:     cfg.ApplyResultRPM,
 		},
+		LogDir:             cfg.LogDir,
+		Events:             hub,
+		CORSAllowedOrigins: cfg.CORSAllowedOrigins,
+	}
+
+	if cfg.LogIngestAddr != "" {
+		store := logging.NewStore(cfg.LogDir)
+		if _, err := logging.StartIngest(context.Background(), cfg.LogIngestAddr, store, logger.Printf); err != nil {
+			logger.Fatalf("log ingest: %v", err)
+		}
+	}
+
+	if cfg.DeviceStaleTTL > 0 {
+		interval := cfg.DeviceCleanupInterval
+		if interval <= 0 {
+			interval = 5 * time.Minute
+		}
+		go func() {
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				<-ticker.C
+				cutoff := time.Now().UTC().Add(-cfg.DeviceStaleTTL)
+				count, err := deps.Store.DeleteStaleDevices(cutoff)
+				if err != nil {
+					logger.Printf("delete stale devices error: %v", err)
+					continue
+				}
+				if count > 0 {
+					logger.Printf("deleted stale devices count=%d cutoff=%s", count, cutoff.Format(time.RFC3339))
+				}
+			}
+		}()
 	}
 
 	srv := &http.Server{
@@ -115,6 +152,9 @@ func main() {
 		tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
 
 		srv.TLSConfig = tlsConfig
+		if cfg.DisableHTTP2 {
+			srv.TLSNextProto = map[string]func(*http.Server, *tls.Conn, http.Handler){}
+		}
 		logger.Printf("control-plane listening on https://%s", cfg.HTTPAddr)
 		if err := srv.ListenAndServeTLS(cfg.TLSCertPath, cfg.TLSKeyPath); err != nil && err != http.ErrServerClosed {
 			logger.Fatalf("server error: %v", err)

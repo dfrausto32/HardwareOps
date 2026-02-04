@@ -55,6 +55,26 @@ func (s *Store) UpsertDeviceState(state store.DeviceState) error {
 	if state.DeviceID == "" {
 		return errors.New("device_id required")
 	}
+	if prev, ok := s.states[state.DeviceID]; ok {
+		if state.LastApplyStatus == "" {
+			state.LastApplyStatus = prev.LastApplyStatus
+		}
+		if state.LastApplyError == "" {
+			state.LastApplyError = prev.LastApplyError
+		}
+		if state.LastApplyAt.IsZero() {
+			state.LastApplyAt = prev.LastApplyAt
+		}
+		if state.LastPreApplyStatus == "" {
+			state.LastPreApplyStatus = prev.LastPreApplyStatus
+		}
+		if state.LastPreApplyError == "" {
+			state.LastPreApplyError = prev.LastPreApplyError
+		}
+		if state.LastPreApplyAt.IsZero() {
+			state.LastPreApplyAt = prev.LastPreApplyAt
+		}
+	}
 	s.states[state.DeviceID] = state
 	return nil
 }
@@ -150,6 +170,43 @@ func (s *Store) ListDevices(filter store.ListDevicesFilter) ([]store.Device, err
 		end = start + filter.Limit
 	}
 	return out[start:end], nil
+}
+
+func (s *Store) DeleteDevice(deviceID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if deviceID == "" {
+		return errors.New("device_id required")
+	}
+	delete(s.devices, deviceID)
+	delete(s.states, deviceID)
+	delete(s.desiredDevices, deviceID)
+	for id, res := range s.applyResults {
+		if res.DeviceID == deviceID {
+			delete(s.applyResults, id)
+		}
+	}
+	return nil
+}
+
+func (s *Store) DeleteStaleDevices(cutoff time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for id, d := range s.devices {
+		if !d.LastSeen.IsZero() && d.LastSeen.Before(cutoff) {
+			delete(s.devices, id)
+			delete(s.states, id)
+			delete(s.desiredDevices, id)
+			for arID, res := range s.applyResults {
+				if res.DeviceID == id {
+					delete(s.applyResults, arID)
+				}
+			}
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (s *Store) UpsertGroup(group store.Group) error {
@@ -258,6 +315,9 @@ func (s *Store) CreateArtifact(artifact store.Artifact) error {
 	if artifact.ArtifactID == "" {
 		return errors.New("artifact_id required")
 	}
+	if artifact.Type == "" {
+		artifact.Type = "app_bundle"
+	}
 	s.artifacts[artifact.ArtifactID] = artifact
 	return nil
 }
@@ -296,6 +356,26 @@ func (s *Store) ListArtifacts(name, version string, limit, offset int) ([]store.
 	return out[start:end], nil
 }
 
+func (s *Store) DeleteArtifact(artifactID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if artifactID == "" {
+		return errors.New("artifact_id required")
+	}
+	delete(s.artifacts, artifactID)
+	for id, d := range s.desiredDevices {
+		if d.ArtifactID == artifactID {
+			delete(s.desiredDevices, id)
+		}
+	}
+	for id, g := range s.desiredGroups {
+		if g.ArtifactID == artifactID {
+			delete(s.desiredGroups, id)
+		}
+	}
+	return nil
+}
+
 func (s *Store) CreateApplyResult(result store.ApplyResult) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -315,6 +395,11 @@ func (s *Store) CreateApplyResult(result store.ApplyResult) error {
 		st.LastApplyStatus = result.Status
 		st.LastApplyError = result.Error
 		st.LastApplyAt = result.CreatedAt
+		if result.PreApplyStatus != "" {
+			st.LastPreApplyStatus = result.PreApplyStatus
+			st.LastPreApplyError = result.PreApplyError
+			st.LastPreApplyAt = result.CreatedAt
+		}
 		st.UpdatedAt = time.Now().UTC()
 		s.states[result.DeviceID] = st
 	}

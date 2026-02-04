@@ -103,3 +103,7 @@ func (f fakeObjectStore) PutObject(_ context.Context, _ string, _ string, body i
 func (f fakeObjectStore) EnsureBucket(_ context.Context, _ string) error {
 	return nil
 }
+
+func (f fakeObjectStore) DeleteObject(_ context.Context, _ string, _ string) error {
+	return nil
+}
