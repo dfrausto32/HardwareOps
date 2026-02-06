@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/json"
 	"os"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -15,6 +16,11 @@ type State struct {
 	PreviousVersion  string `json:"previousVersion"`
 	LastApplyStatus  string `json:"lastApplyStatus"`
 	LastApplyError   string `json:"lastApplyError"`
+	LastApplyAt      time.Time `json:"lastApplyAt"`
+	LastApplyArtifactID string `json:"lastApplyArtifactId"`
+	LastPreApplyStatus  string    `json:"lastPreApplyStatus"`
+	LastPreApplyError   string    `json:"lastPreApplyError"`
+	LastPreApplyAt      time.Time `json:"lastPreApplyAt"`
 }
 
 func Load(path string) (State, error) {

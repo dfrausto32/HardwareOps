@@ -1,0 +1,14 @@
+$ORIGIN hardwareops.internal.
+$TTL 60
+
+@   IN SOA ns1.hardwareops.internal. admin.hardwareops.internal. (
+        2026020401 ; serial
+        7200       ; refresh
+        3600       ; retry
+        1209600    ; expire
+        60         ; minimum
+)
+
+@   IN NS ns1.hardwareops.internal.
+ns1 IN A 192.168.1.10
+@   IN A 192.168.1.10

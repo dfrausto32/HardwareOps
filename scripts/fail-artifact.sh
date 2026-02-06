@@ -15,6 +15,12 @@ STATE_PATH=${STATE_PATH:-/tmp/agent-state-fail.json}
 ARTIFACT_ROOT=${ARTIFACT_ROOT:-/tmp/agent-data-fail}
 FAIL_ARTIFACT_SIZE_GB=${FAIL_ARTIFACT_SIZE_GB:-5}
 SKIP_BASELINE=${SKIP_BASELINE:-0}
+SIGN_ARTIFACTS=${SIGN_ARTIFACTS:-1}
+REQUIRE_ARTIFACT_SIGNATURE=${REQUIRE_ARTIFACT_SIGNATURE:-$SIGN_ARTIFACTS}
+
+if [ "$SIGN_ARTIFACTS" = "1" ]; then
+  source "$BASE_DIR/scripts/ensure-signing-key.sh"
+fi
 
 if ! [[ "$FAIL_ARTIFACT_SIZE_GB" =~ ^[0-9]+$ ]]; then
   echo "FAIL_ARTIFACT_SIZE_GB must be an integer (GB)." >&2
@@ -55,6 +61,28 @@ stat_size() {
   else
     stat -f %z "$1"
   fi
+}
+
+sign_file() {
+  if [ "$SIGN_ARTIFACTS" != "1" ]; then
+    echo ""
+    return
+  fi
+  local file="$1"
+  local sha
+  sha=$(sha256sum "$file" | awk '{print $1}')
+  python3 - <<'PY' "$SIGNING_KEY" "$sha"
+import base64, binascii, pathlib, subprocess, sys, tempfile
+key=sys.argv[1]
+sha=sys.argv[2]
+sha_bytes=binascii.unhexlify(sha)
+with tempfile.TemporaryDirectory() as tmp:
+    sha_path=pathlib.Path(tmp)/"sha.bin"
+    sig_path=pathlib.Path(tmp)/"sig.bin"
+    sha_path.write_bytes(sha_bytes)
+    subprocess.check_call(["openssl","pkeyutl","-sign","-inkey",key,"-rawin","-in",str(sha_path),"-out",str(sig_path)])
+    print(base64.b64encode(sig_path.read_bytes()).decode("utf-8"))
+PY
 }
 
 # Health check
@@ -123,18 +151,27 @@ steps:
       timeoutSec: 120
 EOF
   GOOD_TAR=/tmp/agent-good-"$GOOD_VERSION".tar.gz
-  python3 "$BASE_DIR/scripts/artifact-pack.py" \
-    --name "$ARTIFACT_NAME" \
-    --version "$GOOD_VERSION" \
-    --type "$GOOD_TYPE" \
-    --input-dir "$GOOD_DIR/files" \
-    --out "$GOOD_TAR" >/dev/null
+  pack_args=(--name "$ARTIFACT_NAME" --version "$GOOD_VERSION" --type "$GOOD_TYPE" --input-dir "$GOOD_DIR/files" --out "$GOOD_TAR")
+  if [ "$SIGN_ARTIFACTS" = "1" ]; then
+    pack_args+=(--signing-key "$SIGNING_KEY" --signing-key-id "$SIGNING_KEY_ID")
+  fi
+  PACK_JSON=$(python3 "$BASE_DIR/scripts/artifact-pack.py" "${pack_args[@]}")
+  GOOD_SIG=$(python3 - <<'PY' "$PACK_JSON"
+import json, sys
+print(json.loads(sys.argv[1]).get("signature",""))
+PY
+)
+  GOOD_SIG_KEY_ID=$(python3 - <<'PY' "$PACK_JSON"
+import json, sys
+print(json.loads(sys.argv[1]).get("signatureKeyId",""))
+PY
+)
 
-  GOOD_UPLOAD_JSON=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/artifacts/upload" \
-    -F "name=$ARTIFACT_NAME" \
-    -F "version=$GOOD_VERSION" \
-    -F "type=$GOOD_TYPE" \
-    -F "file=@$GOOD_TAR")
+  form_good=(-F "name=$ARTIFACT_NAME" -F "version=$GOOD_VERSION" -F "type=$GOOD_TYPE" -F "file=@$GOOD_TAR")
+  if [ -n "$GOOD_SIG" ]; then
+    form_good+=(-F "signature=$GOOD_SIG" -F "signatureKeyId=$GOOD_SIG_KEY_ID")
+  fi
+  GOOD_UPLOAD_JSON=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/artifacts/upload" "${form_good[@]}")
   GOOD_ARTIFACT_ID=$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["artifactId"])' <<<"$GOOD_UPLOAD_JSON")
 
   curl -s "${curl_opts[@]}" -X PUT "$BASE_URL/api/v1/desired-state/devices/$DEVICE_ID" \
@@ -153,11 +190,18 @@ LOG_ENV=()
 if [ -n "${LOG_EXPORT_ADDR:-}" ]; then
   LOG_ENV=("LOG_EXPORT_ADDR=$LOG_EXPORT_ADDR")
 fi
+SIGN_ENV=()
+if [ "$REQUIRE_ARTIFACT_SIGNATURE" = "1" ]; then
+  SIGN_ENV=("REQUIRE_ARTIFACT_SIGNATURE=1" "SIGNING_PUB_KEY_PATH=$SIGNING_PUB")
+  if [ -n "${SIGNING_KEY_ID:-}" ]; then
+    SIGN_ENV+=("SIGNING_KEY_ID=$SIGNING_KEY_ID")
+  fi
+fi
 
 (cd "$BASE_DIR/agent" && \
   env CONTROL_PLANE_URL="$BASE_URL" ARTIFACT_ROOT="$ARTIFACT_ROOT" STATE_PATH="$STATE_PATH" \
   DEVICE_CERT_PATH="$CSR_DIR/device.crt" DEVICE_KEY_PATH="$CSR_DIR/device.key" \
-  "${CA_ENV[@]}" "${LOG_ENV[@]}" \
+  "${CA_ENV[@]}" "${LOG_ENV[@]}" "${SIGN_ENV[@]}" \
   go run ./cmd/agent -once)
 
   if [ ! -L "$ARTIFACT_ROOT/current" ]; then
@@ -211,11 +255,12 @@ EOF_MANIFEST
 BAD_TAR=/tmp/agent-bad-"$BAD_VERSION".tar.gz
 tar -czf "$BAD_TAR" -C "$BAD_DIR" .
 
-BAD_UPLOAD_JSON=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/artifacts/upload" \
-  -F "name=$ARTIFACT_NAME" \
-  -F "version=$BAD_VERSION" \
-  -F "type=$BAD_TYPE" \
-  -F "file=@$BAD_TAR")
+BAD_SIG=$(sign_file "$BAD_TAR")
+form_bad=(-F "name=$ARTIFACT_NAME" -F "version=$BAD_VERSION" -F "type=$BAD_TYPE" -F "file=@$BAD_TAR")
+if [ -n "$BAD_SIG" ]; then
+  form_bad+=(-F "signature=$BAD_SIG" -F "signatureKeyId=$SIGNING_KEY_ID")
+fi
+BAD_UPLOAD_JSON=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/artifacts/upload" "${form_bad[@]}")
 BAD_ARTIFACT_ID=$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["artifactId"])' <<<"$BAD_UPLOAD_JSON")
 
 curl -s "${curl_opts[@]}" -X PUT "$BASE_URL/api/v1/desired-state/devices/$DEVICE_ID" \
@@ -230,12 +275,19 @@ LOG_ENV=()
 if [ -n "${LOG_EXPORT_ADDR:-}" ]; then
   LOG_ENV=("LOG_EXPORT_ADDR=$LOG_EXPORT_ADDR")
 fi
+SIGN_ENV=()
+if [ "$REQUIRE_ARTIFACT_SIGNATURE" = "1" ]; then
+  SIGN_ENV=("REQUIRE_ARTIFACT_SIGNATURE=1" "SIGNING_PUB_KEY_PATH=$SIGNING_PUB")
+  if [ -n "${SIGNING_KEY_ID:-}" ]; then
+    SIGN_ENV+=("SIGNING_KEY_ID=$SIGNING_KEY_ID")
+  fi
+fi
 
 echo "Attempting apply of bad artifact (expected to fail)..."
 (cd "$BASE_DIR/agent" && \
   env CONTROL_PLANE_URL="$BASE_URL" ARTIFACT_ROOT="$ARTIFACT_ROOT" STATE_PATH="$STATE_PATH" \
   DEVICE_CERT_PATH="$CSR_DIR/device.crt" DEVICE_KEY_PATH="$CSR_DIR/device.key" \
-  "${CA_ENV[@]}" "${LOG_ENV[@]}" \
+  "${CA_ENV[@]}" "${LOG_ENV[@]}" "${SIGN_ENV[@]}" \
   go run ./cmd/agent -once) || true
 
 echo "Current symlink:"

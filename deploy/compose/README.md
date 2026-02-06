@@ -39,3 +39,9 @@ docker compose -f docker-compose.proxy.yml up -d
 
 If you use `./scripts/run-proxy.sh`, it will load `deploy/compose/.env` automatically and default
 `CADDY_CLIENT_CA_PATH` to `../dev-ca.crt`.
+
+On-prem stack (NGINX + UI + control-plane):
+```
+cp .env.onprem.example .env.onprem
+docker compose -f docker-compose.onprem.yml --env-file .env.onprem up -d
+```

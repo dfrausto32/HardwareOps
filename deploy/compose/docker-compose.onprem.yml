@@ -1,0 +1,83 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hardwareops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hardwareops}
+      POSTGRES_DB: ${POSTGRES_DB:-hardwareops}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio123}
+    volumes:
+      - miniodata:/data
+    restart: unless-stopped
+
+  control-plane:
+    build:
+      context: ../..
+      dockerfile: control-plane/Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://hardwareops:hardwareops@postgres:5432/hardwareops?sslmode=disable}
+      AUTO_MIGRATE: "1"
+      MIGRATIONS_DIR: /app/migrations
+      S3_ENDPOINT: ${S3_ENDPOINT:-minio:9000}
+      S3_BUCKET: ${S3_BUCKET:-artifacts}
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minio}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minio123}
+      S3_USE_SSL: "0"
+      S3_REGION: ${S3_REGION:-us-east-1}
+      CA_CERT_PATH: /certs/ca.crt
+      CA_KEY_PATH: /certs/ca.key
+      TRUST_PROXY: "1"
+      CLIENT_CERT_HEADER: X-Client-Cert
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://hardwareops.internal}
+      LOG_DIR: /var/lib/hardwareops/logs
+      DISABLE_HTTP2: "1"
+      MAINTENANCE_MODE: ${MAINTENANCE_MODE:-1}
+      MAINTENANCE_MESSAGE: ${MAINTENANCE_MESSAGE:-Maintenance mode enabled}
+      MAINTENANCE_TOKEN: ${MAINTENANCE_TOKEN:-change-me}
+      UPGRADE_APPLY_CMD: ${UPGRADE_APPLY_CMD:-/app/scripts/apply-upgrade.sh}
+      UPGRADE_WORK_DIR: ${UPGRADE_WORK_DIR:-/stack}
+      UPGRADE_LOG_DIR: ${UPGRADE_LOG_DIR:-/var/lib/hardwareops/logs}
+      UPGRADE_UPDATES_DIR: ${UPGRADE_UPDATES_DIR:-/stack/updates}
+      STACK_DIR: ${STACK_DIR:-/stack}
+    volumes:
+      - ${CERTS_DIR:-./certs}:/certs:ro
+      - controlplane-logs:/var/lib/hardwareops/logs
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${STACK_DIR:-.}:/stack
+    depends_on:
+      - postgres
+      - minio
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/nginx/Dockerfile
+      args:
+        VITE_API_BASE_URL: ${PUBLIC_BASE_URL:-https://hardwareops.internal}
+        VITE_SIMULATE_PROD: "1"
+        VITE_MAINTENANCE_TOKEN: ${MAINTENANCE_TOKEN:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ${CERTS_DIR:-./certs}:/certs:ro
+    depends_on:
+      - control-plane
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  miniodata:
+  controlplane-logs:

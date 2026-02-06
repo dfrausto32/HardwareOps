@@ -14,6 +14,7 @@ import (
 
 type ApplyResultRequest struct {
 	Status           string `json:"status"`
+	ArtifactID       string `json:"artifactId"`
 	AppliedVersion   string `json:"appliedVersion"`
 	AppliedConfigRev string `json:"appliedConfigRev"`
 	Error            string `json:"error"`
@@ -59,6 +60,12 @@ func PostApplyResult(logger *log.Logger, st store.Store, hub *events.Hub, trustP
 			http.Error(w, "preApplyStatus must be success, error, or skipped", http.StatusBadRequest)
 			return
 		}
+		if req.ArtifactID != "" {
+			if _, err := uuid.Parse(req.ArtifactID); err != nil {
+				http.Error(w, "artifactId must be uuid", http.StatusBadRequest)
+				return
+			}
+		}
 		if req.Status == "success" && req.AppliedVersion == "" {
 			http.Error(w, "appliedVersion required on success", http.StatusBadRequest)
 			return
@@ -67,6 +74,7 @@ func PostApplyResult(logger *log.Logger, st store.Store, hub *events.Hub, trustP
 		res := store.ApplyResult{
 			ApplyID:          uuid.NewString(),
 			DeviceID:         device.DeviceID,
+			ArtifactID:       req.ArtifactID,
 			Status:           req.Status,
 			AppliedVersion:   req.AppliedVersion,
 			AppliedConfigRev: req.AppliedConfigRev,
@@ -86,6 +94,7 @@ func PostApplyResult(logger *log.Logger, st store.Store, hub *events.Hub, trustP
 			LastApplyStatus: res.Status,
 			LastApplyError:  res.Error,
 			LastApplyAt:     res.CreatedAt,
+			LastApplyArtifactID: res.ArtifactID,
 		}
 		if res.PreApplyStatus != "" {
 			state.LastPreApplyStatus = res.PreApplyStatus
@@ -100,6 +109,9 @@ func PostApplyResult(logger *log.Logger, st store.Store, hub *events.Hub, trustP
 			state.ServicesJSON = prev.ServicesJSON
 			state.HealthJSON = prev.HealthJSON
 			state.UpdatedAt = prev.UpdatedAt
+			if res.ArtifactID == "" {
+				state.LastApplyArtifactID = prev.LastApplyArtifactID
+			}
 			if res.PreApplyStatus == "" {
 				state.LastPreApplyStatus = prev.LastPreApplyStatus
 				state.LastPreApplyError = prev.LastPreApplyError
@@ -115,6 +127,7 @@ func PostApplyResult(logger *log.Logger, st store.Store, hub *events.Hub, trustP
 		if hub != nil {
 			payload, _ := json.Marshal(map[string]any{
 				"status":           res.Status,
+				"artifactId":       res.ArtifactID,
 				"appliedVersion":   res.AppliedVersion,
 				"appliedConfigRev": res.AppliedConfigRev,
 				"error":            res.Error,

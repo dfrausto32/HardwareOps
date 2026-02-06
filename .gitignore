@@ -22,3 +22,17 @@ dist/
 
 # Logs
 logs/
+
+# Dev certs/keys
+/dev-ca.*
+/dev-server.*
+*.key
+*.pem
+*.p12
+*.pfx
+*.srl
+*.csr
+
+# Local tooling
+_npx/
+updates/

@@ -3,9 +3,13 @@ package artifacts
 import (
 	"archive/tar"
 	"compress/gzip"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -27,11 +31,13 @@ type Desired struct {
 }
 
 type ArtifactMeta struct {
-	ArtifactID string
-	SHA256     string
-	SizeBytes  int64
-	Version    string
-	Type       string
+	ArtifactID     string
+	SHA256         string
+	SizeBytes      int64
+	Version        string
+	Type           string
+	Signature      string
+	SignatureKeyID string
 }
 
 type Manifest struct {
@@ -75,7 +81,11 @@ func Apply(root string, desired Desired, meta ArtifactMeta, httpClient *http.Cli
 	if logger != nil {
 		logger.Infof("download start url=%s", desired.DownloadURL)
 	}
-	if err := downloadAndVerify(httpClient, desired.DownloadURL, archivePath, meta.SHA256); err != nil {
+	sum, err := downloadAndVerify(httpClient, desired.DownloadURL, archivePath, meta.SHA256)
+	if err != nil {
+		return outcome, err
+	}
+	if err := verifySignature(meta, sum, opts); err != nil {
 		return outcome, err
 	}
 	if logger != nil {
@@ -180,36 +190,89 @@ func loadPlan(root string) (*plan.Plan, error) {
 	return p, nil
 }
 
-func downloadAndVerify(client *http.Client, url, dest, expectedSHA string) error {
+func downloadAndVerify(client *http.Client, url, dest, expectedSHA string) (string, error) {
 	if url == "" {
-		return fmt.Errorf("missing download url")
+		return "", fmt.Errorf("missing download url")
 	}
 	resp, err := client.Get(url)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download failed: status=%d", resp.StatusCode)
+		return "", fmt.Errorf("download failed: status=%d", resp.StatusCode)
 	}
 
 	f, err := os.Create(dest)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer f.Close()
 
 	h := sha256.New()
 	mw := io.MultiWriter(f, h)
 	if _, err := io.Copy(mw, resp.Body); err != nil {
-		return err
+		return "", err
 	}
 
 	sum := hex.EncodeToString(h.Sum(nil))
 	if expectedSHA != "" && !strings.EqualFold(sum, expectedSHA) {
-		return fmt.Errorf("sha256 mismatch: expected %s got %s", expectedSHA, sum)
+		return "", fmt.Errorf("sha256 mismatch: expected %s got %s", expectedSHA, sum)
+	}
+	return sum, nil
+}
+
+func verifySignature(meta ArtifactMeta, shaHex string, opts ApplyOptions) error {
+	if meta.Signature == "" {
+		if opts.RequireSignature {
+			return fmt.Errorf("artifact signature required but missing")
+		}
+		return nil
+	}
+	if opts.SigningPublicKeyPath == "" {
+		return fmt.Errorf("signature verification requires SIGNING_PUB_KEY_PATH")
+	}
+	if opts.SigningKeyID != "" {
+		if meta.SignatureKeyID == "" || !strings.EqualFold(meta.SignatureKeyID, opts.SigningKeyID) {
+			return fmt.Errorf("signature key id mismatch")
+		}
+	}
+	pubKey, err := loadEd25519PublicKey(opts.SigningPublicKeyPath)
+	if err != nil {
+		return fmt.Errorf("load signing public key: %w", err)
+	}
+	sigBytes, err := base64.StdEncoding.DecodeString(meta.Signature)
+	if err != nil {
+		return fmt.Errorf("invalid signature encoding")
+	}
+	shaBytes, err := hex.DecodeString(shaHex)
+	if err != nil {
+		return fmt.Errorf("invalid sha256 for signature verification")
+	}
+	if !ed25519.Verify(pubKey, shaBytes, sigBytes) {
+		return fmt.Errorf("signature verification failed")
 	}
 	return nil
+}
+
+func loadEd25519PublicKey(path string) (ed25519.PublicKey, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return nil, fmt.Errorf("invalid public key pem")
+	}
+	pubAny, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	pubKey, ok := pubAny.(ed25519.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("public key is not ed25519")
+	}
+	return pubKey, nil
 }
 
 func extractTarGz(archivePath, dest string) error {

@@ -1,234 +1,57 @@
 # HardwareOps
 The platform acts as a control plane for safely deploying software and configuration to autonomous devices operating in unreliable, bandwidth-constrained, and sometimes offline environments.
 
-## Local Development
+## Documentation
+See `docs/README.md` for a map of all guides.
 
-### Prereqs
-- Go 1.22+
-- Docker + Docker Compose
-- python3 (for artifact packaging script)
+## Development Roadmap
+Forward‑looking plans for deployments, ingest modes, and RBAC:
+- `docs/development/roadmap.md`
+- `docs/development/deployment-options.md`
+- `docs/development/artifact-ingest.md`
+- `docs/development/auth-rbac.md`
+- `docs/development/artifact-signing.md`
+- `docs/development/upgrade-strategy.md`
 
-### Start dependencies
-1) Create env:
-   `cp deploy/compose/.env.example deploy/compose/.env`
-2) Start Postgres + MinIO:
-   `make dev-up`
+## Local Development (WSL)
+For the clean WSL2 dev flow (control‑plane + UI + agent), see:
+`docs/local-dev-wsl.md`
 
-### Apply DB migrations
-Preferred (automated):
+### Quickstart (WSL)
 ```
-./scripts/migrate.sh
-```
-
-Manual (psql): apply all migrations in order.
-```
-for f in control-plane/migrations/*.sql; do
-  psql "$DATABASE_URL" -f "$f"
-done
+cp deploy/compose/.env.example deploy/compose/.env
+make dev-up
 ```
 
-### Create a dev CA (for device enrollment)
-The control-plane signs device CSRs when `CA_CERT_PATH` and `CA_KEY_PATH` are set.
-
-Example (openssl):
+Create dev CA:
 ```
 openssl req -x509 -newkey rsa:2048 -nodes \
   -keyout ./dev-ca.key -out ./dev-ca.crt \
   -days 365 -subj "/CN=HardwareOps Dev CA"
 ```
 
-Then set:
-- `CA_CERT_PATH=./dev-ca.crt`
-- `CA_KEY_PATH=./dev-ca.key`
-
-### Enable TLS + mTLS (required for device traffic)
-Run the control-plane with HTTPS and verify client certs (mTLS). The device cert issued at enrollment is used to authenticate on every request.
-
+Run control‑plane (TLS + mTLS):
 ```
+export DATABASE_URL=postgres://hardwareops:hardwareops@localhost:5432/hardwareops?sslmode=disable
+export CA_CERT_PATH=./dev-ca.crt
+export CA_KEY_PATH=./dev-ca.key
+export AUTO_MIGRATE=1
+export DISABLE_HTTP2=1
+export CORS_ALLOWED_ORIGINS=http://localhost:5173
+
 ENABLE_TLS=1 ./scripts/run-control-plane.sh
 ```
 
-Manual (set server cert/key and client CA explicitly):
+Run UI:
 ```
-export TLS_CERT_PATH=./dev-server.crt
-export TLS_KEY_PATH=./dev-server.key
-export TLS_CLIENT_CA_PATH=./dev-ca.crt
-```
-
-`ENABLE_TLS=1` generates a dev server cert signed by the dev CA (so the same CA can validate both server and device certs).
-Default paths:
-- Dev CA: `./dev-ca.crt` + `./dev-ca.key`
-- Server cert: `./dev-server.crt` + `./dev-server.key`
-The dev server cert includes SANs for `localhost`, `127.0.0.1`, and `host.docker.internal`.
-
-### HTTPS Reverse Proxy (Caddy + automatic certs)
-Use Caddy in front of the control-plane for automatic HTTPS (Let’s Encrypt). This is recommended for public domains.
-
-1) Configure the domain + email:
-```
-cp deploy/compose/.env.example deploy/compose/.env
-# edit CADDY_DOMAIN and CADDY_EMAIL
-```
-Ensure `CADDY_CLIENT_CA_PATH` points to the device CA (same CA used by the control-plane to sign device certs). Default is `../dev-ca.crt`.
-
-2) Start Caddy:
-```
-./scripts/run-proxy.sh
-```
-The proxy script will use `deploy/compose/.env` if present and default `CADDY_CLIENT_CA_PATH` to `./dev-ca.crt`.
-
-3) Start the control-plane behind the proxy (trust the proxy client cert header):
-```
-USE_PROXY=1 ./scripts/run-control-plane.sh
+cd ui
+npm install
+VITE_API_BASE_URL=https://localhost:8080 VITE_SIMULATE_PROD=1 npm run dev
 ```
 
-4) Point agents to the HTTPS domain:
-```
-export CONTROL_PLANE_URL=https://your-domain.example
-```
+Open `http://localhost:5173/` and trust `dev-ca.crt` in Windows.
 
-Note: Automatic certs require a publicly reachable domain. For local dev, set `CADDY_TLS=internal` in `deploy/compose/.env`
-and trust Caddy’s internal CA.
-
-#### Reverse proxy verification (curl)
-These commands validate the proxy + mTLS chain end-to-end. Replace `your-domain.example` with your domain.
-
-Health check (proxy TLS):
-```
-curl -s https://your-domain.example/healthz
-```
-
-Enrollment via proxy:
-```
-curl -s -X POST https://your-domain.example/api/v1/enrollments \
-  -H "Content-Type: application/json" \
-  -d '{"expiresInSec":3600}' > /tmp/enrollments.json
-```
-
-Enroll a device (returns device cert + CA):
-```
-openssl req -newkey rsa:2048 -nodes \
-  -keyout /tmp/device.key -out /tmp/device.csr \
-  -subj "/CN=hardwareops-device"
-
-TOKEN=$(python3 - <<'PY'
-import json
-print(json.load(open("/tmp/enrollments.json"))["token"])
-PY
-)
-
-CSR=$(awk 'NF {sub(/\r/, ""); printf "%s\\n",$0;}' /tmp/device.csr)
-curl -s -X POST https://your-domain.example/api/v1/devices/enroll \
-  -H "Content-Type: application/json" \
-  -d "{\"token\":\"$TOKEN\",\"csr\":\"$CSR\"}" > /tmp/enroll.json
-```
-
-Device check-in via mTLS (proxy forwards client cert):
-```
-DEVICE_ID=$(python3 - <<'PY'
-import json
-print(json.load(open("/tmp/enroll.json"))["deviceId"])
-PY
-)
-
-python3 - <<'PY'
-import json
-data=json.load(open("/tmp/enroll.json"))
-open("/tmp/device.crt","w").write(data["certPem"])
-open("/tmp/dev-ca.crt","w").write(data["caCertPem"])
-PY
-
-curl -s --cert /tmp/device.crt --key /tmp/device.key \
-  https://your-domain.example/api/v1/devices/checkin \
-  -H "Content-Type: application/json" \
-  -d "{\"deviceId\":\"$DEVICE_ID\",\"agentVersion\":\"0.1.0\",\"current\":{\"softwareVersion\":\"v1\",\"configRev\":\"c1\"}}"
-```
-
-If TLS is enabled, use `https://` in clients and provide the CA:
-```
-curl --cacert ./dev-ca.crt https://localhost:8080/healthz
-```
-
-### Run the control-plane
-From `control-plane/`:
-```
-export DATABASE_URL=postgres://hardwareops:hardwareops@localhost:5432/hardwareops?sslmode=disable
-export CA_CERT_PATH=../dev-ca.crt
-export CA_KEY_PATH=../dev-ca.key
-export AUTO_MIGRATE=1
-
-# S3/MinIO (endpoint is host:port, no scheme)
-export S3_ENDPOINT=localhost:9000
-export S3_BUCKET=artifacts
-export S3_ACCESS_KEY=minio
-export S3_SECRET_KEY=minio123
-export S3_USE_SSL=0
-export S3_PRESIGN_TTL=5m
-export LOG_INGEST_ADDR=tcp://0.0.0.0:5560
-export LOG_DIR=../logs
-
-# Optional: stale device cleanup
-export DEVICE_STALE_TTL=1h
-export DEVICE_CLEANUP_INTERVAL=5m
-
-# Optional: disable HTTP/2 (required for WebSocket support in dev)
-export DISABLE_HTTP2=1
-
-# CORS allowlist (required for browser access in realistic dev)
-export CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
-
-# Rate limits (per IP, per minute; set to 0 to disable)
-export ENROLLMENT_TOKEN_RPM=30
-export ENROLL_RPM=60
-export CHECKIN_RPM=300
-export APPLY_RESULT_RPM=300
-
-# Optional: change migrations dir
-# export MIGRATIONS_DIR=./migrations
-
-go run ./cmd/control-plane
-```
-
-### Run the agent (periodic check-in)
-From `agent/`:
-```
-export CONTROL_PLANE_URL=https://localhost:8080
-export ARTIFACT_ROOT=./agent-data
-export CHECKIN_INTERVAL=30s
-export DEVICE_CERT_PATH=/tmp/device.crt
-export DEVICE_KEY_PATH=/tmp/device.key
-export CONTROL_PLANE_CA_CERT_PATH=/tmp/dev-ca.crt
-
-go run ./cmd/agent
-```
-
-Single check-in (one-shot):
-```
-go run ./cmd/agent -once
-```
-Device check-ins require mTLS; run the control-plane with TLS enabled.
-
-### Device Simulator
-The simulator enrolls devices (token + CSR) and performs periodic check-ins.
-
-Examples (from `agent/`):
-```
-# 10 simulated devices, check in every 5 seconds
-
-go run ./cmd/simulator --devices 10 --interval 5s
-
-# Single check-in per device
-
-go run ./cmd/simulator --devices 5 --once
-
-# Skip enrollment (random UUIDs) if CA is not configured
-
-go run ./cmd/simulator --devices 5 --skip-enroll
-
-# HTTPS + mTLS (use CA to verify server cert)
-
-go run ./cmd/simulator --base-url https://localhost:8080 --ca-cert /tmp/dev-ca.crt
-```
+For detailed setup, advanced proxy usage, and full dev steps, see `docs/local-dev-wsl.md`.
 
 ### Artifacts (v1)
 Artifacts are **tar.gz bundles** with a `manifest.json` and a `files/` directory.
@@ -378,6 +201,20 @@ CSV columns:
 ### Demo: Agent Container With Live Service
 This demo runs the control-plane normally, starts an agent container that serves `index.html` from the active artifact, then updates the artifact so the page content changes.
 For a full end-to-end walkthrough (including pre-apply), see `docs/preapply-demo.md`.
+
+### On-Prem Deployment (v1)
+- `docs/installers.md` (build OS/arch installers)
+- `docs/installer-flow.md` (fresh-machine installer flow)
+- `docs/onprem-deploy.md` (full on‑prem guide)
+- `docs/dns-coredns.md` (local DNS)
+- `docs/certs.md` (internal CA + TLS)
+- `docs/agent-systemd.md` (agent systemd install)
+- `docs/vm-testing.md` (VM-based testing guide)
+
+Prereq for on‑prem rollout:
+```
+./scripts/build-installers.sh
+```
 
 1. Start dependencies and the control-plane:
 ```

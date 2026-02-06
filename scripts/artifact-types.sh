@@ -11,6 +11,11 @@ VERSIONS=${VERSIONS:-0.1.0,0.2.0}
 VERSION_BASE=${VERSION_BASE:-0.1.0}
 TYPES=${TYPES:-app_bundle,config_bundle,data_bundle,firmware,container_image}
 OUT_DIR=${OUT_DIR:-/tmp/hardwareops-types}
+SIGN_ARTIFACTS=${SIGN_ARTIFACTS:-1}
+
+if [ "$SIGN_ARTIFACTS" = "1" ]; then
+  source "$BASE_DIR/scripts/ensure-signing-key.sh"
+fi
 
 curl_opts=()
 if [[ "$BASE_URL" == https:* ]]; then
@@ -114,12 +119,21 @@ EOF
 EOF
 
     tar_path="$OUT_DIR/${ARTIFACT_NAME}-${version}.tar.gz"
-    python3 "$BASE_DIR/scripts/artifact-pack.py" \
-      --name "$ARTIFACT_NAME" \
-      --version "$version" \
-      --type "$atype" \
-      --input-dir "$input_dir" \
-      --out "$tar_path" >/dev/null
+    pack_args=(--name "$ARTIFACT_NAME" --version "$version" --type "$atype" --input-dir "$input_dir" --out "$tar_path")
+    if [ "$SIGN_ARTIFACTS" = "1" ]; then
+      pack_args+=(--signing-key "$SIGNING_KEY" --signing-key-id "$SIGNING_KEY_ID")
+    fi
+    PACK_JSON=$(python3 "$BASE_DIR/scripts/artifact-pack.py" "${pack_args[@]}")
+    SIG=$(python3 - <<'PY' "$PACK_JSON"
+import json, sys
+print(json.loads(sys.argv[1]).get("signature",""))
+PY
+)
+    SIG_KEY_ID=$(python3 - <<'PY' "$PACK_JSON"
+import json, sys
+print(json.loads(sys.argv[1]).get("signatureKeyId",""))
+PY
+)
 
     meta_json=$(python3 - <<'PY' "$atype" "$base_ver" "$version"
 import json, sys
@@ -132,12 +146,11 @@ print(json.dumps({
 PY
 )
 
-    upload_json=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/artifacts/upload" \
-      -F "name=$ARTIFACT_NAME" \
-      -F "version=$version" \
-      -F "type=$atype" \
-      -F "metadata=$meta_json" \
-      -F "file=@$tar_path")
+    form_args=(-F "name=$ARTIFACT_NAME" -F "version=$version" -F "type=$atype" -F "metadata=$meta_json" -F "file=@$tar_path")
+    if [ -n "$SIG" ]; then
+      form_args+=(-F "signature=$SIG" -F "signatureKeyId=$SIG_KEY_ID")
+    fi
+    upload_json=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/artifacts/upload" "${form_args[@]}")
 
     artifact_id=$(python3 - <<'PY' "$upload_json"
 import json, sys

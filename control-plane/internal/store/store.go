@@ -12,18 +12,19 @@ type Device struct {
 }
 
 type DeviceState struct {
-	DeviceID           string
-	CurrentVersion     string
-	CurrentConfigRev   string
-	ServicesJSON       []byte
-	HealthJSON         []byte
-	UpdatedAt          time.Time
-	LastApplyStatus    string
-	LastApplyError     string
-	LastApplyAt        time.Time
-	LastPreApplyStatus string
-	LastPreApplyError  string
-	LastPreApplyAt     time.Time
+	DeviceID            string
+	CurrentVersion      string
+	CurrentConfigRev    string
+	ServicesJSON        []byte
+	HealthJSON          []byte
+	UpdatedAt           time.Time
+	LastApplyStatus     string
+	LastApplyError      string
+	LastApplyAt         time.Time
+	LastApplyArtifactID string
+	LastPreApplyStatus  string
+	LastPreApplyError   string
+	LastPreApplyAt      time.Time
 }
 
 type EnrollmentToken struct {
@@ -55,6 +56,7 @@ type Artifact struct {
 type ApplyResult struct {
 	ApplyID          string
 	DeviceID         string
+	ArtifactID       string
 	Status           string
 	AppliedVersion   string
 	AppliedConfigRev string
@@ -103,14 +105,18 @@ type Store interface {
 	ListDevices(filter ListDevicesFilter) ([]Device, error)
 	DeleteDevice(deviceID string) error
 	DeleteStaleDevices(cutoff time.Time) (int, error)
+	UpdateDeviceStatuses(staleCutoff, offlineCutoff time.Time) (int, error)
 	UpsertGroup(group Group) error
 	ListGroups() ([]Group, error)
+	DeleteGroup(groupID string) error
 	UpsertDesiredStateGroup(state DesiredStateGroup) error
 	UpsertDesiredStateDevice(state DesiredStateDevice) error
 	GetDesiredStateDevice(deviceID string) (DesiredStateDevice, bool, error)
 	GetDesiredStateGroupForDevice(deviceID string) (DesiredStateGroup, bool, error)
 	ListDesiredStateGroups() ([]DesiredStateGroup, error)
 	ListDesiredStateDevices() ([]DesiredStateDevice, error)
+	DeleteDesiredStateDevice(deviceID string) error
+	DeleteDesiredStateGroup(groupID string) error
 	CreateArtifact(artifact Artifact) error
 	GetArtifact(artifactID string) (Artifact, bool, error)
 	ListArtifacts(name, version string, limit, offset int) ([]Artifact, error)

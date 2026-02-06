@@ -17,6 +17,7 @@ import (
 	"github.com/hardwareops/control-plane/internal/migrate"
 	"github.com/hardwareops/control-plane/internal/objectstore"
 	"github.com/hardwareops/control-plane/internal/store/postgres"
+	"github.com/hardwareops/control-plane/internal/upgrade"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -74,6 +75,11 @@ func main() {
 	}
 
 	hub := events.NewHub(128)
+	upgradeLogDir := cfg.UpgradeLogDir
+	if upgradeLogDir == "" {
+		upgradeLogDir = cfg.LogDir
+	}
+	upgradeRunner := upgrade.NewRunner(cfg.UpgradeApplyCmd, cfg.UpgradeWorkDir, upgradeLogDir, logger.Printf)
 	deps := httpapi.Dependencies{
 		Store:            postgres.New(pool),
 		Signer:           signer,
@@ -91,6 +97,10 @@ func main() {
 		LogDir:             cfg.LogDir,
 		Events:             hub,
 		CORSAllowedOrigins: cfg.CORSAllowedOrigins,
+		Maintenance:        httpapi.NewMaintenanceState(cfg.MaintenanceEnabled, cfg.MaintenanceMessage),
+		MaintenanceToken:   cfg.MaintenanceToken,
+		Upgrade:            upgradeRunner,
+		UpgradeUpdatesDir:  cfg.UpgradeUpdatesDir,
 	}
 
 	if cfg.LogIngestAddr != "" {
@@ -119,6 +129,27 @@ func main() {
 				if count > 0 {
 					logger.Printf("deleted stale devices count=%d cutoff=%s", count, cutoff.Format(time.RFC3339))
 				}
+			}
+		}()
+	}
+
+	if cfg.DeviceStatusStaleAfter > 0 && cfg.DeviceStatusOfflineAfter > 0 {
+		interval := cfg.DeviceStatusRefreshInterval
+		if interval <= 0 {
+			interval = 30 * time.Second
+		}
+		go func() {
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				cutoffStale := time.Now().UTC().Add(-cfg.DeviceStatusStaleAfter)
+				cutoffOffline := time.Now().UTC().Add(-cfg.DeviceStatusOfflineAfter)
+				if count, err := deps.Store.UpdateDeviceStatuses(cutoffStale, cutoffOffline); err != nil {
+					logger.Printf("update device status error: %v", err)
+				} else if count > 0 {
+					logger.Printf("updated device statuses count=%d", count)
+				}
+				<-ticker.C
 			}
 		}()
 	}

@@ -57,6 +57,30 @@ export async function deleteDevice(deviceId: string) {
   })
 }
 
+export async function patchDevice(deviceId: string, payload: Record<string, unknown>) {
+  return requestJson(`/api/v1/devices/${encodeURIComponent(deviceId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function listGroups() {
+  return requestJson('/api/v1/groups')
+}
+
+export async function putGroup(groupId: string, payload: Record<string, unknown>) {
+  return requestJson(`/api/v1/groups/${encodeURIComponent(groupId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function deleteGroup(groupId: string) {
+  return requestNoContent(`/api/v1/groups/${encodeURIComponent(groupId)}`, {
+    method: 'DELETE',
+  })
+}
+
 export async function getDesiredState() {
   return requestJson('/api/v1/desired-state')
 }
@@ -68,10 +92,22 @@ export async function setDesiredStateDevice(deviceId: string, payload: Record<st
   })
 }
 
+export async function clearDesiredStateDevice(deviceId: string) {
+  return requestNoContent(`/api/v1/desired-state/devices/${encodeURIComponent(deviceId)}`, {
+    method: 'DELETE',
+  })
+}
+
 export async function setDesiredStateGroup(groupId: string, payload: Record<string, unknown>) {
   return requestJson(`/api/v1/desired-state/groups/${encodeURIComponent(groupId)}`, {
     method: 'PUT',
     body: JSON.stringify(payload),
+  })
+}
+
+export async function clearDesiredStateGroup(groupId: string) {
+  return requestNoContent(`/api/v1/desired-state/groups/${encodeURIComponent(groupId)}`, {
+    method: 'DELETE',
   })
 }
 
@@ -99,4 +135,39 @@ export async function deleteArtifact(artifactId: string) {
 
 export async function getDeviceLogs(deviceId: string) {
   return requestText(`/api/v1/logs/${encodeURIComponent(deviceId)}`)
+}
+
+export async function getMaintenance() {
+  return requestJson('/api/v1/maintenance')
+}
+
+export async function setMaintenance(payload: Record<string, unknown>, token?: string) {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (token) {
+    headers['X-Maintenance-Token'] = token
+  }
+  return requestJson('/api/v1/maintenance', {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function getUpgradeStatus() {
+  return requestJson('/api/v1/maintenance/upgrade')
+}
+
+export async function getUpgradeAvailable() {
+  return requestJson('/api/v1/maintenance/upgrade/available')
+}
+
+export async function applyUpgrade(token?: string) {
+  const headers: Record<string, string> = {}
+  if (token) {
+    headers['X-Maintenance-Token'] = token
+  }
+  return requestJson('/api/v1/maintenance/upgrade', {
+    method: 'POST',
+    headers,
+  })
 }

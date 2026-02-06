@@ -157,6 +157,46 @@ func PutDesiredStateDevice(logger *log.Logger, st store.Store) http.HandlerFunc 
 	}
 }
 
+func DeleteDesiredStateDevice(logger *log.Logger, st store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		deviceID := chi.URLParam(r, "deviceId")
+		if deviceID == "" {
+			http.Error(w, "deviceId required", http.StatusBadRequest)
+			return
+		}
+		if _, err := uuid.Parse(deviceID); err != nil {
+			http.Error(w, "deviceId must be uuid", http.StatusBadRequest)
+			return
+		}
+		if err := st.DeleteDesiredStateDevice(deviceID); err != nil {
+			logger.Printf("delete desired_state_device error: %v", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func DeleteDesiredStateGroup(logger *log.Logger, st store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		groupID := chi.URLParam(r, "groupId")
+		if groupID == "" {
+			http.Error(w, "groupId required", http.StatusBadRequest)
+			return
+		}
+		if _, err := uuid.Parse(groupID); err != nil {
+			http.Error(w, "groupId must be uuid", http.StatusBadRequest)
+			return
+		}
+		if err := st.DeleteDesiredStateGroup(groupID); err != nil {
+			logger.Printf("delete desired_state_group error: %v", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 func ListDesiredState(logger *log.Logger, st store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		scope := r.URL.Query().Get("scope")

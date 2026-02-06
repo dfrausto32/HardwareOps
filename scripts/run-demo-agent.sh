@@ -12,6 +12,8 @@ DEMO_HTTP_PORT=${DEMO_HTTP_PORT:-8081}
 NO_CACHE=${NO_CACHE:-0}
 DEMO_COUNT=${DEMO_COUNT:-1}
 ALLOW_UNSUPPORTED_APPLY=${ALLOW_UNSUPPORTED_APPLY:-1}
+SIGN_ARTIFACTS=${SIGN_ARTIFACTS:-1}
+REQUIRE_ARTIFACT_SIGNATURE=${REQUIRE_ARTIFACT_SIGNATURE:-$SIGN_ARTIFACTS}
 
 HOST_URL="$BASE_URL"
 if [[ "$BASE_URL" == http:* ]]; then
@@ -24,6 +26,9 @@ if [ ! -f "$CA_CERT_PATH" ]; then
   echo "CA cert not found at $CA_CERT_PATH. Run ./scripts/run-control-plane.sh first." >&2
   exit 1
 fi
+
+# Ensure signing keys are available for demo verification.
+source "$BASE_DIR/scripts/ensure-signing-key.sh"
 
 curl_opts=(--cacert "$CA_CERT_PATH")
 if ! curl -s "${curl_opts[@]}" "$HOST_URL/healthz" >/dev/null; then
@@ -117,6 +122,7 @@ PY
 
   cp -f "$CA_CERT_PATH" "$CERT_DIR/dev-ca.crt"
   chmod 0644 "$DEVICE_CERT_PATH" "$DEVICE_KEY_PATH" || true
+  cp -f "$SIGNING_PUB" "$CERT_DIR/signing.pub"
 
   docker run -d \
     --name "$NAME" \
@@ -128,6 +134,9 @@ PY
     -e DEVICE_CERT_PATH=/certs/device.crt \
     -e DEVICE_KEY_PATH=/certs/device.key \
     -e CONTROL_PLANE_CA_CERT_PATH=/certs/dev-ca.crt \
+    -e SIGNING_PUB_KEY_PATH=/certs/signing.pub \
+    -e SIGNING_KEY_ID="$SIGNING_KEY_ID" \
+    -e REQUIRE_ARTIFACT_SIGNATURE="$REQUIRE_ARTIFACT_SIGNATURE" \
     -e LOG_EXPORT_ADDR="${LOG_EXPORT_ADDR:-}" \
     -e LOG_LEVEL="${LOG_LEVEL:-}" \
     -e DEMO_HTTP_PORT="$DEMO_PORT" \
@@ -136,6 +145,7 @@ PY
     -v "$DEVICE_CERT_PATH:/certs/device.crt:ro" \
     -v "$DEVICE_KEY_PATH:/certs/device.key:ro" \
     -v "$CERT_DIR/dev-ca.crt:/certs/dev-ca.crt:ro" \
+    -v "$CERT_DIR/signing.pub:/certs/signing.pub:ro" \
     "$IMAGE_NAME" >/dev/null
 
   echo "Demo agent running as $NAME."

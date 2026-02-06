@@ -3,7 +3,10 @@ package artifacts
 import "fmt"
 
 type ApplyOptions struct {
-	AllowUnsupported bool
+	AllowUnsupported     bool
+	SigningPublicKeyPath string
+	SigningKeyID         string
+	RequireSignature     bool
 }
 
 type ApplyOutcome struct {

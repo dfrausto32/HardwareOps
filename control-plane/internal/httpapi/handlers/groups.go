@@ -97,4 +97,24 @@ func ListGroups(logger *log.Logger, st store.Store) http.HandlerFunc {
 	}
 }
 
+func DeleteGroup(logger *log.Logger, st store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		groupID := chi.URLParam(r, "groupId")
+		if groupID == "" {
+			http.Error(w, "groupId required", http.StatusBadRequest)
+			return
+		}
+		if _, err := uuid.Parse(groupID); err != nil {
+			http.Error(w, "groupId must be uuid", http.StatusBadRequest)
+			return
+		}
+		if err := st.DeleteGroup(groupID); err != nil {
+			logger.Printf("delete group error: %v", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 // isJSONObject is defined in util.go

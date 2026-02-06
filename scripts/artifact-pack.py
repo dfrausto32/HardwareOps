@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, hashlib, json, os, tarfile, time
+import argparse, base64, hashlib, json, os, subprocess, tarfile, tempfile, time
 from pathlib import Path
 
 def sha256_file(path: Path):
@@ -9,6 +9,34 @@ def sha256_file(path: Path):
             h.update(chunk)
     return h.hexdigest()
 
+def compute_key_id(signing_key: Path):
+    try:
+        pub = subprocess.check_output(
+            ["openssl", "pkey", "-in", str(signing_key), "-pubout", "-outform", "DER"],
+            stderr=subprocess.DEVNULL,
+        )
+    except subprocess.CalledProcessError:
+        return ""
+    key_hash = hashlib.sha256(pub).hexdigest()
+    return f"sha256:{key_hash}"
+
+def sign_sha256(signing_key: Path, sha_hex: str):
+    sha_bytes = bytes.fromhex(sha_hex)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        sha_path = Path(tmpdir) / "sha.bin"
+        sig_path = Path(tmpdir) / "sig.bin"
+        sha_path.write_bytes(sha_bytes)
+        try:
+            subprocess.check_call(
+                ["openssl", "pkeyutl", "-sign", "-inkey", str(signing_key), "-rawin", "-in", str(sha_path), "-out", str(sig_path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise SystemExit(f"signing failed: {exc}")
+        sig_b64 = base64.b64encode(sig_path.read_bytes()).decode("utf-8")
+        return sig_b64
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--name', required=True)
@@ -16,6 +44,9 @@ def main():
     ap.add_argument('--type', default='app_bundle')
     ap.add_argument('--input-dir', required=True)
     ap.add_argument('--out', required=True)
+    ap.add_argument('--signing-key', default='')
+    ap.add_argument('--signature-out', default='')
+    ap.add_argument('--signing-key-id', default='')
     args = ap.parse_args()
 
     input_dir = Path(args.input_dir).resolve()
@@ -81,10 +112,25 @@ def main():
     size_bytes = out_path.stat().st_size
     sha = sha256_file(out_path)
 
+    signature = ""
+    signature_key_id = ""
+    if args.signing_key:
+        signing_key = Path(args.signing_key).resolve()
+        if not signing_key.is_file():
+            raise SystemExit(f"signing-key not found: {signing_key}")
+        signature = sign_sha256(signing_key, sha)
+        signature_key_id = args.signing_key_id or compute_key_id(signing_key)
+        if args.signature_out:
+            Path(args.signature_out).write_text(signature)
+
     print(json.dumps({
         "artifactPath": str(out_path),
         "sizeBytes": size_bytes,
         "sha256": sha,
+        "signature": signature,
+        "signatureAlg": "ed25519" if signature else "",
+        "signaturePayload": "sha256" if signature else "",
+        "signatureKeyId": signature_key_id,
     }, indent=2))
 
 if __name__ == '__main__':

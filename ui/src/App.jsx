@@ -1,19 +1,32 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   getDevices,
   getDevice,
+  listGroups,
+  putGroup,
+  deleteGroup,
+  patchDevice,
+  clearDesiredStateDevice,
   getDesiredState,
   listArtifacts,
   uploadArtifact,
   setDesiredStateDevice,
+  setDesiredStateGroup,
+  clearDesiredStateGroup,
   getDeviceLogs,
   deleteDevice,
   deleteArtifact,
+  getMaintenance,
+  setMaintenance,
+  getUpgradeStatus,
+  getUpgradeAvailable,
+  applyUpgrade,
 } from './api'
 
 const nav = [
   { id: 'dashboard', label: 'Dashboard', icon: 'icon-dashboard' },
   { id: 'logs', label: 'Logs', icon: 'icon-logs' },
+  { id: 'settings', label: 'Settings', icon: 'icon-settings' },
 ]
 
 function parseCSVLine(line) {
@@ -56,6 +69,44 @@ function parseCSV(text) {
   return { header, rows }
 }
 
+function normalizeObject(value) {
+  if (!value) return {}
+  if (typeof value === 'object') return value
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed
+      }
+    } catch {
+      return {}
+    }
+  }
+  return {}
+}
+
+function selectorMatches(labels, selector) {
+  if (!selector || Object.keys(selector).length === 0) return true
+  if (!labels) return false
+  return Object.entries(selector).every(([key, val]) => labels[key] === val)
+}
+
+function selectorToForm(selector) {
+  const region = selector.region ?? ''
+  const role = selector.role ?? ''
+  const site = selector.site ?? ''
+  const custom = Object.entries(selector)
+    .filter(([key]) => !['region', 'role', 'site'].includes(key))
+    .map(([key, value]) => ({ key, value: String(value ?? '') }))
+  return { region, role, site, custom }
+}
+
+function formatSelector(selector) {
+  const entries = Object.entries(selector || {})
+  if (entries.length === 0) return '—'
+  return entries.map(([key, value]) => `${key}=${value}`).join(', ')
+}
+
 export default function App() {
   const apiBaseUrl = useMemo(() => {
     return import.meta.env.VITE_API_BASE_URL || 'https://localhost:8080'
@@ -93,12 +144,37 @@ export default function App() {
   const [devicesLoading, setDevicesLoading] = useState(false)
   const [devicesError, setDevicesError] = useState('')
   const [devicesStatus, setDevicesStatus] = useState('')
+  const [deviceOrder, setDeviceOrder] = useState([])
+  const [deviceStatusFilter, setDeviceStatusFilter] = useState('all')
 
   const [selectedDeviceId, setSelectedDeviceId] = useState('')
   const [deviceDetail, setDeviceDetail] = useState(null)
   const [deviceDetailError, setDeviceDetailError] = useState('')
   const [deviceDrawerOpen, setDeviceDrawerOpen] = useState(false)
   const [artifactModalOpen, setArtifactModalOpen] = useState(false)
+  const [artifactUploadOpen, setArtifactUploadOpen] = useState(false)
+
+  const [groups, setGroups] = useState([])
+  const [groupsError, setGroupsError] = useState('')
+  const [groupsStatus, setGroupsStatus] = useState('')
+  const [groupForm, setGroupForm] = useState({
+    groupId: '',
+    name: '',
+    region: '',
+    role: '',
+    site: '',
+    custom: [],
+  })
+  const [groupModalOpen, setGroupModalOpen] = useState(false)
+  const [selectedGroupId, setSelectedGroupId] = useState('')
+  const [groupDesiredOpen, setGroupDesiredOpen] = useState(false)
+  const [groupDesiredForm, setGroupDesiredForm] = useState({
+    groupId: '',
+    artifactId: '',
+    desiredVersion: '',
+    desiredConfigRev: '',
+    checkinIntervalSec: '',
+  })
 
   const [artifacts, setArtifacts] = useState([])
   const [artifactsError, setArtifactsError] = useState('')
@@ -131,10 +207,26 @@ export default function App() {
   const [eventsFeed, setEventsFeed] = useState([])
   const [eventsStatus, setEventsStatus] = useState('disconnected')
   const [eventsError, setEventsError] = useState('')
+  const [maintenance, setMaintenanceState] = useState({ enabled: false, message: '', updatedAt: '' })
+  const [maintenanceError, setMaintenanceError] = useState('')
+  const [maintenanceStatus, setMaintenanceStatus] = useState('')
+  const [upgrade, setUpgrade] = useState({ enabled: false, running: false, state: 'disabled' })
+  const [upgradeError, setUpgradeError] = useState('')
+  const [upgradeStatus, setUpgradeStatus] = useState('')
+  const [upgradeAvailable, setUpgradeAvailable] = useState({ available: false, latest: '', bundles: [], updatesDir: '' })
+  const [upgradeAvailableError, setUpgradeAvailableError] = useState('')
+  const selectedDeviceIdRef = useRef('')
+  const refreshTimerRef = useRef(null)
+  const deviceOrderRef = useRef([])
+  const eventsConnRef = useRef('disconnected')
+  const lastEventAtRef = useRef(0)
+  const eventsHeartbeatRef = useRef(null)
 
   const [theme, setTheme] = useState(() => {
     return localStorage.getItem('hwops-theme') || 'dark'
   })
+  const maintenanceToken = import.meta.env.VITE_MAINTENANCE_TOKEN || ''
+  const canToggleMaintenance = Boolean(maintenanceToken)
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -142,9 +234,21 @@ export default function App() {
   }, [theme])
 
   useEffect(() => {
+    selectedDeviceIdRef.current = selectedDeviceId
+  }, [selectedDeviceId])
+
+  useEffect(() => {
+    deviceOrderRef.current = deviceOrder
+  }, [deviceOrder])
+
+  useEffect(() => {
     loadDevices()
+    loadGroups()
     loadArtifacts()
     loadDesired()
+    loadMaintenance()
+    loadUpgrade()
+    loadUpgradeAvailable()
   }, [])
 
   useEffect(() => {
@@ -177,27 +281,67 @@ export default function App() {
   }, [selectedDeviceId, desiredState, deviceDetail, deviceFormDirty])
 
   useEffect(() => {
+    if (!selectedGroupId) return
+    const desired = desiredState.groups?.find((g) => g.groupId === selectedGroupId)
+    setGroupDesiredForm({
+      groupId: selectedGroupId,
+      artifactId: desired?.artifactId || '',
+      desiredVersion: desired?.desiredVersion || '',
+      desiredConfigRev: desired?.desiredConfigRev || '',
+      checkinIntervalSec: desired?.checkinIntervalSec ? String(desired.checkinIntervalSec) : '',
+    })
+  }, [selectedGroupId, desiredState])
+
+  useEffect(() => {
+    if (!upgrade.running) return
+    const timer = setInterval(() => {
+      loadUpgrade()
+    }, 5000)
+    return () => clearInterval(timer)
+  }, [upgrade.running])
+
+  useEffect(() => {
     let ws
     let reconnectTimer
     let shouldReconnect = true
+    const staleMs = 30_000
 
     const connect = () => {
+      eventsConnRef.current = 'connecting'
       setEventsStatus('connecting')
       setEventsError('')
       ws = new WebSocket(wsUrl)
-      ws.onopen = () => setEventsStatus('connected')
+      ws.onopen = () => {
+        eventsConnRef.current = 'connected'
+        setEventsStatus('connected')
+      }
       ws.onmessage = (evt) => {
         try {
           const data = JSON.parse(evt.data)
           setEventsFeed((prev) => [data, ...prev].slice(0, 200))
+          lastEventAtRef.current = Date.now()
+          if (!refreshTimerRef.current) {
+            refreshTimerRef.current = setTimeout(() => {
+              refreshTimerRef.current = null
+              loadDevices({ silent: true })
+              const currentId = selectedDeviceIdRef.current
+              if (currentId) {
+                getDevice(currentId)
+                  .then(setDeviceDetail)
+                  .catch((err) => setDeviceDetailError(err.message || String(err)))
+              }
+            }, 500)
+          }
         } catch (err) {
           setEventsError('Failed to parse event payload')
         }
       }
       ws.onerror = () => {
+        eventsConnRef.current = 'disconnected'
         setEventsStatus('disconnected')
       }
       ws.onclose = () => {
+        eventsConnRef.current = 'disconnected'
         setEventsStatus('disconnected')
         if (shouldReconnect) {
           reconnectTimer = setTimeout(connect, 2000)
@@ -206,9 +350,30 @@ export default function App() {
     }
 
     connect()
+    eventsHeartbeatRef.current = setInterval(() => {
+      const now = Date.now()
+      const last = lastEventAtRef.current
+      if (!last || now-last > staleMs) {
+        if (eventsConnRef.current === 'connected') {
+          setEventsStatus('stale')
+        } else {
+          setEventsStatus('disconnected')
+        }
+      } else {
+        setEventsStatus('connected')
+      }
+    }, 5000)
     return () => {
       shouldReconnect = false
       if (reconnectTimer) clearTimeout(reconnectTimer)
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current)
+        refreshTimerRef.current = null
+      }
+      if (eventsHeartbeatRef.current) {
+        clearInterval(eventsHeartbeatRef.current)
+        eventsHeartbeatRef.current = null
+      }
       if (ws) ws.close()
     }
   }, [wsUrl])
@@ -221,48 +386,80 @@ export default function App() {
       .filter(Boolean)
       .sort((a, b) => b - a)[0]
     const lastSeenLabel = lastSeen ? lastSeen.toISOString() : '—'
-    const lastApplyStatus = deviceDetail?.current?.lastApplyStatus || '—'
-    const lastPreApplyStatus = deviceDetail?.current?.lastPreApplyStatus || '—'
-    return { total, active, lastSeenLabel, lastApplyStatus, lastPreApplyStatus }
+    return { total, active, lastSeenLabel }
   }, [devices, deviceDetail])
 
   const preApplyBadgeClass = useMemo(() => {
-    const raw = (dashboard.lastPreApplyStatus || '').toLowerCase()
+    const raw = (deviceDetail?.current?.lastPreApplyStatus || '').toLowerCase()
     if (!raw || raw === '—') return 'unknown'
     return raw
-  }, [dashboard.lastPreApplyStatus])
+  }, [deviceDetail])
 
   const notifications = useMemo(() => {
     const items = []
     if (devicesError) items.push({ type: 'error', text: devicesError })
+    if (groupsError) items.push({ type: 'error', text: groupsError })
     if (artifactsError) items.push({ type: 'error', text: artifactsError })
     if (desiredError) items.push({ type: 'error', text: desiredError })
     if (eventsError) items.push({ type: 'error', text: eventsError })
+    if (maintenanceError) items.push({ type: 'error', text: maintenanceError })
+    if (upgradeError) items.push({ type: 'error', text: upgradeError })
+    if (upgradeAvailableError) items.push({ type: 'error', text: upgradeAvailableError })
     if (uploadStatus) items.push({ type: 'info', text: uploadStatus })
     if (devicesStatus) items.push({ type: 'info', text: devicesStatus })
+    if (groupsStatus) items.push({ type: 'info', text: groupsStatus })
     if (artifactsStatus) items.push({ type: 'info', text: artifactsStatus })
     if (desiredStatus) items.push({ type: 'info', text: desiredStatus })
+    if (maintenanceStatus) items.push({ type: 'info', text: maintenanceStatus })
+    if (upgradeStatus) items.push({ type: 'info', text: upgradeStatus })
     return items.slice(0, 4)
-  }, [devicesError, artifactsError, desiredError, eventsError, uploadStatus, devicesStatus, artifactsStatus, desiredStatus])
+  }, [devicesError, groupsError, artifactsError, desiredError, eventsError, maintenanceError, upgradeError, upgradeAvailableError, uploadStatus, devicesStatus, groupsStatus, artifactsStatus, desiredStatus, maintenanceStatus, upgradeStatus])
 
-  function loadDevices() {
-    setDevicesLoading(true)
+  function loadDevices(options = {}) {
+    const { silent = false } = options
+    if (!silent) {
+      setDevicesLoading(true)
+    }
     setDevicesError('')
     getDevices()
       .then((res) => {
         const items = res.items || []
-        setDevices(items)
-        if (!selectedDeviceId && items.length > 0) {
-          const latest = [...items].sort((a, b) => {
-            const at = a.lastSeen ? new Date(a.lastSeen).getTime() : 0
-            const bt = b.lastSeen ? new Date(b.lastSeen).getTime() : 0
-            return bt - at
-          })[0]
-          setSelectedDeviceId(latest.deviceId)
+        const prevOrder = deviceOrderRef.current || []
+        const itemIds = items.map((item) => item.deviceId)
+        const nextOrder = prevOrder.filter((id) => itemIds.includes(id))
+        itemIds.forEach((id) => {
+          if (!nextOrder.includes(id)) {
+            nextOrder.push(id)
+          }
+        })
+        setDeviceOrder(nextOrder)
+        const orderIndex = new Map(nextOrder.map((id, idx) => [id, idx]))
+        const sorted = [...items].sort((a, b) => {
+          const ai = orderIndex.get(a.deviceId) ?? 0
+          const bi = orderIndex.get(b.deviceId) ?? 0
+          return ai - bi
+        })
+        setDevices(sorted)
+        const currentSelected = selectedDeviceIdRef.current
+        if (!currentSelected && sorted.length > 0) {
+          setSelectedDeviceId(sorted[0].deviceId)
+        } else if (currentSelected && !sorted.some((item) => item.deviceId === currentSelected)) {
+          setSelectedDeviceId(sorted[0]?.deviceId || '')
         }
       })
       .catch((err) => setDevicesError(err.message || String(err)))
-      .finally(() => setDevicesLoading(false))
+      .finally(() => {
+        if (!silent) {
+          setDevicesLoading(false)
+        }
+      })
+  }
+
+  function loadGroups() {
+    setGroupsError('')
+    listGroups()
+      .then((res) => setGroups(res.items || []))
+      .catch((err) => setGroupsError(err.message || String(err)))
   }
 
   function loadArtifacts() {
@@ -289,6 +486,7 @@ export default function App() {
         setUploadStatus(`Uploaded artifact ${resp.artifactId}`)
         form.reset()
         loadArtifacts()
+        setArtifactUploadOpen(false)
       })
       .catch((err) => setUploadStatus(err.message || String(err)))
   }
@@ -345,6 +543,132 @@ export default function App() {
     }
   }
 
+  async function handleSaveGroup(e) {
+    e.preventDefault()
+    setGroupsStatus('')
+    setGroupsError('')
+    const selector = {}
+    if (groupForm.region) selector.region = groupForm.region
+    if (groupForm.role) selector.role = groupForm.role
+    if (groupForm.site) selector.site = groupForm.site
+    const invalid = groupForm.custom.some(
+      (row) => (row.key && !row.value) || (!row.key && row.value),
+    )
+    if (invalid) {
+      setGroupsError('Custom labels require both key and value.')
+      return
+    }
+    groupForm.custom
+      .filter((row) => row.key && row.value)
+      .forEach((row) => {
+        selector[row.key] = row.value
+      })
+    const groupId = groupForm.groupId || crypto.randomUUID()
+    setGroupsStatus(groupForm.groupId ? 'Updating group...' : 'Creating group...')
+    try {
+      await putGroup(groupId, { name: groupForm.name, selector })
+      setGroupsStatus('Group saved')
+      setGroupForm({ groupId: '', name: '', region: '', role: '', site: '', custom: [] })
+      setGroupModalOpen(false)
+      loadGroups()
+    } catch (err) {
+      setGroupsError(err.message || String(err))
+    }
+  }
+
+  async function handleDeleteGroup(groupId) {
+    const ok = window.confirm(`Delete group ${groupId}? This removes desired state for the group.`)
+    if (!ok) return
+    setGroupsStatus('Deleting group...')
+    try {
+      await deleteGroup(groupId)
+      setGroupsStatus(`Deleted group ${groupId}`)
+      if (selectedGroupId === groupId) {
+        setSelectedGroupId('')
+      }
+      loadGroups()
+      loadDesired()
+    } catch (err) {
+      setGroupsError(err.message || String(err))
+    }
+  }
+
+  async function handleGroupDeviceToggle(group, device, shouldAdd) {
+    const selector = normalizeObject(group.selector)
+    const labels = normalizeObject(device.labels)
+    const nextLabels = { ...labels }
+    if (shouldAdd) {
+      Object.entries(selector).forEach(([key, val]) => {
+        nextLabels[key] = val
+      })
+    } else {
+      Object.entries(selector).forEach(([key, val]) => {
+        if (nextLabels[key] === val) {
+          delete nextLabels[key]
+        }
+      })
+    }
+    setGroupsStatus(shouldAdd ? 'Adding device to group...' : 'Removing device from group...')
+    try {
+      await patchDevice(device.deviceId, { labels: nextLabels })
+      setGroupsStatus('Device updated')
+      loadDevices()
+    } catch (err) {
+      setGroupsError(err.message || String(err))
+    }
+  }
+
+  async function handleClearDeviceOverride() {
+    if (!selectedDeviceId) return
+    const ok = window.confirm('Clear device override and use group desired state?')
+    if (!ok) return
+    setDesiredStatus('Clearing device override...')
+    try {
+      await clearDesiredStateDevice(selectedDeviceId)
+      setDesiredStatus('Device override cleared')
+      loadDesired()
+      setDeviceFormDirty(false)
+    } catch (err) {
+      setDesiredStatus(err.message || String(err))
+    }
+  }
+
+  async function handleGroupDesired(e) {
+    e.preventDefault()
+    setGroupsStatus('Setting group desired state...')
+    const payload = {
+      artifactId: groupDesiredForm.artifactId || undefined,
+      desiredVersion: groupDesiredForm.desiredVersion || undefined,
+      desiredConfigRev: groupDesiredForm.desiredConfigRev || undefined,
+      checkinIntervalSec: groupDesiredForm.checkinIntervalSec
+        ? Number(groupDesiredForm.checkinIntervalSec)
+        : undefined,
+    }
+    try {
+      await setDesiredStateGroup(groupDesiredForm.groupId, payload)
+      setGroupsStatus('Group desired state set')
+      loadDesired()
+      setGroupDesiredOpen(false)
+    } catch (err) {
+      setGroupsStatus(err.message || String(err))
+    }
+  }
+
+  async function handleClearGroupDesired() {
+    if (!selectedGroupId) return
+    const ok = window.confirm('Clear desired state for this group?')
+    if (!ok) return
+    setGroupsStatus('Clearing group desired state...')
+    try {
+      await clearDesiredStateGroup(selectedGroupId)
+      setGroupsStatus('Group desired state cleared')
+      loadDesired()
+      setGroupDesiredOpen(false)
+    } catch (err) {
+      setGroupsStatus(err.message || String(err))
+    }
+  }
+
   async function downloadLogs(deviceId) {
     try {
       const csv = await getDeviceLogs(deviceId)
@@ -388,8 +712,160 @@ export default function App() {
     }
   }
 
+  async function loadMaintenance() {
+    setMaintenanceError('')
+    try {
+      const res = await getMaintenance()
+      setMaintenanceState(res)
+    } catch (err) {
+      setMaintenanceError(err.message || String(err))
+    }
+  }
+
+  async function loadUpgrade() {
+    setUpgradeError('')
+    try {
+      const res = await getUpgradeStatus()
+      setUpgrade(res)
+    } catch (err) {
+      setUpgradeError(err.message || String(err))
+    }
+  }
+
+  async function loadUpgradeAvailable() {
+    setUpgradeAvailableError('')
+    try {
+      const res = await getUpgradeAvailable()
+      setUpgradeAvailable(res)
+    } catch (err) {
+      setUpgradeAvailableError(err.message || String(err))
+    }
+  }
+
+  async function toggleMaintenance() {
+    if (!canToggleMaintenance) return
+    const nextEnabled = !maintenance.enabled
+    let message = maintenance.message || ''
+    if (nextEnabled) {
+      const promptMsg = window.prompt('Maintenance message (optional):', message)
+      if (promptMsg !== null) {
+        message = promptMsg
+      }
+    } else {
+      message = ''
+    }
+    setMaintenanceStatus(nextEnabled ? 'Enabling maintenance...' : 'Disabling maintenance...')
+    try {
+      const res = await setMaintenance({ enabled: nextEnabled, message }, maintenanceToken)
+      setMaintenanceState(res)
+      setMaintenanceStatus(nextEnabled ? 'Maintenance enabled' : 'Maintenance disabled')
+    } catch (err) {
+      setMaintenanceStatus(err.message || String(err))
+    }
+  }
+
+  async function startUpgrade() {
+    if (!canToggleMaintenance || !upgrade.enabled) return
+    if (!maintenance.enabled) {
+      setUpgradeStatus('Enable maintenance before applying updates.')
+      return
+    }
+    if (!upgradeAvailable.available) {
+      setUpgradeStatus('No update bundle found in /stack/updates.')
+      return
+    }
+    const proceed = window.confirm('Apply staged updates now?')
+    if (!proceed) return
+    setUpgradeStatus('Applying update...')
+    try {
+      const res = await applyUpgrade(maintenanceToken)
+      setUpgrade(res)
+      loadUpgradeAvailable()
+      if (res.state === 'running') {
+        setUpgradeStatus('Upgrade running...')
+      } else {
+        setUpgradeStatus(`Upgrade ${res.state || 'started'}`)
+      }
+    } catch (err) {
+      setUpgradeStatus(err.message || String(err))
+    }
+  }
+
   const selectedDesired = desiredState.devices?.find((d) => d.deviceId === selectedDeviceId)
+  const selectedGroupDesired = desiredState.groups?.find((g) => g.groupId === selectedGroupId)
   const selectedArtifact = artifacts.find((a) => a.artifactId === deviceForm.artifactId)
+  const selectedGroupArtifact = artifacts.find((a) => a.artifactId === groupDesiredForm.artifactId)
+  const lastAppliedArtifact = artifacts.find((a) => a.artifactId === deviceDetail?.current?.lastApplyArtifactId)
+  const artifactGroups = useMemo(() => {
+    const map = new Map()
+    artifacts.forEach((artifact) => {
+      const name = artifact.name || 'unnamed'
+      if (!map.has(name)) map.set(name, [])
+      map.get(name).push(artifact)
+    })
+    return Array.from(map.entries())
+      .map(([name, items]) => {
+        const versions = [...items].sort((a, b) => a.version.localeCompare(b.version, undefined, { numeric: true }))
+        return { name, versions }
+      })
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [artifacts])
+  const selectedArtifactGroup = selectedArtifact
+    ? artifactGroups.find((g) => g.name === selectedArtifact.name)
+    : null
+  const selectedGroupArtifactGroup = selectedGroupArtifact
+    ? artifactGroups.find((g) => g.name === selectedGroupArtifact.name)
+    : null
+  const selectedGroup = groups.find((g) => g.groupId === selectedGroupId)
+  const selectedGroupSelector = selectedGroup ? normalizeObject(selectedGroup.selector) : {}
+  const groupDeviceList = useMemo(() => {
+    if (!selectedGroup) return []
+    return devices.map((device) => ({
+      device,
+      inGroup: selectorMatches(normalizeObject(device.labels), selectedGroupSelector),
+    }))
+  }, [devices, selectedGroup, selectedGroupSelector])
+  const groupCounts = useMemo(() => {
+    const counts = {}
+    groups.forEach((group) => {
+      const selector = normalizeObject(group.selector)
+      counts[group.groupId] = devices.filter((device) => selectorMatches(normalizeObject(device.labels), selector)).length
+    })
+    return counts
+  }, [groups, devices])
+
+  const groupSelectorById = useMemo(() => {
+    const map = {}
+    groups.forEach((group) => {
+      map[group.groupId] = normalizeObject(group.selector)
+    })
+    return map
+  }, [groups])
+
+  const groupDesiredIds = useMemo(() => {
+    return new Set((desiredState.groups || []).map((g) => g.groupId))
+  }, [desiredState])
+
+  const desiredDeviceById = useMemo(() => {
+    const map = {}
+    ;(desiredState.devices || []).forEach((d) => {
+      map[d.deviceId] = d
+    })
+    return map
+  }, [desiredState])
+
+  const deviceSourceFor = (device) => {
+    const entry = desiredDeviceById[device.deviceId]
+    if (entry?.source === 'manual') return 'manual'
+    for (const groupId of groupDesiredIds) {
+      const selector = groupSelectorById[groupId]
+      if (selectorMatches(normalizeObject(device.labels), selector)) {
+        return 'group'
+      }
+    }
+    if (entry?.source === 'agent') return 'agent'
+    return 'agent'
+  }
   const filteredLogs = useMemo(() => {
     const fromMs = logFrom ? Date.parse(logFrom) : null
     const toMs = logTo ? Date.parse(logTo) : null
@@ -409,6 +885,10 @@ export default function App() {
     return sorted
   }, [logRows, logFilter, logFrom, logTo, logSort])
   const liveEvents = eventsFeed.slice(0, 25)
+  const filteredDevices = useMemo(() => {
+    if (deviceStatusFilter === 'all') return devices
+    return devices.filter((d) => (d.status || '').toLowerCase() === deviceStatusFilter)
+  }, [devices, deviceStatusFilter])
 
   return (
     <div className="app">
@@ -442,6 +922,23 @@ export default function App() {
       </aside>
 
       <main className="content">
+        {(maintenance.enabled || upgrade.running) && view !== 'settings' && (
+          <div className="maintenance-overlay">
+            <div className="maintenance-card">
+              <div className="maintenance-title">
+                {upgrade.running ? 'Upgrade in progress' : 'Maintenance mode'}
+              </div>
+              <div className="maintenance-text">
+                {upgrade.running
+                  ? 'An update is being applied. This page is temporarily read‑only.'
+                  : (maintenance.message || 'Updates in progress. This page is temporarily read‑only.')}
+              </div>
+              <button className="button ghost" onClick={() => setView('settings')}>
+                Open settings
+              </button>
+            </div>
+          </div>
+        )}
         {view === 'dashboard' && (
           <>
             <section id="dashboard" className="card">
@@ -473,15 +970,6 @@ export default function App() {
                   <div className="metric-label">Last Check-in</div>
                   <div className="metric-value small">{dashboard.lastSeenLabel}</div>
                 </div>
-                <div className="metric">
-                  <div className="metric-label">Last Apply Status</div>
-                  <div className="metric-value">{dashboard.lastApplyStatus}</div>
-                  <div className="metric-sub">
-                    <span className={`pill preapply ${preApplyBadgeClass}`}>
-                      pre-apply {dashboard.lastPreApplyStatus}
-                    </span>
-                  </div>
-                </div>
               </div>
               <div className="events">
                 <h3>Live Events</h3>
@@ -504,12 +992,25 @@ export default function App() {
                   )}
                 </div>
               </div>
+
             </section>
 
             <section id="devices" className="card">
               <div className="section-header">
                 <h2>Devices</h2>
-                <button onClick={loadDevices} className="button">Refresh</button>
+                <div className="inline-row">
+                  <select
+                    value={deviceStatusFilter}
+                    onChange={(e) => setDeviceStatusFilter(e.target.value)}
+                  >
+                    <option value="all">All</option>
+                    <option value="active">Active</option>
+                    <option value="degraded">Degraded</option>
+                    <option value="stale">Stale</option>
+                    <option value="offline">Offline</option>
+                  </select>
+                  <button onClick={loadDevices} className="button">Refresh</button>
+                </div>
               </div>
               {devicesError && <div className="error">{devicesError}</div>}
               {devicesLoading ? (
@@ -526,7 +1027,7 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {devices.map((d) => (
+                      {filteredDevices.map((d) => (
                         <tr
                           key={d.deviceId}
                           className={selectedDeviceId === d.deviceId ? 'selected' : ''}
@@ -537,13 +1038,168 @@ export default function App() {
                           }}
                         >
                           <td>{d.deviceId}</td>
-                          <td>{d.status || '—'}</td>
+                          <td>
+                            <span className={`pill status ${(d.status || 'unknown').toLowerCase()}`}>
+                              {d.status || 'unknown'}
+                            </span>
+                            {deviceSourceFor(d) === 'manual' && (
+                              <span className="pill source manual">manual</span>
+                            )}
+                            {deviceSourceFor(d) === 'group' && (
+                              <span className="pill source group">group</span>
+                            )}
+                            {deviceSourceFor(d) === 'agent' && (
+                              <span className="pill source agent">agent</span>
+                            )}
+                          </td>
                           <td>{d.lastSeen || '—'}</td>
                           <td><code>{d.labels ? JSON.stringify(d.labels) : '—'}</code></td>
                         </tr>
                       ))}
+                      {filteredDevices.length === 0 && (
+                        <tr>
+                          <td colSpan={4}>No devices match this filter.</td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
+                </div>
+              )}
+            </section>
+
+            <section id="groups" className="card">
+              <div className="section-header">
+                <h2>Groups</h2>
+                <div className="inline-row">
+                  <button
+                    onClick={() => {
+                      setGroupForm({ groupId: '', name: '', region: '', role: '', site: '', custom: [] })
+                      setGroupModalOpen(true)
+                    }}
+                    className="button"
+                  >
+                    Add Group
+                  </button>
+                  <button onClick={loadGroups} className="button ghost">Refresh</button>
+                </div>
+              </div>
+              {groupsError && <div className="error">{groupsError}</div>}
+
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Selector</th>
+                      <th>Devices</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {groups.map((group) => (
+                      <tr key={group.groupId} className={selectedGroupId === group.groupId ? 'selected' : ''}>
+                        <td>{group.name || group.groupId}</td>
+                        <td><code>{formatSelector(group.selector || {})}</code></td>
+                        <td>{groupCounts[group.groupId] ?? 0}</td>
+                        <td>
+                          <button
+                            className="button ghost"
+                            onClick={() => {
+                              const parsed = selectorToForm(normalizeObject(group.selector))
+                              setGroupForm({
+                                groupId: group.groupId,
+                                name: group.name || '',
+                                region: parsed.region,
+                                role: parsed.role,
+                                site: parsed.site,
+                                custom: parsed.custom,
+                              })
+                              setGroupModalOpen(true)
+                            }}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            className="button ghost"
+                            onClick={() => setSelectedGroupId(group.groupId)}
+                          >
+                            Manage Devices
+                          </button>
+                          <button
+                            className="button ghost"
+                            onClick={() => {
+                              setSelectedGroupId(group.groupId)
+                              setGroupDesiredOpen(true)
+                            }}
+                          >
+                            Set Desired
+                          </button>
+                          <button
+                            className="button ghost"
+                            onClick={() => handleDeleteGroup(group.groupId)}
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {groups.length === 0 && (
+                      <tr>
+                        <td colSpan={4}>No groups yet.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {selectedGroup && (
+                <div className="group-devices">
+                  <div className="section-header">
+                    <h3>Group Devices · {selectedGroup.name || selectedGroup.groupId}</h3>
+                    <button className="button ghost" onClick={() => setSelectedGroupId('')}>
+                      Close
+                    </button>
+                  </div>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Device</th>
+                          <th>Status</th>
+                          <th>Labels</th>
+                          <th>Membership</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {groupDeviceList.map((item) => (
+                          <tr key={item.device.deviceId}>
+                            <td>{item.device.deviceId}</td>
+                            <td>{item.device.status}</td>
+                            <td><code>{JSON.stringify(item.device.labels || {})}</code></td>
+                            <td>{item.inGroup ? 'in group' : '—'}</td>
+                            <td>
+                              <button
+                                className="button ghost"
+                                onClick={() => handleGroupDeviceToggle(selectedGroup, item.device, !item.inGroup)}
+                                disabled={Object.keys(selectedGroupSelector).length === 0}
+                              >
+                                {item.inGroup ? 'Remove' : 'Add'}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                        {groupDeviceList.length === 0 && (
+                          <tr>
+                            <td colSpan={5}>No devices available.</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  {Object.keys(selectedGroupSelector).length === 0 && (
+                    <div className="hint">Empty selector matches all devices. Add keys to enable membership control.</div>
+                  )}
                 </div>
               )}
             </section>
@@ -551,36 +1207,21 @@ export default function App() {
             <section id="artifacts" className="card">
           <div className="section-header">
             <h2>Artifacts</h2>
-            <button onClick={loadArtifacts} className="button">Refresh</button>
+            <div className="inline-row">
+              <button onClick={() => setArtifactUploadOpen(true)} className="button">Upload</button>
+              <button onClick={loadArtifacts} className="button ghost">Refresh</button>
+            </div>
           </div>
           {artifactsError && <div className="error">{artifactsError}</div>}
-
-          <form className="form" onSubmit={handleUpload}>
-            <div>
-              <label>Name</label>
-              <input name="name" required placeholder="agent" />
-            </div>
-            <div>
-              <label>Version</label>
-              <input name="version" required placeholder="1.0.0" />
-            </div>
-            <div className="full">
-              <label>Bundle</label>
-              <input name="file" type="file" required />
-            </div>
-            <div className="full">
-              <button className="button" type="submit">Upload</button>
-              {uploadStatus && <span className="status">{uploadStatus}</span>}
-            </div>
-          </form>
 
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Artifact ID</th>
                   <th>Name</th>
+                  <th>Artifact ID</th>
                   <th>Version</th>
+                  <th>Signed</th>
                   <th>SHA256</th>
                   <th>Size</th>
                   <th>Created</th>
@@ -588,11 +1229,17 @@ export default function App() {
                 </tr>
               </thead>
               <tbody>
-                  {artifacts.map((a) => (
-                    <tr key={a.artifactId}>
+                {artifactGroups.map((group) => (
+                  group.versions.map((a, idx) => (
+                    <tr key={a.artifactId} className={idx === 0 ? 'artifact-group-start' : ''}>
+                      <td>{idx === 0 ? group.name : ''}</td>
                       <td>{a.artifactId}</td>
-                      <td>{a.name}</td>
                       <td>{a.version}</td>
+                      <td>
+                        <span className={`pill ${a.signature ? 'signed' : 'unsigned'}`}>
+                          {a.signature ? 'signed' : 'unsigned'}
+                        </span>
+                      </td>
                       <td className="mono">{a.sha256}</td>
                       <td>{a.sizeBytes}</td>
                       <td>{a.createdAt}</td>
@@ -602,8 +1249,14 @@ export default function App() {
                         </button>
                       </td>
                     </tr>
-                  ))}
-                </tbody>
+                  ))
+                ))}
+                {artifactGroups.length === 0 && (
+                  <tr>
+                    <td colSpan={8}>No artifacts uploaded yet.</td>
+                  </tr>
+                )}
+              </tbody>
               </table>
             </div>
             </section>
@@ -694,6 +1347,114 @@ export default function App() {
           )}
           </section>
         )}
+
+        {view === 'settings' && (
+          <section id="settings" className="card">
+            <div className="section-header">
+              <h2>Settings</h2>
+              <div className="inline-row">
+                <button className="button ghost" onClick={loadMaintenance}>Refresh maintenance</button>
+                <button className="button ghost" onClick={loadUpgrade}>Refresh upgrade</button>
+                <button className="button ghost" onClick={loadUpgradeAvailable}>Refresh updates</button>
+              </div>
+            </div>
+
+            <div className="detail-grid">
+              <div>
+                <div className="detail-label">Maintenance</div>
+                <div className="detail-value">{maintenance.enabled ? 'enabled' : 'disabled'}</div>
+              </div>
+              <div>
+                <div className="detail-label">Message</div>
+                <div className="detail-value">{maintenance.message || '—'}</div>
+              </div>
+              <div>
+                <div className="detail-label">Updated</div>
+                <div className="detail-value">{maintenance.updatedAt ? new Date(maintenance.updatedAt).toLocaleString() : '—'}</div>
+              </div>
+              <div className="full">
+                <button className="button ghost" onClick={toggleMaintenance} disabled={!canToggleMaintenance}>
+                  {maintenance.enabled ? 'Disable maintenance' : 'Enable maintenance'}
+                </button>
+              </div>
+            </div>
+
+            <div className="events">
+              <h3>Update Packages</h3>
+              {!upgradeAvailable.available ? (
+                <div className="placeholder">
+                  No updates found{upgradeAvailable.updatesDir ? ` in ${upgradeAvailable.updatesDir}.` : '.'}
+                </div>
+              ) : (
+                <div className="detail-grid">
+                  <div>
+                    <div className="detail-label">Latest</div>
+                    <div className="detail-value">{upgradeAvailable.latest}</div>
+                  </div>
+                  <div>
+                    <div className="detail-label">Updates Dir</div>
+                    <div className="detail-value">{upgradeAvailable.updatesDir || '—'}</div>
+                  </div>
+                  <div className="full">
+                    <div className="detail-label">Bundles</div>
+                    <div className="detail-value">{(upgradeAvailable.bundles || []).join(', ')}</div>
+                  </div>
+                </div>
+              )}
+              {canToggleMaintenance && maintenance.enabled && upgrade.enabled && (
+                <div className="inline-row">
+                  <button
+                    className="button ghost"
+                    onClick={startUpgrade}
+                    disabled={upgrade.running || !upgradeAvailable.available}
+                  >
+                    {upgrade.running ? 'Applying update…' : 'Apply update'}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="events">
+              <h3>Upgrade Status</h3>
+              {!upgrade.enabled ? (
+                <div className="placeholder">Upgrade runner not configured.</div>
+              ) : (
+                <div className="detail-grid">
+                  <div>
+                    <div className="detail-label">State</div>
+                    <div className="detail-value">{upgrade.state || 'idle'}</div>
+                  </div>
+                  <div>
+                    <div className="detail-label">Running</div>
+                    <div className="detail-value">{upgrade.running ? 'yes' : 'no'}</div>
+                  </div>
+                  <div>
+                    <div className="detail-label">Exit Code</div>
+                    <div className="detail-value">{upgrade.exitCode ?? '—'}</div>
+                  </div>
+                  <div className="full">
+                    <div className="detail-label">Last Started</div>
+                    <div className="detail-value">{upgrade.startedAt ? new Date(upgrade.startedAt).toLocaleString() : '—'}</div>
+                  </div>
+                  <div className="full">
+                    <div className="detail-label">Last Finished</div>
+                    <div className="detail-value">{upgrade.finishedAt ? new Date(upgrade.finishedAt).toLocaleString() : '—'}</div>
+                  </div>
+                  <div className="full">
+                    <div className="detail-label">Log Path</div>
+                    <div className="detail-value">{upgrade.logPath || '—'}</div>
+                  </div>
+                  {upgrade.error && (
+                    <div className="full">
+                      <div className="detail-label">Error</div>
+                      <div className="detail-value">{upgrade.error}</div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
       </main>
 
       {deviceDrawerOpen && (
@@ -735,6 +1496,24 @@ export default function App() {
                     <div className="detail-value">{deviceDetail.current?.lastApplyStatus || '—'}</div>
                   </div>
                   <div>
+                    <div className="detail-label">Last Apply Time</div>
+                    <div className="detail-value">{deviceDetail.current?.lastApplyAt || '—'}</div>
+                  </div>
+                  <div>
+                    <div className="detail-label">Last Applied Artifact</div>
+                    <div className="detail-value">
+                      {lastAppliedArtifact
+                        ? `${lastAppliedArtifact.name} v${lastAppliedArtifact.version}`
+                        : (deviceDetail.current?.lastApplyArtifactId || '—')}
+                    </div>
+                    {deviceDetail.current?.lastApplyArtifactId && !lastAppliedArtifact && (
+                      <div className="detail-note mono">{deviceDetail.current.lastApplyArtifactId}</div>
+                    )}
+                    {deviceDetail.current?.lastApplyError && (
+                      <div className="detail-note">{deviceDetail.current.lastApplyError}</div>
+                    )}
+                  </div>
+                  <div>
                     <div className="detail-label">Last Pre-apply</div>
                     <div className="detail-value">
                       <span className={`pill preapply ${preApplyBadgeClass}`}>
@@ -759,22 +1538,68 @@ export default function App() {
                   <input value={deviceForm.deviceId} readOnly />
                   <label>Artifact</label>
                   <div className="inline-row">
-                    <input
-                      value={deviceForm.artifactId}
+                    <select
+                      value={selectedArtifact?.name || ''}
                       onChange={(e) => {
-                        setDeviceForm({ ...deviceForm, artifactId: e.target.value })
+                        const name = e.target.value
+                        const group = artifactGroups.find((g) => g.name === name)
+                        if (!group) {
+                          setDeviceForm({ ...deviceForm, artifactId: '', desiredVersion: '' })
+                        } else {
+                          const pick = group.versions[group.versions.length - 1]
+                          setDeviceForm({
+                            ...deviceForm,
+                            artifactId: pick.artifactId,
+                            desiredVersion: pick.version,
+                          })
+                        }
                         setDeviceFormDirty(true)
                       }}
-                      placeholder="artifact uuid"
-                    />
+                    >
+                      <option value="">Select artifact</option>
+                      {artifactGroups.map((group) => (
+                        <option key={group.name} value={group.name}>{group.name}</option>
+                      ))}
+                    </select>
                     <button className="button ghost" type="button" onClick={() => setArtifactModalOpen(true)}>
-                      Select
+                      Browse
                     </button>
                   </div>
+                  <label>Artifact Version</label>
+                  <select
+                    value={selectedArtifact?.version || ''}
+                    onChange={(e) => {
+                      const version = e.target.value
+                      const group = selectedArtifactGroup
+                      const pick = group?.versions.find((v) => v.version === version)
+                      if (pick) {
+                        setDeviceForm({
+                          ...deviceForm,
+                          artifactId: pick.artifactId,
+                          desiredVersion: pick.version,
+                        })
+                        setDeviceFormDirty(true)
+                      }
+                    }}
+                  >
+                    <option value="">Select version</option>
+                    {(selectedArtifactGroup?.versions || []).map((artifact) => (
+                      <option key={artifact.artifactId} value={artifact.version}>
+                        {artifact.version}
+                      </option>
+                    ))}
+                  </select>
+                  <label>Artifact ID</label>
+                  <input value={deviceForm.artifactId} readOnly placeholder="artifact uuid" />
                   {selectedArtifact && (
                     <div className="artifact-summary">
                       <div><strong>{selectedArtifact.name}</strong> v{selectedArtifact.version}</div>
                       <div className="mono">{selectedArtifact.artifactId}</div>
+                      <div>
+                        <span className={`pill ${selectedArtifact.signature ? 'signed' : 'unsigned'}`}>
+                          {selectedArtifact.signature ? 'signed' : 'unsigned'}
+                        </span>
+                      </div>
                     </div>
                   )}
                   <label>Desired Version</label>
@@ -806,6 +1631,15 @@ export default function App() {
                   />
                   <div className="inline-row">
                     <button className="button" type="submit">Apply</button>
+                    {selectedDesired && selectedDesired.source === 'manual' && (
+                      <button
+                        className="button ghost"
+                        type="button"
+                        onClick={handleClearDeviceOverride}
+                      >
+                        Use group desired state
+                      </button>
+                    )}
                     <button
                       className="button ghost"
                       type="button"
@@ -855,35 +1689,282 @@ export default function App() {
               <table>
                 <thead>
                   <tr>
-                    <th>ID</th>
                     <th>Name</th>
+                    <th>ID</th>
                     <th>Version</th>
+                    <th>Signed</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {artifacts.map((a) => (
-                    <tr key={a.artifactId}>
-                      <td className="mono">{a.artifactId}</td>
-                      <td>{a.name}</td>
-                      <td>{a.version}</td>
-                      <td>
-                        <button
-                          className="button ghost"
-                          onClick={() => {
-                            setDeviceForm({ ...deviceForm, artifactId: a.artifactId })
-                            setDeviceFormDirty(true)
-                            setArtifactModalOpen(false)
-                          }}
-                        >
-                          Select
-                        </button>
-                      </td>
-                    </tr>
+                  {artifactGroups.map((group) => (
+                    group.versions.map((a, idx) => (
+                      <tr key={a.artifactId} className={idx === 0 ? 'artifact-group-start' : ''}>
+                        <td>{idx === 0 ? group.name : ''}</td>
+                        <td className="mono">{a.artifactId}</td>
+                        <td>{a.version}</td>
+                        <td>
+                          <span className={`pill ${a.signature ? 'signed' : 'unsigned'}`}>
+                            {a.signature ? 'signed' : 'unsigned'}
+                          </span>
+                        </td>
+                        <td>
+                          <button
+                            className="button ghost"
+                            onClick={() => {
+                              setDeviceForm({ ...deviceForm, artifactId: a.artifactId, desiredVersion: a.version })
+                              setDeviceFormDirty(true)
+                              setArtifactModalOpen(false)
+                            }}
+                          >
+                            Select
+                          </button>
+                        </td>
+                      </tr>
+                    ))
                   ))}
                 </tbody>
               </table>
             </div>
+          </div>
+        </div>
+      )}
+
+      {artifactUploadOpen && (
+        <div className="modal-backdrop" onClick={() => setArtifactUploadOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="section-header">
+              <h3>Upload Artifact</h3>
+              <button className="button ghost" onClick={() => setArtifactUploadOpen(false)}>
+                Close
+              </button>
+            </div>
+            <form className="form" onSubmit={handleUpload}>
+              <div>
+                <label>Name</label>
+                <input name="name" required placeholder="agent" />
+              </div>
+              <div>
+                <label>Version</label>
+                <input name="version" required placeholder="1.0.0" />
+              </div>
+              <div className="full">
+                <label>Bundle</label>
+                <input name="file" type="file" required />
+              </div>
+              <div className="full inline-row">
+                <button className="button" type="submit">Upload</button>
+                {uploadStatus && <span className="status">{uploadStatus}</span>}
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {groupModalOpen && (
+        <div className="modal-backdrop" onClick={() => setGroupModalOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="section-header">
+              <h3>{groupForm.groupId ? 'Edit Group' : 'Create Group'}</h3>
+              <button className="button ghost" onClick={() => setGroupModalOpen(false)}>
+                Close
+              </button>
+            </div>
+            <form className="form" onSubmit={handleSaveGroup}>
+              <div>
+                <label>Name</label>
+                <input
+                  value={groupForm.name}
+                  onChange={(e) => setGroupForm({ ...groupForm, name: e.target.value })}
+                  placeholder="canary"
+                />
+              </div>
+              <div>
+                <label>Region</label>
+                <input
+                  value={groupForm.region}
+                  onChange={(e) => setGroupForm({ ...groupForm, region: e.target.value })}
+                  placeholder="west"
+                />
+              </div>
+              <div>
+                <label>Role</label>
+                <input
+                  value={groupForm.role}
+                  onChange={(e) => setGroupForm({ ...groupForm, role: e.target.value })}
+                  placeholder="edge"
+                />
+              </div>
+              <div>
+                <label>Site</label>
+                <input
+                  value={groupForm.site}
+                  onChange={(e) => setGroupForm({ ...groupForm, site: e.target.value })}
+                  placeholder="lab-1"
+                />
+              </div>
+              <div className="full">
+                <label>Custom Labels</label>
+                <div className="key-value-list">
+                  {groupForm.custom.map((row, idx) => (
+                    <div key={`custom-${idx}`} className="key-value-row">
+                      <input
+                        value={row.key}
+                        onChange={(e) => {
+                          const next = [...groupForm.custom]
+                          next[idx] = { ...row, key: e.target.value }
+                          setGroupForm({ ...groupForm, custom: next })
+                        }}
+                        placeholder="key"
+                      />
+                      <input
+                        value={row.value}
+                        onChange={(e) => {
+                          const next = [...groupForm.custom]
+                          next[idx] = { ...row, value: e.target.value }
+                          setGroupForm({ ...groupForm, custom: next })
+                        }}
+                        placeholder="value"
+                      />
+                      <button
+                        className="button ghost"
+                        type="button"
+                        onClick={() => {
+                          const next = groupForm.custom.filter((_, cidx) => cidx !== idx)
+                          setGroupForm({ ...groupForm, custom: next })
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    className="button ghost"
+                    type="button"
+                    onClick={() => setGroupForm({
+                      ...groupForm,
+                      custom: [...groupForm.custom, { key: '', value: '' }],
+                    })}
+                  >
+                    Add Custom Label
+                  </button>
+                </div>
+              </div>
+              <div className="full inline-row">
+                <button className="button" type="submit">
+                  {groupForm.groupId ? 'Update Group' : 'Create Group'}
+                </button>
+                {groupsStatus && <span className="status">{groupsStatus}</span>}
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {groupDesiredOpen && (
+        <div className="modal-backdrop" onClick={() => setGroupDesiredOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="section-header">
+              <h3>Group Desired State</h3>
+              <button className="button ghost" onClick={() => setGroupDesiredOpen(false)}>
+                Close
+              </button>
+            </div>
+            <form className="form" onSubmit={handleGroupDesired}>
+              <label>Group ID</label>
+              <input value={groupDesiredForm.groupId} readOnly />
+              <label>Artifact</label>
+              <div className="inline-row">
+                <select
+                  value={selectedGroupArtifact?.name || ''}
+                  onChange={(e) => {
+                    const name = e.target.value
+                    const group = artifactGroups.find((g) => g.name === name)
+                    if (!group) {
+                      setGroupDesiredForm({ ...groupDesiredForm, artifactId: '', desiredVersion: '' })
+                    } else {
+                      const pick = group.versions[group.versions.length - 1]
+                      setGroupDesiredForm({
+                        ...groupDesiredForm,
+                        artifactId: pick.artifactId,
+                        desiredVersion: pick.version,
+                      })
+                    }
+                  }}
+                >
+                  <option value="">Select artifact</option>
+                  {artifactGroups.map((group) => (
+                    <option key={group.name} value={group.name}>{group.name}</option>
+                  ))}
+                </select>
+                <button className="button ghost" type="button" onClick={() => setArtifactModalOpen(true)}>
+                  Browse
+                </button>
+              </div>
+              <label>Artifact Version</label>
+              <select
+                value={selectedGroupArtifact?.version || ''}
+                onChange={(e) => {
+                  const version = e.target.value
+                  const group = selectedGroupArtifactGroup
+                  const pick = group?.versions.find((v) => v.version === version)
+                  if (pick) {
+                    setGroupDesiredForm({
+                      ...groupDesiredForm,
+                      artifactId: pick.artifactId,
+                      desiredVersion: pick.version,
+                    })
+                  }
+                }}
+              >
+                <option value="">Select version</option>
+                {(selectedGroupArtifactGroup?.versions || []).map((artifact) => (
+                  <option key={artifact.artifactId} value={artifact.version}>
+                    {artifact.version}
+                  </option>
+                ))}
+              </select>
+              <label>Artifact ID</label>
+              <input value={groupDesiredForm.artifactId} readOnly placeholder="artifact uuid" />
+              {selectedGroupArtifact && (
+                <div className="artifact-summary">
+                  <div><strong>{selectedGroupArtifact.name}</strong> v{selectedGroupArtifact.version}</div>
+                  <div className="mono">{selectedGroupArtifact.artifactId}</div>
+                  <div>
+                    <span className={`pill ${selectedGroupArtifact.signature ? 'signed' : 'unsigned'}`}>
+                      {selectedGroupArtifact.signature ? 'signed' : 'unsigned'}
+                    </span>
+                  </div>
+                </div>
+              )}
+              <label>Desired Version</label>
+              <input
+                value={groupDesiredForm.desiredVersion}
+                onChange={(e) => setGroupDesiredForm({ ...groupDesiredForm, desiredVersion: e.target.value })}
+                placeholder="1.0.0"
+              />
+              <label>Config Rev</label>
+              <input
+                value={groupDesiredForm.desiredConfigRev}
+                onChange={(e) => setGroupDesiredForm({ ...groupDesiredForm, desiredConfigRev: e.target.value })}
+                placeholder="c1"
+              />
+              <label>Check-in Interval (sec)</label>
+              <input
+                value={groupDesiredForm.checkinIntervalSec}
+                onChange={(e) => setGroupDesiredForm({ ...groupDesiredForm, checkinIntervalSec: e.target.value })}
+                placeholder="30"
+              />
+              <div className="inline-row">
+                <button className="button" type="submit">Apply</button>
+                {selectedGroupDesired && (
+                  <button className="button ghost" type="button" onClick={handleClearGroupDesired}>
+                    Clear group desired state
+                  </button>
+                )}
+                {groupsStatus && <span className="status">{groupsStatus}</span>}
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -65,6 +65,9 @@ func (s *Store) UpsertDeviceState(state store.DeviceState) error {
 		if state.LastApplyAt.IsZero() {
 			state.LastApplyAt = prev.LastApplyAt
 		}
+		if state.LastApplyArtifactID == "" {
+			state.LastApplyArtifactID = prev.LastApplyArtifactID
+		}
 		if state.LastPreApplyStatus == "" {
 			state.LastPreApplyStatus = prev.LastPreApplyStatus
 		}
@@ -209,6 +212,36 @@ func (s *Store) DeleteStaleDevices(cutoff time.Time) (int, error) {
 	return count, nil
 }
 
+func (s *Store) UpdateDeviceStatuses(staleCutoff, offlineCutoff time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	updated := 0
+	for id, d := range s.devices {
+		prev := d.Status
+		status := computeDeviceStatus(d.LastSeen, staleCutoff, offlineCutoff, s.states[id])
+		if status != prev {
+			d.Status = status
+			s.devices[id] = d
+			updated++
+		}
+	}
+	return updated, nil
+}
+
+func computeDeviceStatus(lastSeen time.Time, staleCutoff, offlineCutoff time.Time, st store.DeviceState) string {
+	if lastSeen.IsZero() || (!offlineCutoff.IsZero() && lastSeen.Before(offlineCutoff)) {
+		return "offline"
+	}
+	if !staleCutoff.IsZero() && lastSeen.Before(staleCutoff) {
+		return "stale"
+	}
+	if st.LastApplyStatus == "error" || st.LastPreApplyStatus == "error" {
+		return "degraded"
+	}
+	return "active"
+}
+
 func (s *Store) UpsertGroup(group store.Group) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -230,6 +263,17 @@ func (s *Store) ListGroups() ([]store.Group, error) {
 		out = append(out, g)
 	}
 	return out, nil
+}
+
+func (s *Store) DeleteGroup(groupID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if groupID == "" {
+		return errors.New("group_id required")
+	}
+	delete(s.groups, groupID)
+	delete(s.desiredGroups, groupID)
+	return nil
 }
 
 func (s *Store) UpsertDesiredStateGroup(state store.DesiredStateGroup) error {
@@ -299,6 +343,16 @@ func (s *Store) ListDesiredStateGroups() ([]store.DesiredStateGroup, error) {
 	return out, nil
 }
 
+func (s *Store) DeleteDesiredStateGroup(groupID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if groupID == "" {
+		return errors.New("group_id required")
+	}
+	delete(s.desiredGroups, groupID)
+	return nil
+}
+
 func (s *Store) ListDesiredStateDevices() ([]store.DesiredStateDevice, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -307,6 +361,16 @@ func (s *Store) ListDesiredStateDevices() ([]store.DesiredStateDevice, error) {
 		out = append(out, d)
 	}
 	return out, nil
+}
+
+func (s *Store) DeleteDesiredStateDevice(deviceID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if deviceID == "" {
+		return errors.New("device_id required")
+	}
+	delete(s.desiredDevices, deviceID)
+	return nil
 }
 
 func (s *Store) CreateArtifact(artifact store.Artifact) error {
@@ -395,6 +459,9 @@ func (s *Store) CreateApplyResult(result store.ApplyResult) error {
 		st.LastApplyStatus = result.Status
 		st.LastApplyError = result.Error
 		st.LastApplyAt = result.CreatedAt
+		if result.ArtifactID != "" {
+			st.LastApplyArtifactID = result.ArtifactID
+		}
 		if result.PreApplyStatus != "" {
 			st.LastPreApplyStatus = result.PreApplyStatus
 			st.LastPreApplyError = result.PreApplyError

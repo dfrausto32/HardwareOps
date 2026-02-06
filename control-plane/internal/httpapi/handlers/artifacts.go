@@ -25,6 +25,7 @@ type CreateArtifactRequest struct {
 	ObjectKey string `json:"objectKey"`
 	SHA256    string `json:"sha256"`
 	Signature string `json:"signature"`
+	SignatureKeyID string `json:"signatureKeyId"`
 	SizeBytes int64  `json:"sizeBytes"`
 	Metadata  json.RawMessage `json:"metadata"`
 }
@@ -91,6 +92,11 @@ func CreateArtifact(logger *log.Logger, st store.Store) http.HandlerFunc {
 			http.Error(w, "metadata must be valid json", http.StatusBadRequest)
 			return
 		}
+		meta, err = mergeSignatureKeyID(meta, req.SignatureKeyID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 
 		artifact := store.Artifact{
 			ArtifactID: uuid.NewString(),
@@ -155,6 +161,13 @@ func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 			http.Error(w, "metadata must be valid json", http.StatusBadRequest)
 			return
 		}
+		signature := strings.TrimSpace(r.FormValue("signature"))
+		signatureKeyID := strings.TrimSpace(r.FormValue("signatureKeyId"))
+		meta, err = mergeSignatureKeyID(meta, signatureKeyID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		file, header, err := r.FormFile("file")
 		if err != nil {
 			http.Error(w, "file required", http.StatusBadRequest)
@@ -197,6 +210,7 @@ func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 			Type:       atype,
 			ObjectKey:  objectKey,
 			SHA256:     sha,
+			Signature:  signature,
 			SizeBytes:  size,
 			MetadataJSON: meta,
 			CreatedAt:  time.Now().UTC(),
@@ -419,4 +433,24 @@ func parseMetadataString(val string) ([]byte, error) {
 		return nil, fmt.Errorf("invalid metadata")
 	}
 	return raw, nil
+}
+
+func mergeSignatureKeyID(meta []byte, keyID string) ([]byte, error) {
+	if strings.TrimSpace(keyID) == "" {
+		return meta, nil
+	}
+	if len(meta) == 0 || string(meta) == "null" {
+		out, _ := json.Marshal(map[string]any{"signatureKeyId": keyID})
+		return out, nil
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(meta, &obj); err != nil {
+		return nil, fmt.Errorf("metadata must be a JSON object when signatureKeyId is provided")
+	}
+	if obj == nil {
+		obj = map[string]any{}
+	}
+	obj["signatureKeyId"] = keyID
+	out, _ := json.Marshal(obj)
+	return out, nil
 }

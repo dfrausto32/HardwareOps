@@ -19,10 +19,17 @@ type DeviceCheckinRequest struct {
 }
 
 type DeviceCurrent struct {
-	SoftwareVersion string          `json:"softwareVersion"`
-	ConfigRev       string          `json:"configRev"`
-	Services        json.RawMessage `json:"services"`
-	Health          json.RawMessage `json:"health"`
+	SoftwareVersion     string          `json:"softwareVersion"`
+	ConfigRev           string          `json:"configRev"`
+	Services            json.RawMessage `json:"services"`
+	Health              json.RawMessage `json:"health"`
+	LastApplyStatus     string          `json:"lastApplyStatus,omitempty"`
+	LastApplyError      string          `json:"lastApplyError,omitempty"`
+	LastApplyAt         *time.Time      `json:"lastApplyAt,omitempty"`
+	LastApplyArtifactID string          `json:"lastApplyArtifactId,omitempty"`
+	LastPreApplyStatus  string          `json:"lastPreApplyStatus,omitempty"`
+	LastPreApplyError   string          `json:"lastPreApplyError,omitempty"`
+	LastPreApplyAt      *time.Time      `json:"lastPreApplyAt,omitempty"`
 }
 
 type DeviceCheckinResponse struct {
@@ -38,6 +45,7 @@ type DesiredState struct {
 	DownloadURL     string          `json:"downloadUrl"`
 	ApplyPolicy     json.RawMessage `json:"applyPolicy"`
 	CheckinInterval int             `json:"checkinIntervalSec,omitempty"`
+	Source          string          `json:"source,omitempty"`
 }
 
 type Action struct {
@@ -67,9 +75,43 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 		req.DeviceID = device.DeviceID
 
 		now := time.Now().UTC()
+		prevApply := prevApplyStatus(st, req.DeviceID)
+		lastApplyStatus := req.Current.LastApplyStatus
+		if lastApplyStatus == "" {
+			lastApplyStatus = prevApply.Status
+		}
+		lastApplyError := req.Current.LastApplyError
+		if lastApplyError == "" {
+			lastApplyError = prevApply.Error
+		}
+		lastApplyAt := prevApply.At
+		if req.Current.LastApplyAt != nil {
+			lastApplyAt = *req.Current.LastApplyAt
+		}
+		lastApplyArtifactID := req.Current.LastApplyArtifactID
+		if lastApplyArtifactID == "" {
+			lastApplyArtifactID = prevApply.ArtifactID
+		}
+		lastPreApplyStatus := req.Current.LastPreApplyStatus
+		if lastPreApplyStatus == "" {
+			lastPreApplyStatus = prevApply.PreStatus
+		}
+		lastPreApplyError := req.Current.LastPreApplyError
+		if lastPreApplyError == "" {
+			lastPreApplyError = prevApply.PreError
+		}
+		lastPreApplyAt := prevApply.PreAt
+		if req.Current.LastPreApplyAt != nil {
+			lastPreApplyAt = *req.Current.LastPreApplyAt
+		}
+		status := "active"
+		if lastApplyStatus == "error" || lastPreApplyStatus == "error" {
+			status = "degraded"
+		}
+
 		if err := st.UpsertDevice(store.Device{
 			DeviceID:   req.DeviceID,
-			Status:     "active",
+			Status:     status,
 			LastSeen:   now,
 			LabelsJSON: req.Labels,
 		}); err != nil {
@@ -77,18 +119,20 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
-
-		prevApply := prevApplyStatus(st, req.DeviceID)
 		if err := st.UpsertDeviceState(store.DeviceState{
-			DeviceID:         req.DeviceID,
-			CurrentVersion:   req.Current.SoftwareVersion,
-			CurrentConfigRev: req.Current.ConfigRev,
-			ServicesJSON:     req.Current.Services,
-			HealthJSON:       req.Current.Health,
-			UpdatedAt:        now,
-			LastApplyStatus:  prevApply.Status,
-			LastApplyError:   prevApply.Error,
-			LastApplyAt:      prevApply.At,
+			DeviceID:            req.DeviceID,
+			CurrentVersion:      req.Current.SoftwareVersion,
+			CurrentConfigRev:    req.Current.ConfigRev,
+			ServicesJSON:        req.Current.Services,
+			HealthJSON:          req.Current.Health,
+			UpdatedAt:           now,
+			LastApplyStatus:     lastApplyStatus,
+			LastApplyError:      lastApplyError,
+			LastApplyAt:         lastApplyAt,
+			LastApplyArtifactID: lastApplyArtifactID,
+			LastPreApplyStatus:  lastPreApplyStatus,
+			LastPreApplyError:   lastPreApplyError,
+			LastPreApplyAt:      lastPreApplyAt,
 		}); err != nil {
 			logger.Printf("upsert device_state error: %v", err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
@@ -111,6 +155,7 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 				ConfigRev:       desired.DesiredConfigRev,
 				ApplyPolicy:     desired.PolicyJSON,
 				CheckinInterval: desired.CheckinInterval,
+				Source:          "manual",
 			}
 		} else {
 			if req.Current.SoftwareVersion != "" || req.Current.ConfigRev != "" {
@@ -142,6 +187,7 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 					ConfigRev:       groupDesired.DesiredConfigRev,
 					ApplyPolicy:     groupDesired.PolicyJSON,
 					CheckinInterval: groupDesired.CheckinInterval,
+					Source:          "group",
 				}
 			} else if hasDesired {
 				desiredResp = &DesiredState{
@@ -150,6 +196,7 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 					ConfigRev:       desired.DesiredConfigRev,
 					ApplyPolicy:     desired.PolicyJSON,
 					CheckinInterval: desired.CheckinInterval,
+					Source:          desired.Source,
 				}
 			}
 		}
@@ -184,9 +231,13 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 }
 
 type applySnapshot struct {
-	Status string
-	Error  string
-	At     time.Time
+	Status     string
+	Error      string
+	At         time.Time
+	ArtifactID string
+	PreStatus  string
+	PreError   string
+	PreAt      time.Time
 }
 
 func prevApplyStatus(st store.Store, deviceID string) applySnapshot {
@@ -195,9 +246,13 @@ func prevApplyStatus(st store.Store, deviceID string) applySnapshot {
 	}
 	if prev, ok, err := st.GetDeviceState(deviceID); err == nil && ok {
 		return applySnapshot{
-			Status: prev.LastApplyStatus,
-			Error:  prev.LastApplyError,
-			At:     prev.LastApplyAt,
+			Status:     prev.LastApplyStatus,
+			Error:      prev.LastApplyError,
+			At:         prev.LastApplyAt,
+			ArtifactID: prev.LastApplyArtifactID,
+			PreStatus:  prev.LastPreApplyStatus,
+			PreError:   prev.LastPreApplyError,
+			PreAt:      prev.LastPreApplyAt,
 		}
 	}
 	return applySnapshot{}

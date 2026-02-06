@@ -1,0 +1,17 @@
+[Unit]
+Description=HardwareOps Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hardwareops
+Group=hardwareops
+EnvironmentFile=/etc/hardwareops/agent/agent.env
+ExecStart=/usr/local/bin/hardwareops-agent
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

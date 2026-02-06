@@ -263,6 +263,10 @@ tr:hover {
   background: rgba(255, 255, 255, 0.04);
 }
 
+tr.artifact-group-start td {
+  border-top: 2px solid var(--border);
+}
+
 .mono {
   font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-size: 12px;
@@ -278,6 +282,18 @@ tr:hover {
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   align-items: end;
   gap: 12px;
+}
+
+.key-value-list {
+  display: grid;
+  gap: 8px;
+}
+
+.key-value-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(140px, 1fr)) auto;
+  gap: 8px;
+  align-items: center;
 }
 
 .form label {
@@ -413,6 +429,37 @@ tr:hover {
   color: var(--accent);
 }
 
+.maintenance-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 4, 6, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.maintenance-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 20px 24px;
+  max-width: 420px;
+  text-align: center;
+  box-shadow: var(--card-shadow);
+}
+
+.maintenance-title {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.maintenance-text {
+  color: var(--muted);
+  margin-bottom: 16px;
+}
+
 .event-time {
   color: var(--muted);
 }
@@ -488,6 +535,48 @@ tr:hover {
   color: var(--muted);
 }
 
+.pill.status {
+  margin-right: 6px;
+  text-transform: capitalize;
+}
+
+.pill.status.active {
+  border-color: #1f7a3a;
+  color: #b6f0c4;
+}
+
+.pill.status.degraded {
+  border-color: #7a5a1f;
+  color: #f2d79b;
+}
+
+.pill.status.stale {
+  border-color: rgba(255, 255, 255, 0.25);
+  color: var(--muted);
+}
+
+.pill.status.offline,
+.pill.status.unknown {
+  border-color: var(--accent);
+  color: #ffb2b2;
+}
+
+.pill.maintenance {
+  border-color: var(--accent);
+  color: #ffb2b2;
+  text-transform: uppercase;
+}
+
+.pill.signed {
+  border-color: #1f7a3a;
+  color: #b6f0c4;
+}
+
+.pill.unsigned {
+  border-color: #7a5a1f;
+  color: #f2d79b;
+}
+
 .drawer-backdrop,
 .modal-backdrop {
   position: fixed;
@@ -532,6 +621,47 @@ tr:hover {
   background: var(--panel-2);
   border: 1px solid var(--border);
   font-size: 12px;
+}
+
+.group-devices {
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+
+.hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pill.source {
+  margin-left: 8px;
+  font-size: 11px;
+}
+
+.pill.source.manual {
+  background: rgba(214, 47, 47, 0.15);
+  border-color: rgba(214, 47, 47, 0.45);
+}
+
+.pill.source.group {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.pill.source.agent {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: var(--muted);
+}
+
+.pill.stale {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--muted);
 }
 
 .modal-backdrop {

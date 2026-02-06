@@ -29,6 +29,7 @@ type DeviceCurrentState struct {
 	LastApplyStatus    string          `json:"lastApplyStatus,omitempty"`
 	LastApplyError     string          `json:"lastApplyError,omitempty"`
 	LastApplyAt        *time.Time      `json:"lastApplyAt,omitempty"`
+	LastApplyArtifactID string         `json:"lastApplyArtifactId,omitempty"`
 	LastPreApplyStatus string          `json:"lastPreApplyStatus,omitempty"`
 	LastPreApplyError  string          `json:"lastPreApplyError,omitempty"`
 	LastPreApplyAt     *time.Time      `json:"lastPreApplyAt,omitempty"`
@@ -196,6 +197,7 @@ func GetDevice(logger *log.Logger, st store.Store) http.HandlerFunc {
 				LastApplyStatus:    stRec.LastApplyStatus,
 				LastApplyError:     stRec.LastApplyError,
 				LastApplyAt:        timePtr(stRec.LastApplyAt),
+				LastApplyArtifactID: stRec.LastApplyArtifactID,
 				LastPreApplyStatus: stRec.LastPreApplyStatus,
 				LastPreApplyError:  stRec.LastPreApplyError,
 				LastPreApplyAt:     timePtr(stRec.LastPreApplyAt),

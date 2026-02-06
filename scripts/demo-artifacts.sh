@@ -13,6 +13,11 @@ OUT_DIR=${OUT_DIR:-/tmp/hardwareops-demo/artifacts}
 DATA_DIR=${DATA_DIR:-/tmp/hardwareops-demo/data}
 SLEEP_BETWEEN=${SLEEP_BETWEEN:-5}
 PREAPPLY_TIMEOUT=${PREAPPLY_TIMEOUT:-120}
+SIGN_ARTIFACTS=${SIGN_ARTIFACTS:-1}
+
+if [ "$SIGN_ARTIFACTS" = "1" ]; then
+  source "$BASE_DIR/scripts/ensure-signing-key.sh"
+fi
 
 DEVICE_ID=${DEVICE_ID:-}
 if [ -z "$DEVICE_ID" ] && [ -f "$DATA_DIR/device-id" ]; then
@@ -67,19 +72,37 @@ steps:
 EOF
 done
 
-python3 "$BASE_DIR/scripts/artifact-pack.py" \
-  --name "$ARTIFACT_NAME" \
-  --version "$V1_VERSION" \
-  --type "$V1_TYPE" \
-  --input-dir "$V1_INPUT" \
-  --out "$V1_TAR" >/dev/null
+pack_args_v1=(--name "$ARTIFACT_NAME" --version "$V1_VERSION" --type "$V1_TYPE" --input-dir "$V1_INPUT" --out "$V1_TAR")
+if [ "$SIGN_ARTIFACTS" = "1" ]; then
+  pack_args_v1+=(--signing-key "$SIGNING_KEY" --signing-key-id "$SIGNING_KEY_ID")
+fi
+PACK_V1=$(python3 "$BASE_DIR/scripts/artifact-pack.py" "${pack_args_v1[@]}")
+V1_SIG=$(python3 - <<'PY' "$PACK_V1"
+import json, sys
+print(json.loads(sys.argv[1]).get("signature",""))
+PY
+)
+V1_SIG_KEY_ID=$(python3 - <<'PY' "$PACK_V1"
+import json, sys
+print(json.loads(sys.argv[1]).get("signatureKeyId",""))
+PY
+)
 
-python3 "$BASE_DIR/scripts/artifact-pack.py" \
-  --name "$ARTIFACT_NAME" \
-  --version "$V2_VERSION" \
-  --type "$V2_TYPE" \
-  --input-dir "$V2_INPUT" \
-  --out "$V2_TAR" >/dev/null
+pack_args_v2=(--name "$ARTIFACT_NAME" --version "$V2_VERSION" --type "$V2_TYPE" --input-dir "$V2_INPUT" --out "$V2_TAR")
+if [ "$SIGN_ARTIFACTS" = "1" ]; then
+  pack_args_v2+=(--signing-key "$SIGNING_KEY" --signing-key-id "$SIGNING_KEY_ID")
+fi
+PACK_V2=$(python3 "$BASE_DIR/scripts/artifact-pack.py" "${pack_args_v2[@]}")
+V2_SIG=$(python3 - <<'PY' "$PACK_V2"
+import json, sys
+print(json.loads(sys.argv[1]).get("signature",""))
+PY
+)
+V2_SIG_KEY_ID=$(python3 - <<'PY' "$PACK_V2"
+import json, sys
+print(json.loads(sys.argv[1]).get("signatureKeyId",""))
+PY
+)
 
 curl_opts=()
 if [[ "$BASE_URL" == https:* ]]; then
@@ -92,22 +115,22 @@ if [[ "$BASE_URL" == https:* ]]; then
   fi
 fi
 
-UPLOAD_V1=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/artifacts/upload" \
-  -F "name=$ARTIFACT_NAME" \
-  -F "version=$V1_VERSION" \
-  -F "type=$V1_TYPE" \
-  -F "file=@$V1_TAR")
+form_v1=(-F "name=$ARTIFACT_NAME" -F "version=$V1_VERSION" -F "type=$V1_TYPE" -F "file=@$V1_TAR")
+if [ -n "$V1_SIG" ]; then
+  form_v1+=(-F "signature=$V1_SIG" -F "signatureKeyId=$V1_SIG_KEY_ID")
+fi
+UPLOAD_V1=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/artifacts/upload" "${form_v1[@]}")
 ARTIFACT_ID_V1=$(python3 - <<'PY' "$UPLOAD_V1"
 import json, sys
 print(json.loads(sys.argv[1]).get("artifactId",""))
 PY
 )
 
-UPLOAD_V2=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/artifacts/upload" \
-  -F "name=$ARTIFACT_NAME" \
-  -F "version=$V2_VERSION" \
-  -F "type=$V2_TYPE" \
-  -F "file=@$V2_TAR")
+form_v2=(-F "name=$ARTIFACT_NAME" -F "version=$V2_VERSION" -F "type=$V2_TYPE" -F "file=@$V2_TAR")
+if [ -n "$V2_SIG" ]; then
+  form_v2+=(-F "signature=$V2_SIG" -F "signatureKeyId=$V2_SIG_KEY_ID")
+fi
+UPLOAD_V2=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/artifacts/upload" "${form_v2[@]}")
 ARTIFACT_ID_V2=$(python3 - <<'PY' "$UPLOAD_V2"
 import json, sys
 print(json.loads(sys.argv[1]).get("artifactId",""))

@@ -7,6 +7,7 @@ import (
 
 	"github.com/hardwareops/control-plane/internal/events"
 	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/hardwareops/control-plane/internal/upgrade"
 )
 
 type CertSigner interface {
@@ -40,4 +41,8 @@ type Dependencies struct {
 	LogDir             string
 	Events             *events.Hub
 	CORSAllowedOrigins []string
+	Maintenance        *MaintenanceState
+	MaintenanceToken   string
+	Upgrade            *upgrade.Runner
+	UpgradeUpdatesDir  string
 }

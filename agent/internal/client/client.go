@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hardwareops/agent/internal/state"
@@ -14,6 +16,18 @@ import (
 type Client struct {
 	baseURL string
 	http    *http.Client
+}
+
+type RateLimitError struct {
+	RetryAfter time.Duration
+	Status     int
+}
+
+func (e RateLimitError) Error() string {
+	if e.RetryAfter > 0 {
+		return fmt.Sprintf("rate limited: retry after %s", e.RetryAfter)
+	}
+	return fmt.Sprintf("rate limited: status=%d", e.Status)
 }
 
 func New(baseURL string) *Client {
@@ -47,8 +61,15 @@ type CheckinRequest struct {
 }
 
 type CheckinCurrent struct {
-	SoftwareVersion string `json:"softwareVersion,omitempty"`
-	ConfigRev       string `json:"configRev,omitempty"`
+	SoftwareVersion     string     `json:"softwareVersion,omitempty"`
+	ConfigRev           string     `json:"configRev,omitempty"`
+	LastApplyStatus     string     `json:"lastApplyStatus,omitempty"`
+	LastApplyError      string     `json:"lastApplyError,omitempty"`
+	LastApplyAt         *time.Time `json:"lastApplyAt,omitempty"`
+	LastApplyArtifactID string     `json:"lastApplyArtifactId,omitempty"`
+	LastPreApplyStatus  string     `json:"lastPreApplyStatus,omitempty"`
+	LastPreApplyError   string     `json:"lastPreApplyError,omitempty"`
+	LastPreApplyAt      *time.Time `json:"lastPreApplyAt,omitempty"`
 }
 
 type DesiredState struct {
@@ -57,6 +78,7 @@ type DesiredState struct {
 	ConfigRev       string `json:"configRev"`
 	DownloadURL     string `json:"downloadUrl"`
 	CheckinInterval int    `json:"checkinIntervalSec"`
+	Source          string `json:"source,omitempty"`
 }
 
 type CheckinResponse struct {
@@ -82,6 +104,7 @@ type PresignResponse struct {
 
 type ApplyResultRequest struct {
 	Status           string `json:"status"`
+	ArtifactID       string `json:"artifactId,omitempty"`
 	AppliedVersion   string `json:"appliedVersion,omitempty"`
 	AppliedConfigRev string `json:"appliedConfigRev,omitempty"`
 	Error            string `json:"error,omitempty"`
@@ -94,8 +117,15 @@ func (c *Client) CheckIn(st state.State) (*CheckinResponse, error) {
 		DeviceID:     st.DeviceID,
 		AgentVersion: st.AgentVersion,
 		Current: CheckinCurrent{
-			SoftwareVersion: st.CurrentVersion,
-			ConfigRev:       st.CurrentConfigRev,
+			SoftwareVersion:     st.CurrentVersion,
+			ConfigRev:           st.CurrentConfigRev,
+			LastApplyStatus:     st.LastApplyStatus,
+			LastApplyError:      st.LastApplyError,
+			LastApplyAt:         timePtr(st.LastApplyAt),
+			LastApplyArtifactID: st.LastApplyArtifactID,
+			LastPreApplyStatus:  st.LastPreApplyStatus,
+			LastPreApplyError:   st.LastPreApplyError,
+			LastPreApplyAt:      timePtr(st.LastPreApplyAt),
 		},
 	}
 	body, err := json.Marshal(payload)
@@ -111,6 +141,9 @@ func (c *Client) CheckIn(st state.State) (*CheckinResponse, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return nil, RateLimitError{RetryAfter: parseRetryAfter(resp), Status: resp.StatusCode}
+		}
 		return nil, fmt.Errorf("check-in failed: status=%d", resp.StatusCode)
 	}
 
@@ -119,6 +152,34 @@ func (c *Client) CheckIn(st state.State) (*CheckinResponse, error) {
 		return nil, err
 	}
 	return &out, nil
+}
+
+func parseRetryAfter(resp *http.Response) time.Duration {
+	if resp == nil {
+		return 0
+	}
+	raw := resp.Header.Get("Retry-After")
+	if raw == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(raw); err == nil {
+		d := time.Until(t)
+		if d < 0 {
+			return 0
+		}
+		return d
+	}
+	return 0
+}
+
+func timePtr(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
 }
 
 func (c *Client) PostApplyResult(deviceID string, req ApplyResultRequest) error {

@@ -13,6 +13,34 @@ GENERATE_ARTIFACT=${GENERATE_ARTIFACT:-0}
 STATE_PATH=${STATE_PATH:-/tmp/agent-state-e2e.json}
 ARTIFACT_ROOT=${ARTIFACT_ROOT:-/tmp/agent-data-e2e}
 CLEANUP=${CLEANUP:-0}
+SIGN_ARTIFACTS=${SIGN_ARTIFACTS:-1}
+REQUIRE_ARTIFACT_SIGNATURE=${REQUIRE_ARTIFACT_SIGNATURE:-$SIGN_ARTIFACTS}
+
+if [ "$SIGN_ARTIFACTS" = "1" ]; then
+  source "$BASE_DIR/scripts/ensure-signing-key.sh"
+fi
+
+sign_file() {
+  if [ "$SIGN_ARTIFACTS" != "1" ]; then
+    echo ""
+    return
+  fi
+  local file="$1"
+  local sha
+  sha=$(sha256sum "$file" | awk '{print $1}')
+  python3 - <<'PY' "$SIGNING_KEY" "$sha"
+import base64, binascii, pathlib, subprocess, sys, tempfile
+key=sys.argv[1]
+sha=sys.argv[2]
+sha_bytes=binascii.unhexlify(sha)
+with tempfile.TemporaryDirectory() as tmp:
+    sha_path=pathlib.Path(tmp)/"sha.bin"
+    sig_path=pathlib.Path(tmp)/"sig.bin"
+    sha_path.write_bytes(sha_bytes)
+    subprocess.check_call(["openssl","pkeyutl","-sign","-inkey",key,"-rawin","-in",str(sha_path),"-out",str(sig_path)])
+    print(base64.b64encode(sig_path.read_bytes()).decode("utf-8"))
+PY
+}
 
 if [ "$GENERATE_ARTIFACT" = "1" ] || [ ! -f "$ARTIFACT_PATH" ]; then
   GEN_DIR=$(mktemp -d /tmp/hardwareops-e2e-artifact.XXXXXX)
@@ -74,12 +102,26 @@ EOF
   if [ -z "${ARTIFACT_PATH:-}" ]; then
     ARTIFACT_PATH=/tmp/agent-0.0.1.tar.gz
   fi
-  python3 "$BASE_DIR/scripts/artifact-pack.py" \
-    --name "$ARTIFACT_NAME" \
-    --version "$ARTIFACT_VERSION" \
-    --type "$ARTIFACT_TYPE" \
-    --input-dir "$GEN_DIR" \
-    --out "$ARTIFACT_PATH" >/dev/null
+  pack_args=(--name "$ARTIFACT_NAME" --version "$ARTIFACT_VERSION" --type "$ARTIFACT_TYPE" --input-dir "$GEN_DIR" --out "$ARTIFACT_PATH")
+  if [ "$SIGN_ARTIFACTS" = "1" ]; then
+    pack_args+=(--signing-key "$SIGNING_KEY" --signing-key-id "$SIGNING_KEY_ID")
+  fi
+  PACK_JSON=$(python3 "$BASE_DIR/scripts/artifact-pack.py" "${pack_args[@]}")
+  PACK_SIG=$(python3 - <<'PY' "$PACK_JSON"
+import json, sys
+print(json.loads(sys.argv[1]).get("signature",""))
+PY
+)
+  PACK_SIG_KEY_ID=$(python3 - <<'PY' "$PACK_JSON"
+import json, sys
+print(json.loads(sys.argv[1]).get("signatureKeyId",""))
+PY
+)
+fi
+
+if [ "$SIGN_ARTIFACTS" = "1" ] && [ -z "${PACK_SIG:-}" ]; then
+  PACK_SIG=$(sign_file "$ARTIFACT_PATH")
+  PACK_SIG_KEY_ID="$SIGNING_KEY_ID"
 fi
 
 if [ ! -f "$ARTIFACT_PATH" ]; then
@@ -140,11 +182,11 @@ if [[ "$BASE_URL" == https:* ]]; then
 fi
 
 # Upload artifact via control-plane
-UPLOAD_JSON=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/artifacts/upload" \
-  -F "name=$ARTIFACT_NAME" \
-  -F "version=$ARTIFACT_VERSION" \
-  -F "type=$ARTIFACT_TYPE" \
-  -F "file=@$ARTIFACT_PATH")
+form_args=(-F "name=$ARTIFACT_NAME" -F "version=$ARTIFACT_VERSION" -F "type=$ARTIFACT_TYPE" -F "file=@$ARTIFACT_PATH")
+if [ -n "${PACK_SIG:-}" ]; then
+  form_args+=(-F "signature=$PACK_SIG" -F "signatureKeyId=$PACK_SIG_KEY_ID")
+fi
+UPLOAD_JSON=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/artifacts/upload" "${form_args[@]}")
 
 ARTIFACT_ID=$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["artifactId"])' <<<"$UPLOAD_JSON")
 
@@ -167,11 +209,18 @@ LOG_ENV=()
 if [ -n "${LOG_EXPORT_ADDR:-}" ]; then
   LOG_ENV=("LOG_EXPORT_ADDR=$LOG_EXPORT_ADDR")
 fi
+SIGN_ENV=()
+if [ "$REQUIRE_ARTIFACT_SIGNATURE" = "1" ]; then
+  SIGN_ENV=("REQUIRE_ARTIFACT_SIGNATURE=1" "SIGNING_PUB_KEY_PATH=$SIGNING_PUB")
+  if [ -n "${SIGNING_KEY_ID:-}" ]; then
+    SIGN_ENV+=("SIGNING_KEY_ID=$SIGNING_KEY_ID")
+  fi
+fi
 
 (cd "$(dirname "$0")/../agent" && \
   env CONTROL_PLANE_URL="$BASE_URL" ARTIFACT_ROOT="$ARTIFACT_ROOT" STATE_PATH="$STATE_PATH" \
   DEVICE_CERT_PATH="$CSR_DIR/device.crt" DEVICE_KEY_PATH="$CSR_DIR/device.key" \
-  "${CA_ENV[@]}" "${LOG_ENV[@]}" \
+  "${CA_ENV[@]}" "${LOG_ENV[@]}" "${SIGN_ENV[@]}" \
   go run ./cmd/agent -once)
 
 # Verify
