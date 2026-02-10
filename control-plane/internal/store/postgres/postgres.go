@@ -203,6 +203,17 @@ func (s *Store) ListDevices(filter store.ListDevicesFilter) ([]store.Device, err
 	return out, nil
 }
 
+func (s *Store) CountDevices() (int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var count int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM devices`).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func (s *Store) DeleteDevice(deviceID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -698,6 +709,337 @@ func (s *Store) CreateApplyResult(result store.ApplyResult) error {
 	return err
 }
 
+func (s *Store) CreateAuditEvent(event store.AuditEvent) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	occurredAt := event.OccurredAt
+	if occurredAt.IsZero() {
+		occurredAt = time.Now().UTC()
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO audit_events (
+			event_id, occurred_at, actor_type, actor_id, actor_email, actor_roles,
+			auth_method, source_ip, user_agent, request_id, action,
+			target_type, target_id, status, error, before, after, metadata
+		) VALUES (
+			COALESCE($1::uuid, gen_random_uuid()), $2, $3, $4, $5, $6,
+			$7, $8, $9, $10, $11,
+			$12, $13, $14, $15, $16, $17, $18
+		)
+	`, nullIfEmpty(event.EventID),
+		occurredAt,
+		nullIfEmpty(event.ActorType),
+		nullIfEmpty(event.ActorID),
+		nullIfEmpty(event.ActorEmail),
+		nullIfEmptyBytes(event.ActorRolesJSON),
+		nullIfEmpty(event.AuthMethod),
+		nullIfEmpty(event.SourceIP),
+		nullIfEmpty(event.UserAgent),
+		nullIfEmpty(event.RequestID),
+		event.Action,
+		nullIfEmpty(event.TargetType),
+		nullIfEmpty(event.TargetID),
+		nullIfEmpty(event.Status),
+		nullIfEmpty(event.Error),
+		nullIfEmptyBytes(event.BeforeJSON),
+		nullIfEmptyBytes(event.AfterJSON),
+		nullIfEmptyBytes(event.MetadataJSON),
+	)
+	return err
+}
+
+func (s *Store) ListAuditEvents(filter store.AuditEventFilter) ([]store.AuditEvent, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 200
+	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT event_id, occurred_at, actor_type, actor_id, COALESCE(actor_email, ''), COALESCE(actor_roles, '[]'::jsonb),
+		       COALESCE(auth_method, ''), COALESCE(source_ip, ''), COALESCE(user_agent, ''), COALESCE(request_id, ''),
+		       action, COALESCE(target_type, ''), COALESCE(target_id, ''), status, COALESCE(error, ''),
+		       COALESCE(before, '{}'::jsonb), COALESCE(after, '{}'::jsonb), COALESCE(metadata, '{}'::jsonb)
+		FROM audit_events
+		WHERE ($1 = '' OR action = $1)
+		  AND ($2 = '' OR actor_type = $2)
+		  AND ($3 = '' OR actor_id = $3)
+		  AND ($4 = '' OR actor_email = $4)
+		  AND ($5 = '' OR target_type = $5)
+		  AND ($6 = '' OR target_id = $6)
+		  AND ($7 = '' OR status = $7)
+		  AND ($8::timestamptz IS NULL OR occurred_at >= $8)
+		  AND ($9::timestamptz IS NULL OR occurred_at <= $9)
+		ORDER BY occurred_at DESC
+		LIMIT $10 OFFSET $11
+	`, filter.Action, filter.ActorType, filter.ActorID, filter.ActorEmail, filter.TargetType, filter.TargetID, filter.Status,
+		nullIfZeroTime(filter.Since), nullIfZeroTime(filter.Until), limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []store.AuditEvent{}
+	for rows.Next() {
+		var ev store.AuditEvent
+		if err := rows.Scan(&ev.EventID, &ev.OccurredAt, &ev.ActorType, &ev.ActorID, &ev.ActorEmail, &ev.ActorRolesJSON,
+			&ev.AuthMethod, &ev.SourceIP, &ev.UserAgent, &ev.RequestID, &ev.Action, &ev.TargetType, &ev.TargetID,
+			&ev.Status, &ev.Error, &ev.BeforeJSON, &ev.AfterJSON, &ev.MetadataJSON); err != nil {
+			return nil, err
+		}
+		out = append(out, ev)
+	}
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+	return out, nil
+}
+
+func (s *Store) DeleteAuditEventsBefore(cutoff time.Time) (int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if cutoff.IsZero() {
+		return 0, nil
+	}
+	tag, err := s.pool.Exec(ctx, `DELETE FROM audit_events WHERE occurred_at < $1`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}
+
+func (s *Store) EnsureAuditRetentionDays(days int) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if days <= 0 {
+		days = 90
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO audit_retention (id, days, updated_at)
+		VALUES (1, $1, now())
+		ON CONFLICT (id) DO UPDATE SET days = EXCLUDED.days, updated_at = now()
+	`, days)
+	return err
+}
+
+func (s *Store) GetAuditRetentionDays() (store.AuditRetention, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var out store.AuditRetention
+	err := s.pool.QueryRow(ctx, `
+		SELECT days, updated_at
+		FROM audit_retention
+		WHERE id = 1
+	`).Scan(&out.Days, &out.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		out.Days = 90
+		out.UpdatedAt = time.Now().UTC()
+		return out, nil
+	}
+	if err != nil {
+		return store.AuditRetention{}, err
+	}
+	return out, nil
+}
+
+func (s *Store) SetAuditRetentionDays(days int) (store.AuditRetention, error) {
+	if err := s.EnsureAuditRetentionDays(days); err != nil {
+		return store.AuditRetention{}, err
+	}
+	return s.GetAuditRetentionDays()
+}
+
+func (s *Store) CreateUser(user store.User) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if user.AuthProvider == "" {
+		user.AuthProvider = "local"
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO users (user_id, email, display_name, password_hash, roles, disabled, auth_provider, external_id, created_at, updated_at, last_login_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	`, user.UserID, user.Email, nullIfEmpty(user.DisplayName), user.PasswordHash, nullIfEmptyBytes(user.RolesJSON),
+		user.Disabled, user.AuthProvider, nullIfEmpty(user.ExternalID), user.CreatedAt, user.UpdatedAt, nullIfZeroTime(user.LastLoginAt))
+	return err
+}
+
+func (s *Store) GetUser(userID string) (store.User, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var u store.User
+	err := s.pool.QueryRow(ctx, `
+		SELECT user_id, email, COALESCE(display_name, ''), password_hash, COALESCE(roles, '[]'::jsonb),
+		       disabled, COALESCE(auth_provider, 'local'), COALESCE(external_id, ''), created_at, updated_at,
+		       COALESCE(last_login_at, '0001-01-01'::timestamptz)
+		FROM users
+		WHERE user_id = $1
+	`, userID).Scan(&u.UserID, &u.Email, &u.DisplayName, &u.PasswordHash, &u.RolesJSON, &u.Disabled,
+		&u.AuthProvider, &u.ExternalID, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.User{}, false, nil
+	}
+	if err != nil {
+		return store.User{}, false, err
+	}
+	return u, true, nil
+}
+
+func (s *Store) GetUserByEmail(email string) (store.User, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var u store.User
+	err := s.pool.QueryRow(ctx, `
+		SELECT user_id, email, COALESCE(display_name, ''), password_hash, COALESCE(roles, '[]'::jsonb),
+		       disabled, COALESCE(auth_provider, 'local'), COALESCE(external_id, ''), created_at, updated_at,
+		       COALESCE(last_login_at, '0001-01-01'::timestamptz)
+		FROM users
+		WHERE email = $1
+	`, email).Scan(&u.UserID, &u.Email, &u.DisplayName, &u.PasswordHash, &u.RolesJSON, &u.Disabled,
+		&u.AuthProvider, &u.ExternalID, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.User{}, false, nil
+	}
+	if err != nil {
+		return store.User{}, false, err
+	}
+	return u, true, nil
+}
+
+func (s *Store) ListUsers(limit, offset int) ([]store.User, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if limit <= 0 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT user_id, email, COALESCE(display_name, ''), password_hash, COALESCE(roles, '[]'::jsonb),
+		       disabled, COALESCE(auth_provider, 'local'), COALESCE(external_id, ''), created_at, updated_at,
+		       COALESCE(last_login_at, '0001-01-01'::timestamptz)
+		FROM users
+		ORDER BY created_at DESC
+		LIMIT $1 OFFSET $2
+	`, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []store.User{}
+	for rows.Next() {
+		var u store.User
+		if err := rows.Scan(&u.UserID, &u.Email, &u.DisplayName, &u.PasswordHash, &u.RolesJSON, &u.Disabled,
+			&u.AuthProvider, &u.ExternalID, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+	return out, nil
+}
+
+func (s *Store) UpdateUser(update store.UserUpdate) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if update.UserID == "" {
+		return errors.New("user_id required")
+	}
+	_, err := s.pool.Exec(ctx, `
+		UPDATE users
+		SET display_name = COALESCE($2, display_name),
+		    roles = COALESCE($3, roles),
+		    disabled = COALESCE($4, disabled),
+		    password_hash = COALESCE($5, password_hash),
+		    updated_at = now()
+		WHERE user_id = $1
+	`, update.UserID,
+		nullIfEmpty(ptrString(update.DisplayName)),
+		nullIfEmptyBytes(update.RolesJSON),
+		ptrBool(update.Disabled),
+		nullIfEmpty(ptrString(update.PasswordHash)),
+	)
+	return err
+}
+
+func (s *Store) SetUserLastLogin(userID string, at time.Time) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		UPDATE users
+		SET last_login_at = $2,
+		    updated_at = now()
+		WHERE user_id = $1
+	`, userID, at)
+	return err
+}
+
+func (s *Store) CreateAuthVoucher(voucher store.AuthVoucher) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO auth_vouchers (voucher_id, token_hash, email, roles, expires_at, created_at, created_by, used_at, used_by, revoked)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`, voucher.VoucherID,
+		voucher.TokenHash,
+		nullIfEmpty(voucher.Email),
+		nullIfEmptyBytes(voucher.RolesJSON),
+		voucher.ExpiresAt,
+		voucher.CreatedAt,
+		nullIfEmpty(voucher.CreatedBy),
+		nullIfZeroTime(voucher.UsedAt),
+		nullIfEmpty(voucher.UsedBy),
+		voucher.Revoked,
+	)
+	return err
+}
+
+func (s *Store) GetAuthVoucherByTokenHash(tokenHash string) (store.AuthVoucher, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var v store.AuthVoucher
+	err := s.pool.QueryRow(ctx, `
+		SELECT voucher_id, token_hash, COALESCE(email, ''), COALESCE(roles, '[]'::jsonb),
+		       expires_at, created_at, COALESCE(created_by, ''), COALESCE(used_at, '0001-01-01'::timestamptz),
+		       COALESCE(used_by, ''), revoked
+		FROM auth_vouchers
+		WHERE token_hash = $1
+	`, tokenHash).Scan(&v.VoucherID, &v.TokenHash, &v.Email, &v.RolesJSON, &v.ExpiresAt, &v.CreatedAt,
+		&v.CreatedBy, &v.UsedAt, &v.UsedBy, &v.Revoked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.AuthVoucher{}, false, nil
+	}
+	if err != nil {
+		return store.AuthVoucher{}, false, err
+	}
+	return v, true, nil
+}
+
+func (s *Store) MarkAuthVoucherUsed(voucherID, usedBy string, at time.Time) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE auth_vouchers
+		SET used_at = $2,
+		    used_by = $3
+		WHERE voucher_id = $1
+		  AND revoked = false
+		  AND used_at IS NULL
+	`, voucherID, at, nullIfEmpty(usedBy))
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 func nullIfEmpty(s string) interface{} {
 	if s == "" {
 		return nil
@@ -724,4 +1066,18 @@ func nullIfZeroInt(v int) interface{} {
 		return nil
 	}
 	return v
+}
+
+func ptrString(val *string) string {
+	if val == nil {
+		return ""
+	}
+	return *val
+}
+
+func ptrBool(val *bool) interface{} {
+	if val == nil {
+		return nil
+	}
+	return *val
 }

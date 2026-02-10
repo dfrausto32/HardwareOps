@@ -7,7 +7,7 @@ RUN go mod download
 COPY control-plane/ ./
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/control-plane ./cmd/control-plane
 
-FROM docker:24.0.7-cli
+FROM docker:25.0.5-cli
 
 WORKDIR /app
 RUN apk add --no-cache bash curl

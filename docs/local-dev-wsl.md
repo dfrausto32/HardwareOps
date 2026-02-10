@@ -35,6 +35,11 @@ export CORS_ALLOWED_ORIGINS=http://localhost:5173
 ENABLE_TLS=1 ./scripts/run-control-plane.sh
 ```
 
+You can also load envs from a file:
+```
+CONTROL_PLANE_ENV_FILE=./control-plane.env ENABLE_TLS=1 ./scripts/run-control-plane.sh
+```
+
 Verify:
 ```
 curl --cacert ./dev-ca.crt https://localhost:8080/healthz

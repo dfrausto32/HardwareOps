@@ -84,16 +84,28 @@ func PostApplyResult(logger *log.Logger, st store.Store, hub *events.Hub, trustP
 			CreatedAt:        time.Now().UTC(),
 		}
 
+		event := buildAuditEvent(r, trustProxy, actorDevice(device.DeviceID), "device.apply_result", "device", device.DeviceID)
+		event.MetadataJSON = auditJSON(map[string]any{
+			"applyId":          res.ApplyID,
+			"artifactId":       res.ArtifactID,
+			"status":           res.Status,
+			"appliedVersion":   res.AppliedVersion,
+			"appliedConfigRev": res.AppliedConfigRev,
+			"error":            res.Error,
+			"preApplyStatus":   res.PreApplyStatus,
+			"preApplyError":    res.PreApplyError,
+		})
 		if err := st.CreateApplyResult(res); err != nil {
 			logger.Printf("create apply result error: %v", err)
+			writeAudit(logger, st, event, err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
 		state := store.DeviceState{
-			DeviceID:        device.DeviceID,
-			LastApplyStatus: res.Status,
-			LastApplyError:  res.Error,
-			LastApplyAt:     res.CreatedAt,
+			DeviceID:            device.DeviceID,
+			LastApplyStatus:     res.Status,
+			LastApplyError:      res.Error,
+			LastApplyAt:         res.CreatedAt,
 			LastApplyArtifactID: res.ArtifactID,
 		}
 		if res.PreApplyStatus != "" {
@@ -123,6 +135,7 @@ func PostApplyResult(logger *log.Logger, st store.Store, hub *events.Hub, trustP
 		}
 
 		resp := ApplyResultResponse{ApplyID: res.ApplyID, DeviceID: res.DeviceID, Status: res.Status, At: res.CreatedAt}
+		writeAudit(logger, st, event, nil)
 
 		if hub != nil {
 			payload, _ := json.Marshal(map[string]any{

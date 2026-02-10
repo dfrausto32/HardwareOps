@@ -54,7 +54,9 @@ func MaintenanceMiddleware(state *MaintenanceState) func(http.Handler) http.Hand
 				return
 			}
 
-			if r.URL.Path == "/healthz" || strings.HasPrefix(r.URL.Path, "/api/v1/maintenance") {
+			if r.URL.Path == "/healthz" ||
+				strings.HasPrefix(r.URL.Path, "/api/v1/maintenance") ||
+				strings.HasPrefix(r.URL.Path, "/api/v1/auth") {
 				next.ServeHTTP(w, r)
 				return
 			}

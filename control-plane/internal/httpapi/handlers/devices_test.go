@@ -102,7 +102,7 @@ func TestPatchDeviceLabels(t *testing.T) {
 	req = withURLParam(req, "deviceId", id)
 	w := httptest.NewRecorder()
 
-	PatchDevice(logger, mem).ServeHTTP(w, req)
+	PatchDevice(logger, mem, false).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -121,10 +121,9 @@ func TestPatchDevice_InvalidLabels(t *testing.T) {
 	req = withURLParam(req, "deviceId", id)
 	w := httptest.NewRecorder()
 
-	PatchDevice(logger, mem).ServeHTTP(w, req)
+	PatchDevice(logger, mem, false).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
-

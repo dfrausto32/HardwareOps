@@ -9,6 +9,17 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 
 ---
 
+## Recently Completed (Current State)
+- ✅ Artifact signing + verification (Ed25519) end‑to‑end (packer → control‑plane → agent).
+- ✅ Device status model (active/stale/offline) with periodic refresh.
+- ✅ Agent throttling + jitter (fleet‑friendly check‑ins).
+- ✅ Control‑plane rate limits (check‑in / enroll / apply).
+- ✅ Audit logging + query + CSV export + retention controls.
+- ✅ Local auth (JWT) + bootstrap admin + voucher invites.
+- ✅ Web UI for auth, audit logs, and retention management.
+
+---
+
 ## Phase A — Foundation (Production-Ready Core)
 **Goal:** Safe, deployable, and supportable for real customers.
 
@@ -20,7 +31,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 
 ### Feature Templates
 #### Artifact signing + verification
-- **Status:** ⬜ Planned
+- **Status:** 🟢 Complete
 - **Scope:** CI/packer signs artifacts (Ed25519 in v1); agents verify before apply; hard-fail on invalid signature; metadata supports future Cosign/Sigstore without breaking existing flow.
 - **Dependencies:** Signing key management, CI integration, agent verify path, artifact metadata fields.
 - **Risks:** Key compromise, signing flow drift.
@@ -31,7 +42,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Notes:** See `docs/development/artifact-signing.md`.
 
 #### Device status model
-- **Status:** ⬜ Planned
+- **Status:** 🟢 Complete
 - **Scope:** active / stale / degraded / offline; heartbeat + last-seen tracking.
 - **Dependencies:** Control-plane status rules; UI surfacing.
 - **Risks:** False positives on stale/offline.
@@ -39,7 +50,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Notes:** 
 
 #### Agent throttling & jitter
-- **Status:** ⬜ Planned
+- **Status:** 🟢 Complete
 - **Scope:** Staggered check-ins; fleet-size aware defaults.
 - **Dependencies:** Agent config; control-plane guidance.
 - **Risks:** Delayed updates at scale.
@@ -47,7 +58,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Notes:** 
 
 #### Rate limiting
-- **Status:** ⬜ Planned
+- **Status:** 🟢 Complete
 - **Scope:** Adaptive backoff by fleet size; protect against misbehaving agents.
 - **Dependencies:** Control-plane rate limiter, telemetry.
 - **Risks:** Starving healthy devices.
@@ -55,12 +66,23 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Notes:** 
 
 #### Upgrade strategy
-- **Status:** ⬜ Planned
+- **Status:** 🟢 Complete
 - **Scope:** Schema migrations; backward-compatible agent rollout; rollback safety.
 - **Dependencies:** Migration tool, versioning policy.
 - **Risks:** Data loss or downtime.
 - **Acceptance:** Zero-data-loss upgrade with rollback plan.
-- **Notes:** 
+- **Notes:** Upgrade runner + UI status panels exist; safe manual upgrade flow still needs automation.
+
+#### Fleet capacity enforcement (on‑prem licensing)
+- **Status:** ⬜ Planned
+- **Scope:** Hard cap on total devices (enrolled/active) that cannot be changed by operators in on‑prem installs.
+- **Dependencies:** License format + verification, enforcement points in API.
+- **Risks:** Accidental lockout if limit is mis‑set; failure to enforce consistently.
+- **Acceptance:** 
+  - Control‑plane refuses enroll/check‑in when cap exceeded (clear error).
+  - Cap is loaded from a signed license file (or compiled limit) that operators cannot alter without vendor key.
+  - UI shows current usage vs cap (read‑only).
+- **Notes:** Recommend signed license file with embedded public key; future hosted control‑plane can validate against vendor service.
 
 #### Certificate rotation
 - **Status:** ⬜ Planned
@@ -90,12 +112,12 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 
 ### Feature Templates
 #### Audit logging
-- **Status:** ⬜ Planned
+- **Status:** 🟢 Complete
 - **Scope:** Who did what/when; immutable entries; export CSV/JSON.
 - **Dependencies:** Auth/RBAC, storage for audit trail.
 - **Risks:** Gaps in coverage.
 - **Acceptance:** All state‑changing actions are logged and queryable.
-- **Notes:** 
+- **Notes:** Includes retention configuration + CSV export.
 
 #### Metrics & health
 - **Status:** ⬜ Planned
@@ -157,20 +179,20 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 
 ### Feature Templates
 #### Fixed RBAC roles
-- **Status:** ⬜ Planned
+- **Status:** 🟡 In progress
 - **Scope:** Admin / Operator / Viewer.
 - **Dependencies:** Auth middleware + policy checks.
 - **Risks:** Role creep.
 - **Acceptance:** Endpoints and UI gated correctly.
-- **Notes:** 
+- **Notes:** API role enforcement added; UI gating partially implemented.
 
 #### Role-aware UI
-- **Status:** ⬜ Planned
+- **Status:** 🟡 In progress
 - **Scope:** Action gating; read‑only views.
 - **Dependencies:** RBAC roles.
 - **Risks:** Inconsistent UI behavior.
 - **Acceptance:** UI hides actions for non‑authorized roles.
-- **Notes:** 
+- **Notes:** Auth UI exists; remaining pages need role-aware gating.
 
 #### Custom RBAC policies
 - **Status:** ⬜ Planned
@@ -205,12 +227,12 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Notes:** 
 
 #### Break-glass workflows
-- **Status:** ⬜ Planned
+- **Status:** 🟡 In progress
 - **Scope:** Bootstrap admin + forced rotation + audit trail.
 - **Dependencies:** Audit logging, auth.
 - **Risks:** Misuse.
 - **Acceptance:** Emergency access is possible and auditable.
-- **Notes:** 
+- **Notes:** Bootstrap admin + voucher onboarding implemented; rotation + revocation workflows remain.
 
 ---
 

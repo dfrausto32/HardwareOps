@@ -3,21 +3,52 @@ const useProxy = env.VITE_API_PROXY === '1'
 const defaultProtocol = env.VITE_TLS === '1' ? 'https' : 'http'
 const defaultBase = `${defaultProtocol}://localhost:8080`
 const apiTarget = env.VITE_API_BASE_URL || defaultBase
+let authToken = env.VITE_AUTH_TOKEN || ''
 
 export const API_BASE_URL = useProxy ? '' : apiTarget
 export const API_TARGET = apiTarget
+const AUTH_STORAGE_KEY = 'hwops_auth_token'
+
+export function getAuthToken() {
+  if (authToken) return authToken
+  if (typeof window !== 'undefined') {
+    const stored = window.localStorage.getItem(AUTH_STORAGE_KEY) || ''
+    authToken = stored
+  }
+  return authToken
+}
+
+export function setAuthToken(token: string) {
+  authToken = token || ''
+  if (typeof window !== 'undefined') {
+    if (authToken) {
+      window.localStorage.setItem(AUTH_STORAGE_KEY, authToken)
+    } else {
+      window.localStorage.removeItem(AUTH_STORAGE_KEY)
+    }
+  }
+}
 
 function buildUrl(path: string) {
   return `${API_BASE_URL}${path}`
 }
 
+function buildHeaders(initHeaders?: HeadersInit, extra?: Record<string, string>) {
+  const headers = new Headers(initHeaders || {})
+  if (extra) {
+    Object.entries(extra).forEach(([key, value]) => headers.set(key, value))
+  }
+  const token = getAuthToken()
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`)
+  }
+  return headers
+}
+
 async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   const resp = await fetch(buildUrl(path), {
     ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init.headers || {}),
-    },
+    headers: buildHeaders(init.headers, { 'Content-Type': 'application/json' }),
   })
   if (!resp.ok) {
     const text = await resp.text()
@@ -27,7 +58,10 @@ async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> 
 }
 
 async function requestText(path: string, init: RequestInit = {}): Promise<string> {
-  const resp = await fetch(buildUrl(path), init)
+  const resp = await fetch(buildUrl(path), {
+    ...init,
+    headers: buildHeaders(init.headers),
+  })
   if (!resp.ok) {
     const text = await resp.text()
     throw new Error(`request failed ${resp.status}: ${text}`)
@@ -36,7 +70,10 @@ async function requestText(path: string, init: RequestInit = {}): Promise<string
 }
 
 async function requestNoContent(path: string, init: RequestInit = {}): Promise<void> {
-  const resp = await fetch(buildUrl(path), init)
+  const resp = await fetch(buildUrl(path), {
+    ...init,
+    headers: buildHeaders(init.headers),
+  })
   if (!resp.ok) {
     const text = await resp.text()
     throw new Error(`request failed ${resp.status}: ${text}`)
@@ -115,6 +152,7 @@ export async function uploadArtifact(formData: FormData) {
   const resp = await fetch(buildUrl('/api/v1/artifacts/upload'), {
     method: 'POST',
     body: formData,
+    headers: buildHeaders(),
   })
   if (!resp.ok) {
     const text = await resp.text()
@@ -135,6 +173,37 @@ export async function deleteArtifact(artifactId: string) {
 
 export async function getDeviceLogs(deviceId: string) {
   return requestText(`/api/v1/logs/${encodeURIComponent(deviceId)}`)
+}
+
+export async function listAuditEvents(params: Record<string, string | number | undefined> = {}) {
+  const qs = new URLSearchParams()
+  Object.entries(params).forEach(([key, val]) => {
+    if (val === undefined || val === null || val === '') return
+    qs.set(key, String(val))
+  })
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  return requestJson(`/api/v1/audit${suffix}`)
+}
+
+export async function downloadAuditCSV(params: Record<string, string | number | undefined> = {}) {
+  const qs = new URLSearchParams()
+  Object.entries(params).forEach(([key, val]) => {
+    if (val === undefined || val === null || val === '') return
+    qs.set(key, String(val))
+  })
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  return requestText(`/api/v1/audit.csv${suffix}`)
+}
+
+export async function getAuditRetention() {
+  return requestJson('/api/v1/audit/retention')
+}
+
+export async function setAuditRetention(days: number) {
+  return requestJson('/api/v1/audit/retention', {
+    method: 'PUT',
+    body: JSON.stringify({ days }),
+  })
 }
 
 export async function getMaintenance() {
@@ -161,6 +230,10 @@ export async function getUpgradeAvailable() {
   return requestJson('/api/v1/maintenance/upgrade/available')
 }
 
+export async function getUpgradePreflight() {
+  return requestJson('/api/v1/maintenance/upgrade/preflight')
+}
+
 export async function applyUpgrade(token?: string) {
   const headers: Record<string, string> = {}
   if (token) {
@@ -169,5 +242,45 @@ export async function applyUpgrade(token?: string) {
   return requestJson('/api/v1/maintenance/upgrade', {
     method: 'POST',
     headers,
+  })
+}
+
+export async function login(email: string, password: string) {
+  return requestJson('/api/v1/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  })
+}
+
+export async function getMe() {
+  return requestJson('/api/v1/auth/me')
+}
+
+export async function getAuthStatus() {
+  return requestJson('/api/v1/auth/status')
+}
+
+export async function registerWithVoucher(payload: Record<string, unknown>) {
+  return requestJson('/api/v1/auth/register', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function createVoucher(payload: Record<string, unknown>) {
+  return requestJson('/api/v1/auth/vouchers', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function listUsers() {
+  return requestJson('/api/v1/users')
+}
+
+export async function createUser(payload: Record<string, unknown>) {
+  return requestJson('/api/v1/users', {
+    method: 'POST',
+    body: JSON.stringify(payload),
   })
 }

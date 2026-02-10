@@ -3,15 +3,6 @@ set -euo pipefail
 
 BASE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 VERSION=${VERSION:-$(date +%Y%m%d%H%M%S)}
-DIST_DIR=${DIST_DIR:-$BASE_DIR/dist/upgrades/$VERSION}
-PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://hardwareops.internal}
-MAINTENANCE_TOKEN=${MAINTENANCE_TOKEN:-change-me}
-
-if ! command -v docker >/dev/null 2>&1; then
-  echo "Docker not found. Install Docker or run on a machine with Docker." >&2
-  exit 1
-fi
-
 host_arch=$(uname -m)
 case "$host_arch" in
   x86_64) arch=amd64 ;;
@@ -21,6 +12,16 @@ case "$host_arch" in
     exit 1
     ;;
 esac
+DIST_NAME=${DIST_NAME:-hardwareops-upgrade-${VERSION}-linux-${arch}}
+DIST_DIR=${DIST_DIR:-$BASE_DIR/dist/upgrades/$DIST_NAME}
+PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://hardwareops.internal}
+MAINTENANCE_TOKEN=${MAINTENANCE_TOKEN:-change-me}
+ENV_FILE=${ENV_FILE:-}
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Docker not found. Install Docker or run on a machine with Docker." >&2
+  exit 1
+fi
 
 mkdir -p "$DIST_DIR/images" "$DIST_DIR/scripts"
 
@@ -39,6 +40,9 @@ docker save -o "$DIST_DIR/images/gateway.tar" "$gw_tag"
 
 cp -a "$BASE_DIR/scripts/apply-upgrade.sh" "$DIST_DIR/scripts/"
 cp -a "$BASE_DIR/deploy/compose/.env.onprem.example" "$DIST_DIR/.env.onprem.example"
+if [ -n "$ENV_FILE" ] && [ -f "$ENV_FILE" ]; then
+  cp -a "$ENV_FILE" "$DIST_DIR/.env.onprem"
+fi
 
 cat > "$DIST_DIR/docker-compose.onprem.bundle.yml" <<EOF
 version: "3.9"
@@ -81,6 +85,11 @@ services:
       TRUST_PROXY: "1"
       CLIENT_CERT_HEADER: X-Client-Cert
       CORS_ALLOWED_ORIGINS: \${CORS_ALLOWED_ORIGINS:-${PUBLIC_BASE_URL}}
+      LICENSE_ENFORCE: \${LICENSE_ENFORCE:-0}
+      LICENSE_PATH: \${LICENSE_PATH:-}
+      LICENSE_PUBLIC_KEY: \${LICENSE_PUBLIC_KEY:-}
+      LICENSE_PUBLIC_KEY_PATH: \${LICENSE_PUBLIC_KEY_PATH:-}
+      LICENSE_CACHE_TTL: \${LICENSE_CACHE_TTL:-30s}
       LOG_DIR: /var/lib/hardwareops/logs
       DISABLE_HTTP2: "1"
       MAINTENANCE_MODE: \${MAINTENANCE_MODE:-1}
@@ -90,6 +99,8 @@ services:
       UPGRADE_WORK_DIR: \${UPGRADE_WORK_DIR:-/stack}
       UPGRADE_LOG_DIR: \${UPGRADE_LOG_DIR:-/var/lib/hardwareops/logs}
       UPGRADE_UPDATES_DIR: \${UPGRADE_UPDATES_DIR:-/stack/updates}
+      UPGRADE_RUNNER_MODE: \${UPGRADE_RUNNER_MODE:-docker}
+      UPGRADE_RUNNER_IMAGE: \${UPGRADE_RUNNER_IMAGE:-${cp_tag}}
       STACK_DIR: \${STACK_DIR:-/stack}
     volumes:
       - \${CERTS_DIR:-/opt/hardwareops/certs}:/certs:ro
@@ -138,8 +149,9 @@ Usage:
 
 The apply script loads images, updates compose, runs health checks,
 and disables maintenance mode if MAINTENANCE_TOKEN is set.
+If you pass ENV_FILE when building the package, .env.onprem is bundled.
 README
 
-out="$DIST_DIR/hardwareops-upgrade-${VERSION}-linux-${arch}.tar.gz"
+out="$BASE_DIR/dist/hardwareops-upgrade-${VERSION}-linux-${arch}.tar.gz"
 tar -C "$(dirname "$DIST_DIR")" -czf "$out" "$(basename "$DIST_DIR")"
 echo "Upgrade package written to $out"

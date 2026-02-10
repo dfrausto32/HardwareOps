@@ -84,7 +84,7 @@ func ListDevices(logger *log.Logger, st store.Store) http.HandlerFunc {
 	}
 }
 
-func PatchDevice(logger *log.Logger, st store.Store) http.HandlerFunc {
+func PatchDevice(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		deviceID := chi.URLParam(r, "deviceId")
 		if deviceID == "" {
@@ -147,9 +147,21 @@ func PatchDevice(logger *log.Logger, st store.Store) http.HandlerFunc {
 			MetadataJSON:    metadata,
 		}); err != nil {
 			logger.Printf("upsert device error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "device.update", "device", deviceID), err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "device.update", "device", deviceID)
+		event.BeforeJSON = auditJSON(map[string]any{
+			"labels":   json.RawMessage(device.LabelsJSON),
+			"metadata": json.RawMessage(device.MetadataJSON),
+		})
+		event.AfterJSON = auditJSON(map[string]any{
+			"labels":   json.RawMessage(labels),
+			"metadata": json.RawMessage(metadata),
+		})
+		writeAudit(logger, st, event, nil)
 
 		resp := DeviceSummary{
 			DeviceID: device.DeviceID,
@@ -220,7 +232,7 @@ func GetDevice(logger *log.Logger, st store.Store) http.HandlerFunc {
 	}
 }
 
-func DeleteDevice(logger *log.Logger, st store.Store) http.HandlerFunc {
+func DeleteDevice(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		deviceID := chi.URLParam(r, "deviceId")
 		if deviceID == "" {
@@ -243,10 +255,11 @@ func DeleteDevice(logger *log.Logger, st store.Store) http.HandlerFunc {
 
 		if err := st.DeleteDevice(deviceID); err != nil {
 			logger.Printf("delete device error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "device.delete", "device", deviceID), err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
-
+		writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "device.delete", "device", deviceID), nil)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

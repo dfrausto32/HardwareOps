@@ -24,7 +24,7 @@ func TestPutDesiredStateDevice(t *testing.T) {
 	req = withURLParam(req, "deviceId", id)
 	w := httptest.NewRecorder()
 
-	PutDesiredStateDevice(logger, mem).ServeHTTP(w, req)
+	PutDesiredStateDevice(logger, mem, false).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -49,7 +49,7 @@ func TestPutDesiredStateDevice_RequiresArtifactWhenVersionEmpty(t *testing.T) {
 	req = withURLParam(req, "deviceId", id)
 	w := httptest.NewRecorder()
 
-	PutDesiredStateDevice(logger, mem).ServeHTTP(w, req)
+	PutDesiredStateDevice(logger, mem, false).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
@@ -66,7 +66,7 @@ func TestPutDesiredStateDevice_AllowsCheckinIntervalOnly(t *testing.T) {
 	req = withURLParam(req, "deviceId", id)
 	w := httptest.NewRecorder()
 
-	PutDesiredStateDevice(logger, mem).ServeHTTP(w, req)
+	PutDesiredStateDevice(logger, mem, false).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -83,7 +83,7 @@ func TestPutDesiredStateGroup(t *testing.T) {
 	req = withURLParam(req, "groupId", id)
 	w := httptest.NewRecorder()
 
-	PutDesiredStateGroup(logger, mem).ServeHTTP(w, req)
+	PutDesiredStateGroup(logger, mem, false).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -100,7 +100,7 @@ func TestPutDesiredStateGroup_RequiresArtifactWhenVersionEmpty(t *testing.T) {
 	req = withURLParam(req, "groupId", id)
 	w := httptest.NewRecorder()
 
-	PutDesiredStateGroup(logger, mem).ServeHTTP(w, req)
+	PutDesiredStateGroup(logger, mem, false).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
@@ -117,7 +117,7 @@ func TestPutDesiredStateGroup_AllowsCheckinIntervalOnly(t *testing.T) {
 	req = withURLParam(req, "groupId", id)
 	w := httptest.NewRecorder()
 
-	PutDesiredStateGroup(logger, mem).ServeHTTP(w, req)
+	PutDesiredStateGroup(logger, mem, false).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -134,7 +134,7 @@ func TestPutDesiredStateGroup_InvalidCheckinInterval(t *testing.T) {
 	req = withURLParam(req, "groupId", id)
 	w := httptest.NewRecorder()
 
-	PutDesiredStateGroup(logger, mem).ServeHTTP(w, req)
+	PutDesiredStateGroup(logger, mem, false).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)

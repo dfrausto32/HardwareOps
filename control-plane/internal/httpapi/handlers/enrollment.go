@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hardwareops/control-plane/internal/license"
 	"github.com/hardwareops/control-plane/internal/store"
 )
 
@@ -46,8 +47,23 @@ const (
 	maxCSRCommonName = 128
 )
 
-func CreateEnrollmentToken(logger *log.Logger, st store.Store) http.HandlerFunc {
+func CreateEnrollmentToken(logger *log.Logger, st store.Store, lic *license.Manager, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if err := enforceLicense(st, lic); err != nil {
+			status := http.StatusForbidden
+			if errors.Is(err, errLicenseLimitExceeded) {
+				status = http.StatusForbidden
+				http.Error(w, "device limit reached", status)
+				return
+			}
+			if errors.Is(err, errLicenseInvalid) {
+				http.Error(w, "license invalid", status)
+				return
+			}
+			logger.Printf("license enforcement error: %v", err)
+			http.Error(w, "license enforcement error", http.StatusInternalServerError)
+			return
+		}
 		var req CreateEnrollmentTokenRequest
 		if r.Body != nil {
 			dec := json.NewDecoder(r.Body)
@@ -79,9 +95,14 @@ func CreateEnrollmentToken(logger *log.Logger, st store.Store) http.HandlerFunc 
 
 		if err := st.CreateEnrollmentToken(tokenHash, expires); err != nil {
 			logger.Printf("store token error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("token"), "enrollment_token.create", "enrollment_token", ""), err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+
+		event := buildAuditEvent(r, trustProxy, actorUser("token"), "enrollment_token.create", "enrollment_token", "")
+		event.MetadataJSON = auditJSON(map[string]any{"expiresAt": expires})
+		writeAudit(logger, st, event, nil)
 
 		resp := CreateEnrollmentTokenResponse{Token: token, ExpiresAt: expires}
 		w.Header().Set("Content-Type", "application/json")
@@ -89,11 +110,25 @@ func CreateEnrollmentToken(logger *log.Logger, st store.Store) http.HandlerFunc 
 	}
 }
 
-func DeviceEnroll(logger *log.Logger, st store.Store, signer interface {
+func DeviceEnroll(logger *log.Logger, st store.Store, lic *license.Manager, signer interface {
 	SignDeviceCert(csrPEM []byte, deviceID string, validity time.Duration) ([]byte, string, error)
 	CACertPEM() []byte
 }, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if err := enforceLicense(st, lic); err != nil {
+			status := http.StatusForbidden
+			if errors.Is(err, errLicenseLimitExceeded) {
+				http.Error(w, "device limit reached", status)
+				return
+			}
+			if errors.Is(err, errLicenseInvalid) {
+				http.Error(w, "license invalid", status)
+				return
+			}
+			logger.Printf("license enforcement error: %v", err)
+			http.Error(w, "license enforcement error", http.StatusInternalServerError)
+			return
+		}
 		if signer == nil {
 			http.Error(w, "signer not configured", http.StatusInternalServerError)
 			return
@@ -156,6 +191,9 @@ func DeviceEnroll(logger *log.Logger, st store.Store, signer interface {
 			CertPEM:   string(certPEM),
 			CACertPEM: string(signer.CACertPEM()),
 		}
+		event := buildAuditEvent(r, trustProxy, AuditActor{Type: "device", ID: deviceID, AuthMethod: "enrollment_token"}, "device.enroll", "device", deviceID)
+		event.MetadataJSON = auditJSON(map[string]any{"fingerprint": fingerprint})
+		writeAudit(logger, st, event, nil)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	}

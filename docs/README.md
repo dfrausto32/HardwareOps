@@ -28,5 +28,7 @@ This directory contains the guides referenced throughout the repo. Use this inde
 - `development/deployment-options.md` — On‑prem vs AWS deployment shapes and recommendations.
 - `development/artifact-ingest.md` — Manual, CI push, and repo pull ingest modes.
 - `development/auth-rbac.md` — Auth modes, fixed roles, and break‑glass access.
+- `development/auth-secrets-v1.md` — V1 local users + JWT + secrets posture.
 - `development/artifact-signing.md` — Current Ed25519 flow and Cosign/Sigstore migration path.
 - `development/upgrade-strategy.md` — Safe upgrade/rollback process and compatibility rules.
+- `development/license.md` — Signed on‑prem license format + device cap enforcement.

@@ -23,7 +23,7 @@ func TestPutGroup(t *testing.T) {
 	req = withURLParam(req, "groupId", id)
 	w := httptest.NewRecorder()
 
-	PutGroup(logger, mem).ServeHTTP(w, req)
+	PutGroup(logger, mem, false).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)

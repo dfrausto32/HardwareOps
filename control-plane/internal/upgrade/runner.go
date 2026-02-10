@@ -12,17 +12,18 @@ import (
 )
 
 type Status struct {
-	Enabled     bool      `json:"enabled"`
-	Running     bool      `json:"running"`
-	State       string    `json:"state"`
-	StartedAt   time.Time `json:"startedAt,omitempty"`
-	FinishedAt  time.Time `json:"finishedAt,omitempty"`
-	ExitCode    int       `json:"exitCode,omitempty"`
-	Error       string    `json:"error,omitempty"`
-	LogPath     string    `json:"logPath,omitempty"`
-	Command     string    `json:"command,omitempty"`
-	WorkingDir  string    `json:"workingDir,omitempty"`
-	TriggeredAt time.Time `json:"triggeredAt,omitempty"`
+	Enabled         bool      `json:"enabled"`
+	Running         bool      `json:"running"`
+	State           string    `json:"state"`
+	StartedAt       time.Time `json:"startedAt,omitempty"`
+	FinishedAt      time.Time `json:"finishedAt,omitempty"`
+	ExitCode        int       `json:"exitCode,omitempty"`
+	Error           string    `json:"error,omitempty"`
+	LogPath         string    `json:"logPath,omitempty"`
+	Command         string    `json:"command,omitempty"`
+	WorkingDir      string    `json:"workingDir,omitempty"`
+	TriggeredAt     time.Time `json:"triggeredAt,omitempty"`
+	RunnerContainer string    `json:"runnerContainer,omitempty"`
 }
 
 type Runner struct {
@@ -32,6 +33,10 @@ type Runner struct {
 	logDir   string
 	logger   func(string, ...interface{})
 	status   Status
+	mode     string
+	image    string
+	certsDir string
+	env      map[string]string
 }
 
 func NewRunner(applyCmd, workDir, logDir string, logger func(string, ...interface{})) *Runner {
@@ -44,6 +49,7 @@ func NewRunner(applyCmd, workDir, logDir string, logger func(string, ...interfac
 		workDir:  strings.TrimSpace(workDir),
 		logDir:   strings.TrimSpace(logDir),
 		logger:   logger,
+		mode:     "local",
 	}
 	r.status = Status{
 		Enabled:    true,
@@ -53,6 +59,12 @@ func NewRunner(applyCmd, workDir, logDir string, logger func(string, ...interfac
 		WorkingDir: r.workDir,
 	}
 	return r
+}
+
+type RunnerConfig struct {
+	Mode     string
+	Image    string
+	CertsDir string
 }
 
 func (r *Runner) Enabled() bool {
@@ -68,9 +80,52 @@ func (r *Runner) Status() Status {
 	return r.status
 }
 
+func (r *Runner) Config() RunnerConfig {
+	if r == nil {
+		return RunnerConfig{}
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return RunnerConfig{
+		Mode:     r.mode,
+		Image:    r.image,
+		CertsDir: r.certsDir,
+	}
+}
+
+func (r *Runner) ConfigureDocker(image, certsDir string, env map[string]string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.mode = "docker"
+	img := strings.TrimSpace(image)
+	if img == "" {
+		img = detectSelfImage()
+	}
+	r.image = strings.TrimSpace(img)
+	r.certsDir = strings.TrimSpace(certsDir)
+	r.env = env
+}
+
 func (r *Runner) Start() (Status, error) {
 	if r == nil || !r.Enabled() {
 		return Status{Enabled: false, State: "disabled"}, errors.New("upgrade runner not configured")
+	}
+	if strings.EqualFold(r.mode, "docker") {
+		if err := r.validateDockerInputs(); err != nil {
+			r.mu.Lock()
+			r.status.Enabled = true
+			r.status.Running = false
+			r.status.State = "failed"
+			r.status.Error = err.Error()
+			r.status.ExitCode = 1
+			r.status.FinishedAt = time.Now().UTC()
+			status := r.status
+			r.mu.Unlock()
+			return status, err
+		}
 	}
 	r.mu.Lock()
 	if r.status.Running {
@@ -89,10 +144,15 @@ func (r *Runner) Start() (Status, error) {
 	r.status.LogPath = r.nextLogPath(now)
 	r.status.Command = r.applyCmd
 	r.status.WorkingDir = r.workDir
+	if strings.EqualFold(r.mode, "docker") {
+		r.status.RunnerContainer = "hardwareops-upgrade-runner"
+	} else {
+		r.status.RunnerContainer = ""
+	}
 	statusSnapshot := r.status
 	r.mu.Unlock()
 
-	go r.run(statusSnapshot.LogPath)
+	go r.run(statusSnapshot.LogPath, statusSnapshot.RunnerContainer)
 	return statusSnapshot, nil
 }
 
@@ -106,10 +166,29 @@ func (r *Runner) nextLogPath(start time.Time) string {
 	return filepath.Join(dir, filename)
 }
 
-func (r *Runner) run(logPath string) {
+func (r *Runner) run(logPath string, runnerContainer string) {
 	startedAt := time.Now().UTC()
+	mode := "local"
+	image := ""
+	certsDir := ""
+	env := map[string]string{}
+	r.mu.RLock()
+	if r.mode != "" {
+		mode = r.mode
+	}
+	image = r.image
+	certsDir = r.certsDir
+	for k, v := range r.env {
+		env[k] = v
+	}
+	r.mu.RUnlock()
+
 	if r.logger != nil {
-		r.logger("upgrade apply start cmd=%q log=%s", r.applyCmd, logPath)
+		if mode == "docker" {
+			r.logger("upgrade apply start mode=docker image=%q log=%s", image, logPath)
+		} else {
+			r.logger("upgrade apply start cmd=%q log=%s", r.applyCmd, logPath)
+		}
 	}
 
 	exitCode := 0
@@ -120,24 +199,33 @@ func (r *Runner) run(logPath string) {
 		exitCode = 1
 	} else {
 		defer logFile.Close()
-		cmd := exec.Command("/bin/sh", "-c", r.applyCmd)
-		cmd.Stdout = logFile
-		cmd.Stderr = logFile
-		if r.workDir != "" {
-			cmd.Dir = r.workDir
-		}
-		if err := cmd.Start(); err != nil {
-			runErr = fmt.Errorf("start upgrade cmd: %w", err)
-			exitCode = 1
-		} else if err := cmd.Wait(); err != nil {
-			runErr = fmt.Errorf("upgrade cmd failed: %w", err)
-			if cmd.ProcessState != nil {
-				exitCode = cmd.ProcessState.ExitCode()
-			} else {
-				exitCode = 1
+		var cmd *exec.Cmd
+		if mode == "docker" {
+			cmd, runErr = buildDockerCmd(r.applyCmd, image, certsDir, runnerContainer, env)
+		} else {
+			cmd = exec.Command("/bin/sh", "-c", r.applyCmd)
+			if r.workDir != "" {
+				cmd.Dir = r.workDir
 			}
-		} else if cmd.ProcessState != nil {
-			exitCode = cmd.ProcessState.ExitCode()
+		}
+		if runErr == nil && cmd != nil {
+			cmd.Stdout = logFile
+			cmd.Stderr = logFile
+			if err := cmd.Start(); err != nil {
+				runErr = fmt.Errorf("start upgrade cmd: %w", err)
+				exitCode = 1
+			} else if err := cmd.Wait(); err != nil {
+				runErr = fmt.Errorf("upgrade cmd failed: %w", err)
+				if cmd.ProcessState != nil {
+					exitCode = cmd.ProcessState.ExitCode()
+				} else {
+					exitCode = 1
+				}
+			} else if cmd.ProcessState != nil {
+				exitCode = cmd.ProcessState.ExitCode()
+			}
+		} else if runErr != nil {
+			exitCode = 1
 		}
 	}
 
@@ -160,4 +248,115 @@ func (r *Runner) run(logPath string) {
 			r.logger("upgrade apply success after %s", finishedAt.Sub(startedAt))
 		}
 	}
+}
+
+func buildDockerCmd(applyCmd, image, certsDir, runnerContainer string, env map[string]string) (*exec.Cmd, error) {
+	img := strings.TrimSpace(image)
+	if img == "" {
+		if detected := detectSelfImage(); detected != "" {
+			img = detected
+		}
+	}
+	if img == "" {
+		return nil, errors.New("upgrade runner image not configured")
+	}
+	stackHost := detectMountSource("/stack")
+	if stackHost == "" {
+		return nil, errors.New("stack mount not detected; ensure /stack is mounted into control-plane")
+	}
+
+	name := strings.TrimSpace(runnerContainer)
+	if name == "" {
+		name = "hardwareops-upgrade-runner"
+	}
+	args := []string{
+		"run",
+		"--rm",
+		"--name", name,
+		"--entrypoint", "/bin/sh",
+		"-w", "/stack",
+		"-v", "/var/run/docker.sock:/var/run/docker.sock",
+		"-v", fmt.Sprintf("%s:/stack", stackHost),
+	}
+	if certsDir = strings.TrimSpace(certsDir); certsDir != "" {
+		args = append(args, "-v", fmt.Sprintf("%s:/certs:ro", certsDir))
+	}
+	for key, val := range env {
+		val = strings.TrimSpace(val)
+		if val == "" {
+			continue
+		}
+		args = append(args, "-e", fmt.Sprintf("%s=%s", key, val))
+	}
+	args = append(args, img, "-c", applyCmd)
+	cmd := exec.Command("docker", args...)
+	return cmd, nil
+}
+
+func (r *Runner) validateDockerInputs() error {
+	stackHost := detectMountSource("/stack")
+	if stackHost == "" {
+		return errors.New("stack mount not detected; ensure /stack is mounted into control-plane")
+	}
+	img := strings.TrimSpace(r.image)
+	if img == "" {
+		img = detectSelfImage()
+	}
+	if img == "" {
+		return errors.New("upgrade runner image not configured")
+	}
+	if strings.ContainsAny(img, "<>") {
+		return fmt.Errorf("upgrade runner image invalid: %s", img)
+	}
+	if err := exec.Command("docker", "image", "inspect", img).Run(); err != nil {
+		return fmt.Errorf("upgrade runner image not found/invalid: %s", img)
+	}
+	updatesDir := strings.TrimSpace(os.Getenv("UPGRADE_UPDATES_DIR"))
+	if updatesDir == "" {
+		updatesDir = "/stack/updates"
+	}
+	if stat, err := os.Stat(updatesDir); err != nil || !stat.IsDir() {
+		return fmt.Errorf("updates dir missing: %s", updatesDir)
+	}
+	matches, _ := filepath.Glob(filepath.Join(updatesDir, "hardwareops-upgrade-*.tar.gz"))
+	if len(matches) == 0 {
+		return fmt.Errorf("no upgrade bundle found in %s", updatesDir)
+	}
+	envCandidates := []string{
+		"/stack/.env.onprem",
+		"/stack/.env.onprem.example",
+		"/stack/control-plane.env",
+		"/stack/deploy/compose/.env.onprem.example",
+	}
+	for _, candidate := range envCandidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return nil
+		}
+	}
+	return errors.New("no env file found in /stack (expected .env.onprem or control-plane.env)")
+}
+
+func detectSelfImage() string {
+	container := strings.TrimSpace(os.Getenv("HOSTNAME"))
+	if container == "" {
+		return ""
+	}
+	out, err := exec.Command("docker", "inspect", container, "--format", "{{.Config.Image}}").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func detectMountSource(dest string) string {
+	container := strings.TrimSpace(os.Getenv("HOSTNAME"))
+	if container == "" {
+		return ""
+	}
+	format := fmt.Sprintf("{{range .Mounts}}{{if eq .Destination %q}}{{.Source}}{{end}}{{end}}", dest)
+	out, err := exec.Command("docker", "inspect", container, "--format", format).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }

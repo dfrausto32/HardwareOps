@@ -5,7 +5,9 @@ import (
 	"io"
 	"time"
 
+	"github.com/hardwareops/control-plane/internal/auth"
 	"github.com/hardwareops/control-plane/internal/events"
+	"github.com/hardwareops/control-plane/internal/license"
 	"github.com/hardwareops/control-plane/internal/store"
 	"github.com/hardwareops/control-plane/internal/upgrade"
 )
@@ -45,4 +47,6 @@ type Dependencies struct {
 	MaintenanceToken   string
 	Upgrade            *upgrade.Runner
 	UpgradeUpdatesDir  string
+	Auth               *auth.Manager
+	License            *license.Manager
 }

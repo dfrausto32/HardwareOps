@@ -7,12 +7,15 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/hardwareops/control-plane/internal/auth"
 	"github.com/hardwareops/control-plane/internal/config"
 	cpcrypto "github.com/hardwareops/control-plane/internal/crypto"
 	"github.com/hardwareops/control-plane/internal/events"
 	"github.com/hardwareops/control-plane/internal/httpapi"
+	"github.com/hardwareops/control-plane/internal/license"
 	"github.com/hardwareops/control-plane/internal/logging"
 	"github.com/hardwareops/control-plane/internal/migrate"
 	"github.com/hardwareops/control-plane/internal/objectstore"
@@ -75,13 +78,67 @@ func main() {
 	}
 
 	hub := events.NewHub(128)
+	store := postgres.New(pool)
+	var licenseManager *license.Manager
+	if cfg.LicenseEnforce {
+		manager, err := license.NewManager(cfg.LicensePath, cfg.LicensePublicKey, cfg.LicensePublicKeyPath, cfg.LicenseEnforce, cfg.LicenseCacheTTL)
+		if err != nil {
+			logger.Fatalf("license init: %v", err)
+		}
+		licenseManager = manager
+	}
 	upgradeLogDir := cfg.UpgradeLogDir
 	if upgradeLogDir == "" {
 		upgradeLogDir = cfg.LogDir
 	}
-	upgradeRunner := upgrade.NewRunner(cfg.UpgradeApplyCmd, cfg.UpgradeWorkDir, upgradeLogDir, logger.Printf)
+	var upgradeRunner *upgrade.Runner
+	if strings.EqualFold(cfg.UpgradeRunnerMode, "docker") {
+		upgradeRunner = upgrade.NewRunner(cfg.UpgradeApplyCmd, cfg.UpgradeWorkDir, upgradeLogDir, logger.Printf)
+	} else if cfg.UpgradeRunnerMode != "" {
+		logger.Printf("upgrade runner disabled: mode %q not supported (docker only)", cfg.UpgradeRunnerMode)
+	}
+	if upgradeRunner != nil {
+		env := map[string]string{
+			"STACK_DIR":           "/stack",
+			"UPGRADE_UPDATES_DIR": "/stack/updates",
+		}
+		if baseURL := os.Getenv("PUBLIC_BASE_URL"); baseURL != "" {
+			env["PUBLIC_BASE_URL"] = baseURL
+		}
+		if cfg.MaintenanceToken != "" {
+			env["MAINTENANCE_TOKEN"] = cfg.MaintenanceToken
+		}
+		if pull := os.Getenv("PULL_IMAGES"); pull != "" {
+			env["PULL_IMAGES"] = pull
+		}
+		if project := os.Getenv("PROJECT_NAME"); project != "" {
+			env["PROJECT_NAME"] = project
+		}
+		if certsDir := os.Getenv("CERTS_DIR"); certsDir != "" {
+			env["CERTS_DIR"] = "/certs"
+			env["CA_CERT_PATH"] = "/certs/ca.crt"
+			upgradeRunner.ConfigureDocker(cfg.UpgradeRunnerImage, certsDir, env)
+		} else {
+			upgradeRunner.ConfigureDocker(cfg.UpgradeRunnerImage, "", env)
+		}
+	}
+	var authManager *auth.Manager
+	if cfg.AuthMode != "" && cfg.AuthMode != "disabled" {
+		manager, err := auth.NewManager(cfg.AuthMode, cfg.AuthJWTSecret, cfg.AuthTokenTTL, cfg.AuthIssuer, store)
+		if err != nil {
+			logger.Fatalf("auth init: %v", err)
+		}
+		authManager = manager
+		if cfg.AuthMode == auth.ModeLocal {
+			if created, err := auth.EnsureBootstrapAdmin(store, cfg.AuthBootstrapEmail, cfg.AuthBootstrapPassword); err != nil {
+				logger.Printf("auth bootstrap error: %v", err)
+			} else if created {
+				logger.Printf("bootstrap admin created: %s", cfg.AuthBootstrapEmail)
+			}
+		}
+	}
 	deps := httpapi.Dependencies{
-		Store:            postgres.New(pool),
+		Store:            store,
 		Signer:           signer,
 		ObjectStore:      objStore,
 		S3Bucket:         cfg.S3Bucket,
@@ -101,6 +158,41 @@ func main() {
 		MaintenanceToken:   cfg.MaintenanceToken,
 		Upgrade:            upgradeRunner,
 		UpgradeUpdatesDir:  cfg.UpgradeUpdatesDir,
+		Auth:               authManager,
+		License:            licenseManager,
+	}
+
+	if err := store.EnsureAuditRetentionDays(cfg.AuditRetentionDays); err != nil {
+		logger.Printf("audit retention init error: %v", err)
+	}
+
+	if cfg.AuditRetentionCleanupInterval > 0 {
+		interval := cfg.AuditRetentionCleanupInterval
+		go func() {
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				retention, err := store.GetAuditRetentionDays()
+				if err != nil {
+					logger.Printf("audit retention fetch error: %v", err)
+				} else {
+					days := retention.Days
+					if days <= 0 {
+						days = cfg.AuditRetentionDays
+					}
+					if days <= 0 {
+						days = 90
+					}
+					cutoff := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
+					if count, err := store.DeleteAuditEventsBefore(cutoff); err != nil {
+						logger.Printf("delete audit events error: %v", err)
+					} else if count > 0 {
+						logger.Printf("deleted audit events count=%d cutoff=%s", count, cutoff.Format(time.RFC3339))
+					}
+				}
+				<-ticker.C
+			}
+		}()
 	}
 
 	if cfg.LogIngestAddr != "" {

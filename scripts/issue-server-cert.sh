@@ -30,12 +30,20 @@ CN = ${DOMAIN}
 keyUsage = digitalSignature, keyEncipherment
 extendedKeyUsage = serverAuth
 subjectKeyIdentifier = hash
+subjectAltName = @alt_names
+
+[v3_cert]
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid,issuer
 subjectAltName = @alt_names
 
 [alt_names]
 DNS.1 = ${DOMAIN}
 EOF
+
+rm -f "$SERVER_KEY" "$SERVER_CERT" "$SERVER_CSR"
 
 openssl req -new -newkey rsa:2048 -nodes \
   -keyout "$SERVER_KEY" \
@@ -45,7 +53,7 @@ openssl req -new -newkey rsa:2048 -nodes \
 openssl x509 -req -in "$SERVER_CSR" \
   -CA "$CA_CERT" -CAkey "$CA_KEY" -CAcreateserial \
   -out "$SERVER_CERT" -days "$SERVER_DAYS" \
-  -extensions v3_req -extfile "$tmp_cfg"
+  -extensions v3_cert -extfile "$tmp_cfg"
 
 rm -f "$tmp_cfg"
 

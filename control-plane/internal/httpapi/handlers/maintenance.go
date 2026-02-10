@@ -2,9 +2,12 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/hardwareops/control-plane/internal/store"
 )
 
 type MaintenanceResponse struct {
@@ -38,7 +41,7 @@ func GetMaintenance(state MaintenanceState) http.HandlerFunc {
 	}
 }
 
-func SetMaintenance(state MaintenanceState, token string) http.HandlerFunc {
+func SetMaintenance(logger *log.Logger, st store.Store, state MaintenanceState, token string, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if state == nil {
 			http.Error(w, "maintenance not configured", http.StatusNotFound)
@@ -56,8 +59,25 @@ func SetMaintenance(state MaintenanceState, token string) http.HandlerFunc {
 			http.Error(w, "invalid json", http.StatusBadRequest)
 			return
 		}
+		beforeEnabled, beforeMessage, beforeUpdatedAt := state.Get()
 		state.Set(req.Enabled, strings.TrimSpace(req.Message))
 		enabled, message, updatedAt := state.Get()
+		authMethod := "ui"
+		if token != "" {
+			authMethod = "maintenance_token"
+		}
+		event := buildAuditEvent(r, trustProxy, actorUser(authMethod), "maintenance.set", "maintenance", "control-plane")
+		event.BeforeJSON = auditJSON(map[string]any{
+			"enabled":   beforeEnabled,
+			"message":   beforeMessage,
+			"updatedAt": beforeUpdatedAt,
+		})
+		event.AfterJSON = auditJSON(map[string]any{
+			"enabled":   enabled,
+			"message":   message,
+			"updatedAt": updatedAt,
+		})
+		writeAudit(logger, st, event, nil)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(MaintenanceResponse{
 			Enabled:   enabled,

@@ -26,6 +26,7 @@ This document defines a **safe, repeatable** upgrade process for HardwareOps in 
 - ✅ Validate **disk space** and service health.
 - ✅ Review **release notes** (migrations, breaking changes).
 - ✅ **Enable maintenance mode** (UI toggle or `MAINTENANCE_MODE=1`) to freeze writes.
+- ✅ Run **upgrade preflight** in the UI (checks runner, updates dir, docker socket, bundles, disk space).
 
 ## Upgrade Paths
 
@@ -53,6 +54,7 @@ This document defines a **safe, repeatable** upgrade process for HardwareOps in 
 4) **Apply update**
    - From the UI (requires `MAINTENANCE_TOKEN`):
      - Click **Enable maintenance** → **Apply update**.
+     - Apply will **fail fast** if preflight has any blocking errors.
    - Or run manually:
      ```bash
      # upgrade package (images + compose)
@@ -76,6 +78,15 @@ This document defines a **safe, repeatable** upgrade process for HardwareOps in 
 7) **Monitor**
    - Check error rates, apply results, device status transitions.
 
+### Upgrade Preflight (UI)
+The Settings page includes a **Preflight** panel that verifies:
+- Upgrade runner configured
+- Updates directory present
+- Upgrade bundle present (if expected)
+- Docker socket mounted (for containerized stacks)
+- Disk space at workdir/updates dir
+Use this to catch missing mounts or packages before applying.
+
 ### B) Auto‑Migrate on Startup (dev / small env)
 **Use when:** development, staging, or single‑node environments.
 
@@ -85,16 +96,34 @@ This document defines a **safe, repeatable** upgrade process for HardwareOps in 
 **Risk:** a bad migration affects prod immediately; no rollback without restore.
 
 ## Rollback Strategy
-Because schema migrations are forward‑only, rollback requires **restoring backups**:
+**Fast rollback (images only):** `apply-upgrade.sh` will attempt to rollback
+control‑plane + gateway images to the previously running versions if the upgrade
+fails. This does **not** undo DB migrations.
+
+**Full rollback:** Because schema migrations are forward‑only, full rollback requires
+**restoring backups**:
 1) Stop control‑plane + UI.
 2) Restore Postgres and object store from snapshot.
 3) Re‑deploy previous control‑plane + UI versions.
 4) Resume traffic.
 
 ## Agent Upgrade Strategy
-- Prefer **rolling upgrades** (batch by batch).
-- Stagger with **check‑in jitter** to avoid thundering herd.
-- Maintain compatibility with the current control‑plane APIs.
+Agents are upgraded **via artifacts**, not via control‑plane stack upgrades.
+
+**Recommended flow (systemd agents):**
+1) Build an `app_bundle` artifact that contains the new agent binary and a `preapply.sh`:
+   - `preapply.sh` should stop the agent service cleanly.
+2) The agent apply step replaces the binary, updates permissions, and restarts the service.
+3) Post‑apply health check confirms the agent re‑connected.
+
+**Recommended flow (containerized agents):**
+1) Build a `container_image` artifact (docker save tar).
+2) Agent apply loads the image, stops the running container, and starts the new one.
+
+**Rollout guidance:**
+- Use group desired state with canary labels (small batch first).
+- Stagger via agent check‑in jitter to avoid load spikes.
+- Keep the agent compatible with the last N control‑plane versions.
 
 ## Operational Safeguards
 - **Feature flags** for new behavior where possible.
@@ -105,10 +134,12 @@ Because schema migrations are forward‑only, rollback requires **restoring back
   - Apply a small test artifact to a canary device
 
 ## Maintenance + Auto‑Apply Requirements
-- Control‑plane env must include:
+- Control‑plane env must include (docker runner only):
   - `MAINTENANCE_MODE=1` (start in maintenance)
   - `MAINTENANCE_TOKEN=...` (UI toggle + upgrade apply)
   - `UPGRADE_APPLY_CMD=/path/to/scripts/apply-upgrade.sh`
+  - `UPGRADE_RUNNER_MODE=docker` (runs apply in a separate container)
+  - `UPGRADE_RUNNER_IMAGE=...` (image used for the upgrade runner)
 - UI build args must include:
   - `VITE_MAINTENANCE_TOKEN` matching `MAINTENANCE_TOKEN`
 - If the control‑plane runs **in Docker**, the upgrade runner needs:
@@ -117,6 +148,18 @@ Because schema migrations are forward‑only, rollback requires **restoring back
   - `UPGRADE_WORK_DIR` + `UPGRADE_APPLY_CMD` pointing at the mounted script
 - If running in containers, the upgrade runner needs access to Docker
   (e.g., mount `/var/run/docker.sock` into the control‑plane container).
+- Docker client API must be **>= 1.44** (Docker 25+). Older clients will fail
+  to load staged images; rebuild the control‑plane image if needed.
+
+## Recommended On‑Prem Workflow
+1) **Launch normally** (maintenance off).
+   - `MAINTENANCE_MODE=0` in `.env.onprem`.
+   - The upgrade runner should be configured but idle.
+2) **Stage an upgrade**
+   - Copy the upgrade tarball into `/stack/updates`.
+3) **Enable maintenance in UI** (freeze writes).
+4) **Apply upgrade** (UI spawns dedicated runner container).
+5) **Verify + exit maintenance** (UI or auto‑disable).
 
 ## Future Enhancements
 - Advisory DB migration lock to prevent concurrent migrations.

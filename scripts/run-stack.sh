@@ -52,16 +52,22 @@ fi
 
 if [ ! -f "$ENV_FILE" ] || [ "$FORCE" = "1" ]; then
   cp "$ENV_EXAMPLE" "$ENV_FILE"
-  python3 - "$ENV_FILE" "$CERTS_DIR" "$PUBLIC_BASE_URL" "$BASE_DIR" <<'PY'
+fi
+python3 - "$ENV_FILE" "$CERTS_DIR" "$PUBLIC_BASE_URL" "$BASE_DIR" "$FORCE" <<'PY'
 import sys, re
-path, certs, base, stack_dir = sys.argv[1:5]
-def set_kv(lines, key, val):
+path, certs, base, stack_dir, force = sys.argv[1:6]
+force = force == "1"
+def set_kv(lines, key, val, override=False):
     out = []
     found = False
     for line in lines:
         if re.match(rf"^{re.escape(key)}=", line):
-            out.append(f"{key}={val}")
             found = True
+            current = line.split("=", 1)[1] if "=" in line else ""
+            if override or force or current.strip() == "":
+                out.append(f"{key}={val}")
+            else:
+                out.append(line)
         else:
             out.append(line)
     if not found:
@@ -69,7 +75,10 @@ def set_kv(lines, key, val):
     return out
 
 with open(path, "r") as f:
-    lines = f.read().splitlines()
+    raw = f.read()
+if "\\n" in raw and "\n" not in raw:
+    raw = raw.replace("\\n", "\n")
+lines = raw.splitlines()
 lines = set_kv(lines, "CERTS_DIR", certs)
 lines = set_kv(lines, "PUBLIC_BASE_URL", base)
 lines = set_kv(lines, "CORS_ALLOWED_ORIGINS", base)
@@ -78,10 +87,14 @@ lines = set_kv(lines, "UPGRADE_APPLY_CMD", "/app/scripts/apply-upgrade.sh")
 lines = set_kv(lines, "UPGRADE_WORK_DIR", "/stack")
 lines = set_kv(lines, "UPGRADE_LOG_DIR", "/var/lib/hardwareops/logs")
 lines = set_kv(lines, "UPGRADE_UPDATES_DIR", "/stack/updates")
+lines = set_kv(lines, "UPGRADE_RUNNER_MODE", "docker")
+lines = set_kv(lines, "MAINTENANCE_MODE", "0")
+lines = set_kv(lines, "MAINTENANCE_MESSAGE", "", override=True)
 with open(path, "w") as f:
     f.write("\n".join(lines) + "\n")
 PY
-fi
+
+mkdir -p "$STACK_DIR/updates"
 
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" -p "$PROJECT_NAME" up -d
 

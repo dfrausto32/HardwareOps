@@ -301,6 +301,11 @@ services:
       TRUST_PROXY: "1"
       CLIENT_CERT_HEADER: X-Client-Cert
       CORS_ALLOWED_ORIGINS: \${CORS_ALLOWED_ORIGINS:-https://hardwareops.internal}
+      LICENSE_ENFORCE: \${LICENSE_ENFORCE:-0}
+      LICENSE_PATH: \${LICENSE_PATH:-}
+      LICENSE_PUBLIC_KEY: \${LICENSE_PUBLIC_KEY:-}
+      LICENSE_PUBLIC_KEY_PATH: \${LICENSE_PUBLIC_KEY_PATH:-}
+      LICENSE_CACHE_TTL: \${LICENSE_CACHE_TTL:-30s}
       LOG_DIR: /var/lib/hardwareops/logs
       DISABLE_HTTP2: "1"
       MAINTENANCE_MODE: \${MAINTENANCE_MODE:-1}
@@ -310,6 +315,8 @@ services:
       UPGRADE_WORK_DIR: \${UPGRADE_WORK_DIR:-/stack}
       UPGRADE_LOG_DIR: \${UPGRADE_LOG_DIR:-/var/lib/hardwareops/logs}
       UPGRADE_UPDATES_DIR: \${UPGRADE_UPDATES_DIR:-/stack/updates}
+      UPGRADE_RUNNER_MODE: \${UPGRADE_RUNNER_MODE:-docker}
+      UPGRADE_RUNNER_IMAGE: \${UPGRADE_RUNNER_IMAGE:-${cp_tag}}
       STACK_DIR: \${STACK_DIR:-/stack}
     volumes:
       - \${CERTS_DIR:-/opt/hardwareops/certs}:/certs:ro

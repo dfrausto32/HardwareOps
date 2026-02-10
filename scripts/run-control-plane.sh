@@ -3,6 +3,13 @@ set -euo pipefail
 
 BASE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
+if [ -n "${CONTROL_PLANE_ENV_FILE:-}" ] && [ -f "$CONTROL_PLANE_ENV_FILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$CONTROL_PLANE_ENV_FILE"
+  set +a
+fi
+
 if [ -z "${ENABLE_TLS+x}" ]; then
   if [ "${USE_PROXY:-0}" = "1" ]; then
     ENABLE_TLS=0
@@ -11,12 +18,29 @@ if [ -z "${ENABLE_TLS+x}" ]; then
   fi
 fi
 FORCE_DEV_CERTS=${FORCE_DEV_CERTS:-0}
+SKIP_DEV_CERTS=${SKIP_DEV_CERTS:-0}
+CERTS_DIR=${CERTS_DIR:-}
+SKIP_CERTS_COPY=${SKIP_CERTS_COPY:-0}
 
 # Resolve CA paths (prefer env overrides, but normalize to absolute)
-CA_CERT_INPUT=${CA_CERT_PATH:-$BASE_DIR/dev-ca.crt}
-CA_KEY_INPUT=${CA_KEY_PATH:-$BASE_DIR/dev-ca.key}
-TLS_CERT_INPUT=${TLS_CERT_PATH:-$BASE_DIR/dev-server.crt}
-TLS_KEY_INPUT=${TLS_KEY_PATH:-$BASE_DIR/dev-server.key}
+# If certs exist in the current working directory, prefer them when no env overrides are set.
+if [ -z "${CA_CERT_PATH+x}" ] && [ -z "${CA_KEY_PATH+x}" ]; then
+  if [ -f "$PWD/dev-ca.crt" ] && [ -f "$PWD/dev-ca.key" ]; then
+    CERTS_DIR=${CERTS_DIR:-$PWD}
+    SKIP_CERTS_COPY=1
+  fi
+fi
+if [ -n "$CERTS_DIR" ]; then
+  CA_CERT_INPUT=${CA_CERT_PATH:-$CERTS_DIR/dev-ca.crt}
+  CA_KEY_INPUT=${CA_KEY_PATH:-$CERTS_DIR/dev-ca.key}
+  TLS_CERT_INPUT=${TLS_CERT_PATH:-$CERTS_DIR/dev-server.crt}
+  TLS_KEY_INPUT=${TLS_KEY_PATH:-$CERTS_DIR/dev-server.key}
+else
+  CA_CERT_INPUT=${CA_CERT_PATH:-$BASE_DIR/dev-ca.crt}
+  CA_KEY_INPUT=${CA_KEY_PATH:-$BASE_DIR/dev-ca.key}
+  TLS_CERT_INPUT=${TLS_CERT_PATH:-$BASE_DIR/dev-server.crt}
+  TLS_KEY_INPUT=${TLS_KEY_PATH:-$BASE_DIR/dev-server.key}
+fi
 CA_CERT_REPO="$BASE_DIR/dev-ca.crt"
 CA_KEY_REPO="$BASE_DIR/dev-ca.key"
 TLS_CERT_REPO="$BASE_DIR/dev-server.crt"
@@ -36,6 +60,12 @@ fi
 
 CSR_DIR=${CSR_DIR:-/tmp/hardwareops}
 mkdir -p "$CSR_DIR"
+
+SKIP_CERTS_GEN=0
+if [ "$SKIP_DEV_CERTS" = "1" ]; then
+  SKIP_CERTS_GEN=1
+  FORCE_DEV_CERTS=0
+fi
 
 # Force regeneration of dev certs when requested
 if [ "$FORCE_DEV_CERTS" = "1" ]; then
@@ -61,7 +91,7 @@ if [ "$FORCE_DEV_CERTS" != "1" ]; then
 fi
 
 # Create dev CA only when missing (or forced). Do not reissue unless forced.
-if [ "$FORCE_DEV_CERTS" = "1" ] || { [ ! -f "$CA_CERT" ] && [ ! -f "$CA_KEY" ]; }; then
+if [ "$SKIP_CERTS_GEN" = "0" ] && { [ "$FORCE_DEV_CERTS" = "1" ] || { [ ! -f "$CA_CERT" ] && [ ! -f "$CA_KEY" ]; }; }; then
   mkdir -p "$(dirname "$CA_CERT")" "$(dirname "$CA_KEY")"
   tmp_cfg=$(mktemp)
   cat > "$tmp_cfg" <<EOF
@@ -91,7 +121,7 @@ else
 fi
 
 # Ensure dev CA is available in repo root for easy reuse
-if [ "$CA_CERT" != "$CA_CERT_REPO" ]; then
+if [ "$SKIP_CERTS_COPY" != "1" ] && [ "$CA_CERT" != "$CA_CERT_REPO" ]; then
   cp -f "$CA_CERT" "$CA_CERT_REPO"
   cp -f "$CA_KEY" "$CA_KEY_REPO"
   CA_CERT="$CA_CERT_REPO"
@@ -106,7 +136,7 @@ if [ ! -f "$CSR_DIR/device.csr" ] || [ ! -f "$CSR_DIR/device.key" ]; then
 fi
 
 if [ "$ENABLE_TLS" = "1" ]; then
-  if [ "$FORCE_DEV_CERTS" = "1" ] || { [ ! -f "$TLS_CERT" ] && [ ! -f "$TLS_KEY" ]; }; then
+  if [ "$SKIP_CERTS_GEN" = "0" ] && { [ "$FORCE_DEV_CERTS" = "1" ] || { [ ! -f "$TLS_CERT" ] && [ ! -f "$TLS_KEY" ]; }; }; then
     mkdir -p "$(dirname "$TLS_CERT")" "$(dirname "$TLS_KEY")"
     openssl req -new -newkey rsa:2048 -nodes \
       -keyout "$TLS_KEY" -out "$CSR_DIR/server.csr" \
@@ -135,7 +165,7 @@ EOF
     fi
   fi
   # Ensure dev server cert is available in repo root for easy reuse
-  if [ "$TLS_CERT" != "$TLS_CERT_REPO" ]; then
+  if [ "$SKIP_CERTS_COPY" != "1" ] && [ "$TLS_CERT" != "$TLS_CERT_REPO" ]; then
     cp -f "$TLS_CERT" "$TLS_CERT_REPO"
     cp -f "$TLS_KEY" "$TLS_KEY_REPO"
     TLS_CERT="$TLS_CERT_REPO"

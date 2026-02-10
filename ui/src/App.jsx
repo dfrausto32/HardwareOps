@@ -20,7 +20,21 @@ import {
   setMaintenance,
   getUpgradeStatus,
   getUpgradeAvailable,
+  getUpgradePreflight,
   applyUpgrade,
+  listAuditEvents,
+  downloadAuditCSV,
+  getAuditRetention,
+  setAuditRetention,
+  login as apiLogin,
+  getMe,
+  getAuthStatus,
+  registerWithVoucher,
+  createVoucher,
+  listUsers,
+  createUser,
+  getAuthToken,
+  setAuthToken as persistAuthToken,
 } from './api'
 
 const nav = [
@@ -107,10 +121,25 @@ function formatSelector(selector) {
   return entries.map(([key, value]) => `${key}=${value}`).join(', ')
 }
 
+function toIsoIfValid(value) {
+  if (!value) return ''
+  const dt = new Date(value)
+  if (Number.isNaN(dt.getTime())) return ''
+  return dt.toISOString()
+}
+
+function formatTime(value) {
+  if (!value) return '—'
+  const dt = new Date(value)
+  if (Number.isNaN(dt.getTime())) return String(value)
+  return dt.toLocaleString()
+}
+
 export default function App() {
   const apiBaseUrl = useMemo(() => {
     return import.meta.env.VITE_API_BASE_URL || 'https://localhost:8080'
   }, [])
+  const [authToken, setAuthToken] = useState(() => getAuthToken())
   const simulateProd = import.meta.env.VITE_SIMULATE_PROD === '1'
   const apiProxy = !simulateProd && import.meta.env.VITE_API_PROXY === '1'
   const wsBaseUrl = useMemo(() => {
@@ -124,7 +153,43 @@ export default function App() {
     if (apiBaseUrl.startsWith('http://')) return apiBaseUrl.replace('http://', 'ws://')
     return apiBaseUrl
   }, [apiBaseUrl, apiProxy])
-  const wsUrl = `${wsBaseUrl}/api/v1/events`
+  const wsUrl = useMemo(() => {
+    const url = new URL(`${wsBaseUrl}/api/v1/events`)
+    if (authToken) {
+      url.searchParams.set('token', authToken)
+    }
+    return url.toString()
+  }, [wsBaseUrl, authToken])
+
+  const [authUser, setAuthUser] = useState(null)
+  const [authError, setAuthError] = useState('')
+  const [loginForm, setLoginForm] = useState({ email: '', password: '' })
+  const [loginStatus, setLoginStatus] = useState('')
+  const [authView, setAuthView] = useState('login')
+  const [authStatus, setAuthStatus] = useState({ enabled: false, mode: 'disabled', loaded: false })
+  const [registerForm, setRegisterForm] = useState({
+    token: '',
+    email: '',
+    password: '',
+    displayName: '',
+  })
+  const [registerStatus, setRegisterStatus] = useState('')
+  const [users, setUsers] = useState([])
+  const [usersError, setUsersError] = useState('')
+  const [usersStatus, setUsersStatus] = useState('')
+  const [userForm, setUserForm] = useState({
+    email: '',
+    password: '',
+    displayName: '',
+    roles: ['viewer'],
+  })
+  const [voucherForm, setVoucherForm] = useState({
+    email: '',
+    ttlHours: '24',
+    roles: ['viewer'],
+  })
+  const [voucherToken, setVoucherToken] = useState('')
+  const [voucherStatus, setVoucherStatus] = useState('')
 
   const [view, setView] = useState(() => {
     const hash = window.location.hash.replace('#', '')
@@ -139,6 +204,43 @@ export default function App() {
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
+
+  useEffect(() => {
+    async function loadAuthStatus() {
+      try {
+        const res = await getAuthStatus()
+        setAuthStatus({ ...res, loaded: true })
+      } catch (err) {
+        setAuthStatus({ enabled: false, mode: 'disabled', loaded: true })
+      }
+    }
+    loadAuthStatus()
+  }, [])
+
+  useEffect(() => {
+    async function loadMe() {
+      if (!authToken) {
+        setAuthUser(null)
+        return
+      }
+      setAuthError('')
+      try {
+        const res = await getMe()
+        setAuthUser(res)
+      } catch (err) {
+        persistAuthToken('')
+        setAuthToken('')
+        setAuthUser(null)
+        setAuthError(err.message || String(err))
+      }
+    }
+    loadMe()
+  }, [authToken])
+
+  useEffect(() => {
+    if (!authToken) return
+    loadUsers()
+  }, [authToken])
 
   const [devices, setDevices] = useState([])
   const [devicesLoading, setDevicesLoading] = useState(false)
@@ -204,6 +306,23 @@ export default function App() {
   const [logTo, setLogTo] = useState('')
   const [logLoading, setLogLoading] = useState(false)
 
+  const [auditRows, setAuditRows] = useState([])
+  const [auditLoading, setAuditLoading] = useState(false)
+  const [auditError, setAuditError] = useState('')
+  const [auditAction, setAuditAction] = useState('')
+  const [auditActorType, setAuditActorType] = useState('')
+  const [auditActorId, setAuditActorId] = useState('')
+  const [auditTargetType, setAuditTargetType] = useState('')
+  const [auditTargetId, setAuditTargetId] = useState('')
+  const [auditStatus, setAuditStatus] = useState('')
+  const [auditFrom, setAuditFrom] = useState('')
+  const [auditTo, setAuditTo] = useState('')
+  const [auditLimit, setAuditLimit] = useState('200')
+  const [auditRetention, setAuditRetentionState] = useState({ days: 90, updatedAt: '' })
+  const [auditRetentionDays, setAuditRetentionDays] = useState('90')
+  const [auditRetentionStatus, setAuditRetentionStatus] = useState('')
+  const [logsTab, setLogsTab] = useState('device')
+
   const [eventsFeed, setEventsFeed] = useState([])
   const [eventsStatus, setEventsStatus] = useState('disconnected')
   const [eventsError, setEventsError] = useState('')
@@ -215,6 +334,9 @@ export default function App() {
   const [upgradeStatus, setUpgradeStatus] = useState('')
   const [upgradeAvailable, setUpgradeAvailable] = useState({ available: false, latest: '', bundles: [], updatesDir: '' })
   const [upgradeAvailableError, setUpgradeAvailableError] = useState('')
+  const [upgradePreflight, setUpgradePreflight] = useState({ ok: false, checks: [], timestamp: '' })
+  const [upgradePreflightStatus, setUpgradePreflightStatus] = useState('')
+  const [upgradePreflightError, setUpgradePreflightError] = useState('')
   const selectedDeviceIdRef = useRef('')
   const refreshTimerRef = useRef(null)
   const deviceOrderRef = useRef([])
@@ -242,6 +364,9 @@ export default function App() {
   }, [deviceOrder])
 
   useEffect(() => {
+    if (authStatus.loaded && authStatus.enabled && !authToken) {
+      return
+    }
     loadDevices()
     loadGroups()
     loadArtifacts()
@@ -249,7 +374,9 @@ export default function App() {
     loadMaintenance()
     loadUpgrade()
     loadUpgradeAvailable()
-  }, [])
+    loadUpgradePreflight()
+    loadAuditRetention()
+  }, [authStatus.loaded, authStatus.enabled, authToken])
 
   useEffect(() => {
     if (!selectedDeviceId) return
@@ -301,6 +428,10 @@ export default function App() {
   }, [upgrade.running])
 
   useEffect(() => {
+    if (authStatus.loaded && authStatus.enabled && !authToken) {
+      setEventsStatus('disconnected')
+      return
+    }
     let ws
     let reconnectTimer
     let shouldReconnect = true
@@ -395,6 +526,10 @@ export default function App() {
     return raw
   }, [deviceDetail])
 
+  const isAdmin = useMemo(() => {
+    return (authUser?.roles || []).includes('admin')
+  }, [authUser])
+
   const notifications = useMemo(() => {
     const items = []
     if (devicesError) items.push({ type: 'error', text: devicesError })
@@ -414,6 +549,138 @@ export default function App() {
     if (upgradeStatus) items.push({ type: 'info', text: upgradeStatus })
     return items.slice(0, 4)
   }, [devicesError, groupsError, artifactsError, desiredError, eventsError, maintenanceError, upgradeError, upgradeAvailableError, uploadStatus, devicesStatus, groupsStatus, artifactsStatus, desiredStatus, maintenanceStatus, upgradeStatus])
+
+  async function doLogin() {
+    setLoginStatus('Signing in...')
+    setAuthError('')
+    try {
+      const res = await apiLogin(loginForm.email, loginForm.password)
+      if (!res?.token) {
+        throw new Error('No token returned')
+      }
+      persistAuthToken(res.token)
+      setAuthToken(res.token)
+      setLoginStatus('Signed in')
+      setLoginForm((prev) => ({ ...prev, password: '' }))
+      setAuthUser(res.user || null)
+      setAuthView('login')
+      loadUsers()
+    } catch (err) {
+      setLoginStatus('')
+      setAuthError(err.message || String(err))
+    }
+  }
+
+  async function doRegister() {
+    setRegisterStatus('Creating account...')
+    setAuthError('')
+    try {
+      await registerWithVoucher({
+        token: registerForm.token,
+        email: registerForm.email,
+        password: registerForm.password,
+        displayName: registerForm.displayName,
+      })
+      setRegisterStatus('Account created, signing in...')
+      const res = await apiLogin(registerForm.email, registerForm.password)
+      persistAuthToken(res.token)
+      setAuthToken(res.token)
+      setAuthUser(res.user || null)
+      setRegisterForm({ token: '', email: '', password: '', displayName: '' })
+      setRegisterStatus('')
+      setAuthView('login')
+    } catch (err) {
+      setRegisterStatus('')
+      setAuthError(err.message || String(err))
+    }
+  }
+
+  function doLogout() {
+    persistAuthToken('')
+    setAuthToken('')
+    setAuthUser(null)
+  }
+
+  async function loadUsers() {
+    setUsersStatus('Loading users...')
+    setUsersError('')
+    try {
+      const res = await listUsers()
+      setUsers(res.items || [])
+      setUsersStatus('')
+    } catch (err) {
+      setUsersStatus('')
+      setUsersError(err.message || String(err))
+    }
+  }
+
+  async function submitUser() {
+    setUsersStatus('Creating user...')
+    setUsersError('')
+    try {
+      await createUser({
+        email: userForm.email,
+        password: userForm.password,
+        displayName: userForm.displayName,
+        roles: userForm.roles,
+      })
+      setUsersStatus('User created')
+      setUserForm({ email: '', password: '', displayName: '', roles: ['viewer'] })
+      await loadUsers()
+    } catch (err) {
+      setUsersStatus('')
+      setUsersError(err.message || String(err))
+    }
+  }
+
+  function toggleRole(role) {
+    setUserForm((prev) => {
+      const roles = new Set(prev.roles)
+      if (roles.has(role)) {
+        roles.delete(role)
+      } else {
+        roles.add(role)
+      }
+      if (roles.size === 0) {
+        roles.add('viewer')
+      }
+      return { ...prev, roles: Array.from(roles) }
+    })
+  }
+
+  function toggleVoucherRole(role) {
+    setVoucherForm((prev) => {
+      const roles = new Set(prev.roles)
+      if (roles.has(role)) {
+        roles.delete(role)
+      } else {
+        roles.add(role)
+      }
+      if (roles.size === 0) {
+        roles.add('viewer')
+      }
+      return { ...prev, roles: Array.from(roles) }
+    })
+  }
+
+  async function submitVoucher() {
+    setVoucherStatus('Creating voucher...')
+    setVoucherToken('')
+    setUsersError('')
+    try {
+      const res = await createVoucher({
+        email: voucherForm.email,
+        roles: voucherForm.roles,
+        ttlHours: Number(voucherForm.ttlHours || '24'),
+      })
+      setVoucherToken(res.token || '')
+      setVoucherStatus('Voucher created')
+      setVoucherForm({ email: '', ttlHours: '24', roles: ['viewer'] })
+    } catch (err) {
+      setVoucherStatus('')
+      setUsersError(err.message || String(err))
+    }
+  }
 
   function loadDevices(options = {}) {
     const { silent = false } = options
@@ -712,6 +979,75 @@ export default function App() {
     }
   }
 
+  function buildAuditParams() {
+    const params = {
+      action: auditAction || undefined,
+      actorType: auditActorType || undefined,
+      actorId: auditActorId || undefined,
+      targetType: auditTargetType || undefined,
+      targetId: auditTargetId || undefined,
+      status: auditStatus || undefined,
+      since: toIsoIfValid(auditFrom) || undefined,
+      until: toIsoIfValid(auditTo) || undefined,
+      limit: auditLimit ? Number(auditLimit) : undefined,
+    }
+    return params
+  }
+
+  async function loadAudit() {
+    setAuditLoading(true)
+    setAuditError('')
+    try {
+      const res = await listAuditEvents(buildAuditParams())
+      setAuditRows(res.items || [])
+    } catch (err) {
+      setAuditError(err.message || String(err))
+    } finally {
+      setAuditLoading(false)
+    }
+  }
+
+  async function downloadAudit() {
+    try {
+      const csv = await downloadAuditCSV(buildAuditParams())
+      const blob = new Blob([csv], { type: 'text/csv' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'audit.csv'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      alert(err.message || String(err))
+    }
+  }
+
+  async function loadAuditRetention() {
+    try {
+      const res = await getAuditRetention()
+      setAuditRetentionState(res)
+      if (res?.days) {
+        setAuditRetentionDays(String(res.days))
+      }
+    } catch (err) {
+      setAuditRetentionStatus(err.message || String(err))
+    }
+  }
+
+  async function updateAuditRetention() {
+    const value = Number(auditRetentionDays)
+    if (!value || value <= 0) return
+    setAuditRetentionStatus('Updating retention...')
+    try {
+      const res = await setAuditRetention(value)
+      setAuditRetentionState(res)
+      setAuditRetentionDays(String(res.days))
+      setAuditRetentionStatus('Retention updated')
+    } catch (err) {
+      setAuditRetentionStatus(err.message || String(err))
+    }
+  }
+
   async function loadMaintenance() {
     setMaintenanceError('')
     try {
@@ -739,6 +1075,19 @@ export default function App() {
       setUpgradeAvailable(res)
     } catch (err) {
       setUpgradeAvailableError(err.message || String(err))
+    }
+  }
+
+  async function loadUpgradePreflight() {
+    setUpgradePreflightStatus('Running preflight...')
+    setUpgradePreflightError('')
+    try {
+      const res = await getUpgradePreflight()
+      setUpgradePreflight(res)
+      setUpgradePreflightStatus('')
+    } catch (err) {
+      setUpgradePreflightStatus('')
+      setUpgradePreflightError(err.message || String(err))
     }
   }
 
@@ -889,6 +1238,84 @@ export default function App() {
     if (deviceStatusFilter === 'all') return devices
     return devices.filter((d) => (d.status || '').toLowerCase() === deviceStatusFilter)
   }, [devices, deviceStatusFilter])
+
+  if (authStatus.loaded && authStatus.enabled && !authToken) {
+    return (
+      <div className="login-screen">
+        <div className="login-card">
+          <div className="brand">HardwareOps</div>
+          <div className="auth-toggle">
+            <button
+              className={`tab ${authView === 'login' ? 'active' : ''}`}
+              onClick={() => setAuthView('login')}
+            >
+              Sign in
+            </button>
+            <button
+              className={`tab ${authView === 'register' ? 'active' : ''}`}
+              onClick={() => setAuthView('register')}
+            >
+              Use voucher
+            </button>
+          </div>
+          {authView === 'login' ? (
+            <div className="form">
+              <label>Email</label>
+              <input
+                value={loginForm.email}
+                onChange={(e) => setLoginForm((prev) => ({ ...prev, email: e.target.value }))}
+                placeholder="admin@example.com"
+              />
+              <label>Password</label>
+              <input
+                type="password"
+                value={loginForm.password}
+                onChange={(e) => setLoginForm((prev) => ({ ...prev, password: e.target.value }))}
+              />
+              <button className="button" onClick={doLogin}>
+                Sign in
+              </button>
+            </div>
+          ) : (
+            <div className="form">
+              <label>Voucher token</label>
+              <input
+                value={registerForm.token}
+                onChange={(e) => setRegisterForm((prev) => ({ ...prev, token: e.target.value }))}
+                placeholder="paste token"
+              />
+              <label>Email</label>
+              <input
+                value={registerForm.email}
+                onChange={(e) => setRegisterForm((prev) => ({ ...prev, email: e.target.value }))}
+                placeholder="user@example.com"
+              />
+              <label>Password</label>
+              <input
+                type="password"
+                value={registerForm.password}
+                onChange={(e) => setRegisterForm((prev) => ({ ...prev, password: e.target.value }))}
+              />
+              <label>Display Name</label>
+              <input
+                value={registerForm.displayName}
+                onChange={(e) => setRegisterForm((prev) => ({ ...prev, displayName: e.target.value }))}
+              />
+              <button className="button" onClick={doRegister}>
+                Create account
+              </button>
+            </div>
+          )}
+          {authError && <div className="error">{authError}</div>}
+          {loginStatus && <div className="status">{loginStatus}</div>}
+          {registerStatus && <div className="status">{registerStatus}</div>}
+          <div className="status hint">
+            Auth mode: {authStatus.mode}
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="app">
@@ -1264,194 +1691,562 @@ export default function App() {
         )}
 
         {view === 'logs' && (
-          <section id="logs" className="card">
-          <div className="section-header">
-            <h2>Logs</h2>
-            <div className="logs-actions">
-              <select value={logFilter} onChange={(e) => setLogFilter(e.target.value)}>
-                <option value="ALL">All</option>
-                <option value="DEBUG">DEBUG</option>
-                <option value="INFO">INFO</option>
-                <option value="WARN">WARN</option>
-                <option value="ERROR">ERROR</option>
-              </select>
-              <select value={logSort} onChange={(e) => setLogSort(e.target.value)}>
-                <option value="desc">Newest</option>
-                <option value="asc">Oldest</option>
-              </select>
-              <button className="button" onClick={loadLogs}>
-                Fetch Logs
-              </button>
+          <section id="logs" className="card logs-card">
+            <div className="section-header logs-header">
+              <div className="tab-bar">
+                <button
+                  className={`tab ${logsTab === 'device' ? 'active' : ''}`}
+                  onClick={() => setLogsTab('device')}
+                >
+                  Device Logs
+                </button>
+                <button
+                  className={`tab ${logsTab === 'audit' ? 'active' : ''}`}
+                  onClick={() => setLogsTab('audit')}
+                >
+                  Audit Log
+                </button>
+              </div>
+              <div className="logs-actions">
+                {logsTab === 'device' ? (
+                  <>
+                    <select value={logFilter} onChange={(e) => setLogFilter(e.target.value)}>
+                      <option value="ALL">All</option>
+                      <option value="DEBUG">DEBUG</option>
+                      <option value="INFO">INFO</option>
+                      <option value="WARN">WARN</option>
+                      <option value="ERROR">ERROR</option>
+                    </select>
+                    <select value={logSort} onChange={(e) => setLogSort(e.target.value)}>
+                      <option value="desc">Newest</option>
+                      <option value="asc">Oldest</option>
+                    </select>
+                    <button className="button" onClick={loadLogs}>
+                      Fetch Logs
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button className="button" onClick={loadAudit}>
+                      Fetch Audit
+                    </button>
+                    <button className="button ghost" onClick={downloadAudit}>
+                      Download CSV
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
-          </div>
 
-          <div className="form inline">
-            <label>Device ID</label>
-            <input
-              value={logsDeviceId}
-              onChange={(e) => setLogsDeviceId(e.target.value)}
-              placeholder="device uuid"
-            />
-            <label>From</label>
-            <input
-              type="datetime-local"
-              value={logFrom}
-              onChange={(e) => setLogFrom(e.target.value)}
-            />
-            <label>To</label>
-            <input
-              type="datetime-local"
-              value={logTo}
-              onChange={(e) => setLogTo(e.target.value)}
-            />
-            {selectedDeviceId && (
-              <button className="button ghost" onClick={() => setLogsDeviceId(selectedDeviceId)}>
-                Use selected device
-              </button>
-            )}
-            {logsDeviceId && (
-              <button className="button ghost" onClick={() => downloadLogs(logsDeviceId)}>
-                Download CSV
-              </button>
-            )}
-          </div>
+            {logsTab === 'device' ? (
+              <>
+                <div className="form inline">
+                  <label>Device ID</label>
+                  <input
+                    value={logsDeviceId}
+                    onChange={(e) => setLogsDeviceId(e.target.value)}
+                    placeholder="device uuid"
+                  />
+                  <label>From</label>
+                  <input
+                    type="datetime-local"
+                    value={logFrom}
+                    onChange={(e) => setLogFrom(e.target.value)}
+                  />
+                  <label>To</label>
+                  <input
+                    type="datetime-local"
+                    value={logTo}
+                    onChange={(e) => setLogTo(e.target.value)}
+                  />
+                  {selectedDeviceId && (
+                    <button className="button ghost" onClick={() => setLogsDeviceId(selectedDeviceId)}>
+                      Use selected device
+                    </button>
+                  )}
+                  {logsDeviceId && (
+                    <button className="button ghost" onClick={() => downloadLogs(logsDeviceId)}>
+                      Download CSV
+                    </button>
+                  )}
+                </div>
 
-          {logError && <div className="error">{logError}</div>}
-          {logLoading ? (
-            <div className="placeholder">Loading logs...</div>
-          ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Timestamp</th>
-                    <th>Level</th>
-                    <th>Component</th>
-                    <th>Device</th>
-                    <th>Message</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredLogs.map((row, idx) => (
-                    <tr key={`${row.timestamp}-${idx}`} className={`log-row level-${(row.level || '').toLowerCase()}`}>
-                      <td>{row.timestamp}</td>
-                      <td>{row.level}</td>
-                      <td>{row.component}</td>
-                      <td>{row.deviceId}</td>
-                      <td>{row.message}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                {logError && <div className="error">{logError}</div>}
+                {logLoading ? (
+                  <div className="placeholder">Loading logs...</div>
+                ) : (
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Timestamp</th>
+                          <th>Level</th>
+                          <th>Component</th>
+                          <th>Device</th>
+                          <th>Message</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredLogs.map((row, idx) => (
+                          <tr key={`${row.timestamp}-${idx}`} className={`log-row level-${(row.level || '').toLowerCase()}`}>
+                            <td>{row.timestamp}</td>
+                            <td>{row.level}</td>
+                            <td>{row.component}</td>
+                            <td>{row.deviceId}</td>
+                            <td>{row.message}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="form inline">
+                  <label>Action</label>
+                  <input
+                    value={auditAction}
+                    onChange={(e) => setAuditAction(e.target.value)}
+                    placeholder="artifact.upload"
+                  />
+                  <label>Actor Type</label>
+                  <input
+                    value={auditActorType}
+                    onChange={(e) => setAuditActorType(e.target.value)}
+                    placeholder="user/device/system"
+                  />
+                  <label>Actor ID</label>
+                  <input value={auditActorId} onChange={(e) => setAuditActorId(e.target.value)} />
+                  <label>Target Type</label>
+                  <input
+                    value={auditTargetType}
+                    onChange={(e) => setAuditTargetType(e.target.value)}
+                    placeholder="device/artifact/group"
+                  />
+                  <label>Target ID</label>
+                  <input value={auditTargetId} onChange={(e) => setAuditTargetId(e.target.value)} />
+                  <label>Status</label>
+                  <select value={auditStatus} onChange={(e) => setAuditStatus(e.target.value)}>
+                    <option value="">All</option>
+                    <option value="success">success</option>
+                    <option value="error">error</option>
+                  </select>
+                  <label>From</label>
+                  <input
+                    type="datetime-local"
+                    value={auditFrom}
+                    onChange={(e) => setAuditFrom(e.target.value)}
+                  />
+                  <label>To</label>
+                  <input
+                    type="datetime-local"
+                    value={auditTo}
+                    onChange={(e) => setAuditTo(e.target.value)}
+                  />
+                  <label>Limit</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="5000"
+                    value={auditLimit}
+                    onChange={(e) => setAuditLimit(e.target.value)}
+                  />
+                </div>
+
+                <div className="form inline audit-retention">
+                  <label>Retention (days)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="3650"
+                    value={auditRetentionDays}
+                    onChange={(e) => setAuditRetentionDays(e.target.value)}
+                  />
+                  <button className="button ghost" onClick={updateAuditRetention}>
+                    Update retention
+                  </button>
+                  <div className="status">
+                    Last updated: {auditRetention.updatedAt ? new Date(auditRetention.updatedAt).toLocaleString() : '—'}
+                  </div>
+                  {auditRetentionStatus && <div className="status">{auditRetentionStatus}</div>}
+                </div>
+
+                {auditError && <div className="error">{auditError}</div>}
+                {auditLoading ? (
+                  <div className="placeholder">Loading audit events...</div>
+                ) : (
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Time</th>
+                          <th>Action</th>
+                          <th>Actor</th>
+                          <th>Target</th>
+                          <th>Status</th>
+                          <th>Error</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {auditRows.map((row, idx) => (
+                          <tr key={`${row.eventId}-${idx}`} className={`audit-row status-${row.status || 'success'}`}>
+                            <td>{formatTime(row.occurredAt)}</td>
+                            <td>{row.action}</td>
+                            <td>
+                              {row.actorEmail || row.actorId || row.actorType || '—'}
+                            </td>
+                            <td>
+                              {row.targetType && row.targetId
+                                ? `${row.targetType}:${row.targetId}`
+                                : row.targetType || row.targetId || '—'}
+                            </td>
+                            <td>{row.status}</td>
+                            <td>{row.error || '—'}</td>
+                          </tr>
+                        ))}
+                        {auditRows.length === 0 && (
+                          <tr>
+                            <td colSpan={6}>No audit events found.</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
           </section>
         )}
 
         {view === 'settings' && (
-          <section id="settings" className="card">
-            <div className="section-header">
+          <section id="settings" className="card settings-card">
+            <div className="section-header settings-header">
               <h2>Settings</h2>
-              <div className="inline-row">
+              <div className="settings-toolbar">
                 <button className="button ghost" onClick={loadMaintenance}>Refresh maintenance</button>
                 <button className="button ghost" onClick={loadUpgrade}>Refresh upgrade</button>
                 <button className="button ghost" onClick={loadUpgradeAvailable}>Refresh updates</button>
               </div>
             </div>
 
-            <div className="detail-grid">
-              <div>
-                <div className="detail-label">Maintenance</div>
-                <div className="detail-value">{maintenance.enabled ? 'enabled' : 'disabled'}</div>
-              </div>
-              <div>
-                <div className="detail-label">Message</div>
-                <div className="detail-value">{maintenance.message || '—'}</div>
-              </div>
-              <div>
-                <div className="detail-label">Updated</div>
-                <div className="detail-value">{maintenance.updatedAt ? new Date(maintenance.updatedAt).toLocaleString() : '—'}</div>
-              </div>
-              <div className="full">
-                <button className="button ghost" onClick={toggleMaintenance} disabled={!canToggleMaintenance}>
-                  {maintenance.enabled ? 'Disable maintenance' : 'Enable maintenance'}
-                </button>
-              </div>
-            </div>
-
-            <div className="events">
-              <h3>Update Packages</h3>
-              {!upgradeAvailable.available ? (
-                <div className="placeholder">
-                  No updates found{upgradeAvailable.updatesDir ? ` in ${upgradeAvailable.updatesDir}.` : '.'}
-                </div>
-              ) : (
-                <div className="detail-grid">
-                  <div>
-                    <div className="detail-label">Latest</div>
-                    <div className="detail-value">{upgradeAvailable.latest}</div>
-                  </div>
-                  <div>
-                    <div className="detail-label">Updates Dir</div>
-                    <div className="detail-value">{upgradeAvailable.updatesDir || '—'}</div>
-                  </div>
-                  <div className="full">
-                    <div className="detail-label">Bundles</div>
-                    <div className="detail-value">{(upgradeAvailable.bundles || []).join(', ')}</div>
-                  </div>
-                </div>
-              )}
-              {canToggleMaintenance && maintenance.enabled && upgrade.enabled && (
-                <div className="inline-row">
-                  <button
-                    className="button ghost"
-                    onClick={startUpgrade}
-                    disabled={upgrade.running || !upgradeAvailable.available}
-                  >
-                    {upgrade.running ? 'Applying update…' : 'Apply update'}
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <div className="events">
-              <h3>Upgrade Status</h3>
-              {!upgrade.enabled ? (
-                <div className="placeholder">Upgrade runner not configured.</div>
-              ) : (
-                <div className="detail-grid">
-                  <div>
-                    <div className="detail-label">State</div>
-                    <div className="detail-value">{upgrade.state || 'idle'}</div>
-                  </div>
-                  <div>
-                    <div className="detail-label">Running</div>
-                    <div className="detail-value">{upgrade.running ? 'yes' : 'no'}</div>
-                  </div>
-                  <div>
-                    <div className="detail-label">Exit Code</div>
-                    <div className="detail-value">{upgrade.exitCode ?? '—'}</div>
-                  </div>
-                  <div className="full">
-                    <div className="detail-label">Last Started</div>
-                    <div className="detail-value">{upgrade.startedAt ? new Date(upgrade.startedAt).toLocaleString() : '—'}</div>
-                  </div>
-                  <div className="full">
-                    <div className="detail-label">Last Finished</div>
-                    <div className="detail-value">{upgrade.finishedAt ? new Date(upgrade.finishedAt).toLocaleString() : '—'}</div>
-                  </div>
-                  <div className="full">
-                    <div className="detail-label">Log Path</div>
-                    <div className="detail-value">{upgrade.logPath || '—'}</div>
-                  </div>
-                  {upgrade.error && (
-                    <div className="full">
-                      <div className="detail-label">Error</div>
-                      <div className="detail-value">{upgrade.error}</div>
+            <div className="settings-stack">
+              <div className="settings-section">
+                <div className="settings-title">Authentication</div>
+                {!authStatus.enabled && (
+                  <div className="placeholder">Auth is disabled on the control-plane.</div>
+                )}
+                {authUser ? (
+                  <div className="detail-grid">
+                    <div>
+                      <div className="detail-label">User</div>
+                      <div className="detail-value">{authUser.email}</div>
                     </div>
+                    <div>
+                      <div className="detail-label">Roles</div>
+                      <div className="detail-value">{(authUser.roles || []).join(', ') || '—'}</div>
+                    </div>
+                    <div className="full">
+                      <button className="button ghost" onClick={doLogout}>
+                        Sign out
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="form compact">
+                    <div className="field">
+                      <label>Email</label>
+                      <input
+                        value={loginForm.email}
+                        onChange={(e) => setLoginForm((prev) => ({ ...prev, email: e.target.value }))}
+                        placeholder="admin@example.com"
+                      />
+                    </div>
+                    <div className="field">
+                      <label>Password</label>
+                      <input
+                        type="password"
+                        value={loginForm.password}
+                        onChange={(e) => setLoginForm((prev) => ({ ...prev, password: e.target.value }))}
+                      />
+                    </div>
+                    <div className="field actions">
+                      <button className="button ghost" onClick={doLogin}>
+                        Sign in
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {authError && <div className="error">{authError}</div>}
+                {loginStatus && <div className="status">{loginStatus}</div>}
+              </div>
+
+              <div className="settings-section">
+                <div className="settings-title">Local Users</div>
+                {!authStatus.enabled ? (
+                  <div className="placeholder">Enable AUTH_MODE=local to manage users.</div>
+                ) : !authToken ? (
+                  <div className="placeholder">Sign in to manage local users.</div>
+                ) : !isAdmin ? (
+                  <div className="placeholder">Admin role required to manage users.</div>
+                ) : (
+                  <>
+                    <div className="form compact">
+                      <div className="field">
+                        <label>Email</label>
+                        <input
+                          value={userForm.email}
+                          onChange={(e) => setUserForm((prev) => ({ ...prev, email: e.target.value }))}
+                          placeholder="user@example.com"
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Password</label>
+                        <input
+                          type="password"
+                          value={userForm.password}
+                          onChange={(e) => setUserForm((prev) => ({ ...prev, password: e.target.value }))}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Display Name</label>
+                        <input
+                          value={userForm.displayName}
+                          onChange={(e) => setUserForm((prev) => ({ ...prev, displayName: e.target.value }))}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Roles</label>
+                        <div className="inline-row">
+                          {['viewer', 'operator', 'admin'].map((role) => (
+                            <label key={role} className="chip">
+                              <input
+                                type="checkbox"
+                                checked={userForm.roles.includes(role)}
+                                onChange={() => toggleRole(role)}
+                              />
+                              {role}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="field actions">
+                        <button className="button ghost" onClick={submitUser}>
+                          Create user
+                        </button>
+                      </div>
+                    </div>
+                    {usersError && <div className="error">{usersError}</div>}
+                    {usersStatus && <div className="status">{usersStatus}</div>}
+                    <div className="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Email</th>
+                            <th>Display Name</th>
+                            <th>Roles</th>
+                            <th>Disabled</th>
+                            <th>Created</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {users.map((user) => (
+                            <tr key={user.userId}>
+                              <td>{user.email}</td>
+                              <td>{user.displayName || '—'}</td>
+                              <td>{(user.roles || []).join(', ') || '—'}</td>
+                              <td>{user.disabled ? 'yes' : 'no'}</td>
+                              <td>{user.createdAt ? new Date(user.createdAt).toLocaleString() : '—'}</td>
+                            </tr>
+                          ))}
+                          {users.length === 0 && (
+                            <tr>
+                              <td colSpan={5}>No users found.</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="form compact">
+                      <div className="field">
+                        <label>Invite Email (optional)</label>
+                        <input
+                          value={voucherForm.email}
+                          onChange={(e) => setVoucherForm((prev) => ({ ...prev, email: e.target.value }))}
+                          placeholder="user@example.com"
+                        />
+                      </div>
+                      <div className="field">
+                        <label>TTL (hours)</label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="720"
+                          value={voucherForm.ttlHours}
+                          onChange={(e) => setVoucherForm((prev) => ({ ...prev, ttlHours: e.target.value }))}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Roles</label>
+                        <div className="inline-row">
+                          {['viewer', 'operator', 'admin'].map((role) => (
+                            <label key={role} className="chip">
+                              <input
+                                type="checkbox"
+                                checked={voucherForm.roles.includes(role)}
+                                onChange={() => toggleVoucherRole(role)}
+                              />
+                              {role}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="field actions">
+                        <button className="button ghost" onClick={submitVoucher}>
+                          Create voucher
+                        </button>
+                        {voucherStatus && <div className="status">{voucherStatus}</div>}
+                      </div>
+                    </div>
+                    {voucherToken && (
+                      <div className="form compact">
+                        <div className="field">
+                          <label>Voucher Token</label>
+                          <input readOnly value={voucherToken} />
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              <div className="settings-section">
+                <div className="settings-title">Maintenance</div>
+                <div className="detail-grid">
+                  <div>
+                    <div className="detail-label">Maintenance</div>
+                    <div className="detail-value">{maintenance.enabled ? 'enabled' : 'disabled'}</div>
+                  </div>
+                  <div>
+                    <div className="detail-label">Message</div>
+                    <div className="detail-value">{maintenance.message || '—'}</div>
+                  </div>
+                  <div>
+                    <div className="detail-label">Updated</div>
+                    <div className="detail-value">{maintenance.updatedAt ? new Date(maintenance.updatedAt).toLocaleString() : '—'}</div>
+                  </div>
+                  <div className="full">
+                    <button className="button ghost" onClick={toggleMaintenance} disabled={!canToggleMaintenance}>
+                      {maintenance.enabled ? 'Disable maintenance' : 'Enable maintenance'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="settings-section">
+              <div className="settings-title">Update Packages</div>
+              {!upgradeAvailable.available ? (
+                  <div className="placeholder">
+                    No updates found{upgradeAvailable.updatesDir ? ` in ${upgradeAvailable.updatesDir}.` : '.'}
+                  </div>
+                ) : (
+                  <div className="detail-grid">
+                    <div>
+                      <div className="detail-label">Latest</div>
+                      <div className="detail-value">{upgradeAvailable.latest}</div>
+                    </div>
+                    <div>
+                      <div className="detail-label">Updates Dir</div>
+                      <div className="detail-value">{upgradeAvailable.updatesDir || '—'}</div>
+                    </div>
+                    <div className="full">
+                      <div className="detail-label">Bundles</div>
+                      <div className="detail-value">{(upgradeAvailable.bundles || []).join(', ')}</div>
+                    </div>
+                  </div>
+                )}
+                {canToggleMaintenance && maintenance.enabled && upgrade.enabled && (
+                  <div className="inline-row">
+                    <button
+                      className="button ghost"
+                      onClick={startUpgrade}
+                      disabled={upgrade.running || !upgradeAvailable.available}
+                    >
+                      {upgrade.running ? 'Applying update…' : 'Apply update'}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="settings-section">
+                <div className="settings-title">Upgrade Preflight</div>
+                <div className="inline-row">
+                  <button className="button ghost" onClick={loadUpgradePreflight}>
+                    Run preflight
+                  </button>
+                  {upgradePreflightStatus && <div className="status">{upgradePreflightStatus}</div>}
+                </div>
+                {upgradePreflightError && <div className="error">{upgradePreflightError}</div>}
+                <div className="preflight-list">
+                  {(upgradePreflight.checks || []).map((check) => (
+                    <div key={check.name} className={`preflight-item ${check.status}`}>
+                      <div className="preflight-title">
+                        <span className={`preflight-badge ${check.status}`}>{check.status}</span>
+                        {check.name}
+                      </div>
+                      <div className="preflight-msg">{check.message}</div>
+                    </div>
+                  ))}
+                  {(!upgradePreflight.checks || upgradePreflight.checks.length === 0) && (
+                    <div className="placeholder">No preflight results yet.</div>
                   )}
                 </div>
-              )}
+              </div>
+
+              <div className="settings-section">
+                <div className="settings-title">Upgrade Status</div>
+                {!upgrade.enabled ? (
+                  <div className="placeholder">Upgrade runner not configured.</div>
+                ) : (
+                  <div className="detail-grid">
+                    <div>
+                      <div className="detail-label">State</div>
+                      <div className="detail-value">{upgrade.state || 'idle'}</div>
+                    </div>
+                    <div>
+                      <div className="detail-label">Running</div>
+                      <div className="detail-value">{upgrade.running ? 'yes' : 'no'}</div>
+                    </div>
+                    <div>
+                      <div className="detail-label">Exit Code</div>
+                      <div className="detail-value">{upgrade.exitCode ?? '—'}</div>
+                    </div>
+                    <div className="full">
+                      <div className="detail-label">Runner Container</div>
+                      <div className="detail-value">{upgrade.runnerContainer || '—'}</div>
+                    </div>
+                    <div className="full">
+                      <div className="detail-label">Last Started</div>
+                      <div className="detail-value">{upgrade.startedAt ? new Date(upgrade.startedAt).toLocaleString() : '—'}</div>
+                    </div>
+                    <div className="full">
+                      <div className="detail-label">Last Finished</div>
+                      <div className="detail-value">{upgrade.finishedAt ? new Date(upgrade.finishedAt).toLocaleString() : '—'}</div>
+                    </div>
+                    <div className="full">
+                      <div className="detail-label">Log Path</div>
+                      <div className="detail-value">{upgrade.logPath || '—'}</div>
+                    </div>
+                    {upgrade.error && (
+                      <div className="full">
+                        <div className="detail-label">Error</div>
+                        <div className="detail-value">{upgrade.error}</div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           </section>
         )}

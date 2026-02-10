@@ -66,6 +66,81 @@ type ApplyResult struct {
 	CreatedAt        time.Time
 }
 
+type AuditEvent struct {
+	EventID        string
+	OccurredAt     time.Time
+	ActorType      string
+	ActorID        string
+	ActorEmail     string
+	ActorRolesJSON []byte
+	AuthMethod     string
+	SourceIP       string
+	UserAgent      string
+	RequestID      string
+	Action         string
+	TargetType     string
+	TargetID       string
+	Status         string
+	Error          string
+	BeforeJSON     []byte
+	AfterJSON      []byte
+	MetadataJSON   []byte
+}
+
+type AuditRetention struct {
+	Days      int
+	UpdatedAt time.Time
+}
+
+type AuditEventFilter struct {
+	Action     string
+	ActorType  string
+	ActorID    string
+	ActorEmail string
+	TargetType string
+	TargetID   string
+	Status     string
+	Since      time.Time
+	Until      time.Time
+	Limit      int
+	Offset     int
+}
+
+type User struct {
+	UserID       string
+	Email        string
+	DisplayName  string
+	PasswordHash string
+	RolesJSON    []byte
+	Disabled     bool
+	AuthProvider string
+	ExternalID   string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	LastLoginAt  time.Time
+}
+
+type UserUpdate struct {
+	UserID       string
+	DisplayName  *string
+	RolesJSON    []byte
+	Disabled     *bool
+	PasswordHash *string
+}
+
+type AuthVoucher struct {
+	VoucherID string
+	TokenHash string
+	Email     string
+	RolesJSON []byte
+	ExpiresAt time.Time
+	CreatedAt time.Time
+	CreatedBy string
+	UsedAt    time.Time
+	UsedBy    string
+	Revoked   bool
+}
+
 type DesiredStateGroup struct {
 	GroupID          string
 	ArtifactID       string
@@ -103,6 +178,7 @@ type Store interface {
 	GetDeviceByFingerprint(fingerprint string) (Device, bool, error)
 	GetDeviceState(deviceID string) (DeviceState, bool, error)
 	ListDevices(filter ListDevicesFilter) ([]Device, error)
+	CountDevices() (int, error)
 	DeleteDevice(deviceID string) error
 	DeleteStaleDevices(cutoff time.Time) (int, error)
 	UpdateDeviceStatuses(staleCutoff, offlineCutoff time.Time) (int, error)
@@ -122,4 +198,19 @@ type Store interface {
 	ListArtifacts(name, version string, limit, offset int) ([]Artifact, error)
 	DeleteArtifact(artifactID string) error
 	CreateApplyResult(result ApplyResult) error
+	CreateAuditEvent(event AuditEvent) error
+	ListAuditEvents(filter AuditEventFilter) ([]AuditEvent, error)
+	DeleteAuditEventsBefore(cutoff time.Time) (int, error)
+	EnsureAuditRetentionDays(days int) error
+	GetAuditRetentionDays() (AuditRetention, error)
+	SetAuditRetentionDays(days int) (AuditRetention, error)
+	CreateUser(user User) error
+	GetUser(userID string) (User, bool, error)
+	GetUserByEmail(email string) (User, bool, error)
+	ListUsers(limit, offset int) ([]User, error)
+	UpdateUser(update UserUpdate) error
+	SetUserLastLogin(userID string, at time.Time) error
+	CreateAuthVoucher(voucher AuthVoucher) error
+	GetAuthVoucherByTokenHash(tokenHash string) (AuthVoucher, bool, error)
+	MarkAuthVoucherUsed(voucherID, usedBy string, at time.Time) (bool, error)
 }

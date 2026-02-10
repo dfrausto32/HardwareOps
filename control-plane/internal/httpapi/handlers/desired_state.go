@@ -45,7 +45,7 @@ type DesiredStateListResponse struct {
 	Devices []DesiredStateDeviceResponse `json:"devices,omitempty"`
 }
 
-func PutDesiredStateGroup(logger *log.Logger, st store.Store) http.HandlerFunc {
+func PutDesiredStateGroup(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "groupId")
 		if groupID == "" {
@@ -82,9 +82,21 @@ func PutDesiredStateGroup(logger *log.Logger, st store.Store) http.HandlerFunc {
 		}
 		if err := st.UpsertDesiredStateGroup(state); err != nil {
 			logger.Printf("upsert desired_state_group error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "desired_state_group.upsert", "group", groupID), err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "desired_state_group.upsert", "group", groupID)
+		event.AfterJSON = auditJSON(map[string]any{
+			"groupId":          state.GroupID,
+			"artifactId":       state.ArtifactID,
+			"desiredVersion":   state.DesiredVersion,
+			"desiredConfigRev": state.DesiredConfigRev,
+			"checkinInterval":  state.CheckinInterval,
+			"policy":           json.RawMessage(state.PolicyJSON),
+		})
+		writeAudit(logger, st, event, nil)
 
 		resp := DesiredStateGroupResponse{
 			GroupID:          state.GroupID,
@@ -100,7 +112,7 @@ func PutDesiredStateGroup(logger *log.Logger, st store.Store) http.HandlerFunc {
 	}
 }
 
-func PutDesiredStateDevice(logger *log.Logger, st store.Store) http.HandlerFunc {
+func PutDesiredStateDevice(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		deviceID := chi.URLParam(r, "deviceId")
 		if deviceID == "" {
@@ -138,9 +150,22 @@ func PutDesiredStateDevice(logger *log.Logger, st store.Store) http.HandlerFunc 
 		}
 		if err := st.UpsertDesiredStateDevice(state); err != nil {
 			logger.Printf("upsert desired_state_device error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "desired_state_device.upsert", "device", deviceID), err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "desired_state_device.upsert", "device", deviceID)
+		event.AfterJSON = auditJSON(map[string]any{
+			"deviceId":         state.DeviceID,
+			"artifactId":       state.ArtifactID,
+			"desiredVersion":   state.DesiredVersion,
+			"desiredConfigRev": state.DesiredConfigRev,
+			"checkinInterval":  state.CheckinInterval,
+			"policy":           json.RawMessage(state.PolicyJSON),
+			"source":           state.Source,
+		})
+		writeAudit(logger, st, event, nil)
 
 		resp := DesiredStateDeviceResponse{
 			DeviceID:         state.DeviceID,
@@ -157,7 +182,7 @@ func PutDesiredStateDevice(logger *log.Logger, st store.Store) http.HandlerFunc 
 	}
 }
 
-func DeleteDesiredStateDevice(logger *log.Logger, st store.Store) http.HandlerFunc {
+func DeleteDesiredStateDevice(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		deviceID := chi.URLParam(r, "deviceId")
 		if deviceID == "" {
@@ -170,14 +195,16 @@ func DeleteDesiredStateDevice(logger *log.Logger, st store.Store) http.HandlerFu
 		}
 		if err := st.DeleteDesiredStateDevice(deviceID); err != nil {
 			logger.Printf("delete desired_state_device error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "desired_state_device.delete", "device", deviceID), err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+		writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "desired_state_device.delete", "device", deviceID), nil)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
-func DeleteDesiredStateGroup(logger *log.Logger, st store.Store) http.HandlerFunc {
+func DeleteDesiredStateGroup(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "groupId")
 		if groupID == "" {
@@ -190,9 +217,11 @@ func DeleteDesiredStateGroup(logger *log.Logger, st store.Store) http.HandlerFun
 		}
 		if err := st.DeleteDesiredStateGroup(groupID); err != nil {
 			logger.Printf("delete desired_state_group error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "desired_state_group.delete", "group", groupID), err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+		writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "desired_state_group.delete", "group", groupID), nil)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

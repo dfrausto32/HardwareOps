@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hardwareops/control-plane/internal/store"
 	"github.com/hardwareops/control-plane/internal/upgrade"
 )
 
@@ -27,7 +29,7 @@ func GetUpgradeStatus(runner *upgrade.Runner) http.HandlerFunc {
 	}
 }
 
-func ApplyUpgrade(runner *upgrade.Runner, maintenance MaintenanceStateView, token string) http.HandlerFunc {
+func ApplyUpgrade(logger *log.Logger, st store.Store, runner *upgrade.Runner, maintenance MaintenanceStateView, token string, trustProxy bool, updatesDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if runner == nil || !runner.Enabled() {
 			http.Error(w, "upgrade runner not configured", http.StatusNotFound)
@@ -49,11 +51,26 @@ func ApplyUpgrade(runner *upgrade.Runner, maintenance MaintenanceStateView, toke
 			http.Error(w, "maintenance mode must be enabled to apply upgrades", http.StatusConflict)
 			return
 		}
+		preflight := BuildUpgradePreflight(runner, updatesDir)
+		if !preflight.OK {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPreconditionFailed)
+			_ = json.NewEncoder(w).Encode(preflight)
+			return
+		}
+		authMethod := "ui"
+		if token != "" {
+			authMethod = "maintenance_token"
+		}
+		event := buildAuditEvent(r, trustProxy, actorUser(authMethod), "upgrade.apply", "upgrade", "control-plane")
 		status, err := runner.Start()
 		if err != nil {
+			writeAudit(logger, st, event, err)
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
+		event.AfterJSON = auditJSON(status)
+		writeAudit(logger, st, event, nil)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(status)
 	}

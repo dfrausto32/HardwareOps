@@ -37,12 +37,24 @@ CA_KEY="$OUT_DIR/ca.key"
 CA_CERT="$OUT_DIR/ca.crt"
 SERVER_KEY="$OUT_DIR/server.key"
 SERVER_CERT="$OUT_DIR/server.crt"
+SERVER_CSR="$OUT_DIR/server.csr"
 
 if [ ! -f "$CA_KEY" ] || [ ! -f "$CA_CERT" ] || [ "$FORCE" = "1" ]; then
   "$BASE_DIR/scripts/bootstrap-ca.sh" OUT_DIR="$OUT_DIR" FORCE="$FORCE"
 fi
 
-if [ ! -f "$SERVER_KEY" ] || [ ! -f "$SERVER_CERT" ] || [ "$FORCE" = "1" ]; then
+needs_server_cert=0
+if [ -f "$SERVER_KEY" ] && [ -f "$SERVER_CERT" ]; then
+  key_mod=$(openssl rsa -in "$SERVER_KEY" -noout -modulus 2>/dev/null | openssl md5 2>/dev/null || true)
+  cert_mod=$(openssl x509 -in "$SERVER_CERT" -noout -modulus 2>/dev/null | openssl md5 2>/dev/null || true)
+  if [ -n "$key_mod" ] && [ -n "$cert_mod" ] && [ "$key_mod" != "$cert_mod" ]; then
+    echo "Server cert/key mismatch detected; reissuing server cert." >&2
+    rm -f "$SERVER_KEY" "$SERVER_CERT" "$SERVER_CSR"
+    needs_server_cert=1
+  fi
+fi
+
+if [ ! -f "$SERVER_KEY" ] || [ ! -f "$SERVER_CERT" ] || [ "$FORCE" = "1" ] || [ "$needs_server_cert" = "1" ]; then
   "$BASE_DIR/scripts/issue-server-cert.sh" OUT_DIR="$OUT_DIR" DOMAIN="$DOMAIN"
 fi
 

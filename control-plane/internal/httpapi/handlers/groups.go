@@ -27,7 +27,7 @@ type GroupListResponse struct {
 	Items []GroupResponse `json:"items"`
 }
 
-func PutGroup(logger *log.Logger, st store.Store) http.HandlerFunc {
+func PutGroup(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "groupId")
 		if groupID == "" {
@@ -60,9 +60,18 @@ func PutGroup(logger *log.Logger, st store.Store) http.HandlerFunc {
 		}
 		if err := st.UpsertGroup(group); err != nil {
 			logger.Printf("upsert group error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "group.upsert", "group", groupID), err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "group.upsert", "group", groupID)
+		event.AfterJSON = auditJSON(map[string]any{
+			"groupId":  group.GroupID,
+			"name":     group.Name,
+			"selector": json.RawMessage(group.SelectorJSON),
+		})
+		writeAudit(logger, st, event, nil)
 
 		resp := GroupResponse{
 			GroupID:   group.GroupID,
@@ -97,7 +106,7 @@ func ListGroups(logger *log.Logger, st store.Store) http.HandlerFunc {
 	}
 }
 
-func DeleteGroup(logger *log.Logger, st store.Store) http.HandlerFunc {
+func DeleteGroup(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "groupId")
 		if groupID == "" {
@@ -110,9 +119,11 @@ func DeleteGroup(logger *log.Logger, st store.Store) http.HandlerFunc {
 		}
 		if err := st.DeleteGroup(groupID); err != nil {
 			logger.Printf("delete group error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "group.delete", "group", groupID), err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+		writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "group.delete", "group", groupID), nil)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

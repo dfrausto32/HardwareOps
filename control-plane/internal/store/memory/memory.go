@@ -3,6 +3,7 @@ package memory
 import (
 	"encoding/json"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 
@@ -10,27 +11,39 @@ import (
 )
 
 type Store struct {
-	mu             sync.Mutex
-	devices        map[string]store.Device
-	states         map[string]store.DeviceState
-	tokens         map[string]store.EnrollmentToken
-	groups         map[string]store.Group
-	desiredGroups  map[string]store.DesiredStateGroup
-	desiredDevices map[string]store.DesiredStateDevice
-	artifacts      map[string]store.Artifact
-	applyResults   map[string]store.ApplyResult
+	mu              sync.Mutex
+	devices         map[string]store.Device
+	states          map[string]store.DeviceState
+	tokens          map[string]store.EnrollmentToken
+	groups          map[string]store.Group
+	desiredGroups   map[string]store.DesiredStateGroup
+	desiredDevices  map[string]store.DesiredStateDevice
+	artifacts       map[string]store.Artifact
+	applyResults    map[string]store.ApplyResult
+	auditEvents     []store.AuditEvent
+	auditRetention  store.AuditRetention
+	users           map[string]store.User
+	userEmailIndex  map[string]string
+	vouchers        map[string]store.AuthVoucher
+	voucherTokenIdx map[string]string
 }
 
 func New() *Store {
 	return &Store{
-		devices:        map[string]store.Device{},
-		states:         map[string]store.DeviceState{},
-		tokens:         map[string]store.EnrollmentToken{},
-		groups:         map[string]store.Group{},
-		desiredGroups:  map[string]store.DesiredStateGroup{},
-		desiredDevices: map[string]store.DesiredStateDevice{},
-		artifacts:      map[string]store.Artifact{},
-		applyResults:   map[string]store.ApplyResult{},
+		devices:         map[string]store.Device{},
+		states:          map[string]store.DeviceState{},
+		tokens:          map[string]store.EnrollmentToken{},
+		groups:          map[string]store.Group{},
+		desiredGroups:   map[string]store.DesiredStateGroup{},
+		desiredDevices:  map[string]store.DesiredStateDevice{},
+		artifacts:       map[string]store.Artifact{},
+		applyResults:    map[string]store.ApplyResult{},
+		auditEvents:     []store.AuditEvent{},
+		auditRetention:  store.AuditRetention{Days: 90, UpdatedAt: time.Now().UTC()},
+		users:           map[string]store.User{},
+		userEmailIndex:  map[string]string{},
+		vouchers:        map[string]store.AuthVoucher{},
+		voucherTokenIdx: map[string]string{},
 	}
 }
 
@@ -173,6 +186,12 @@ func (s *Store) ListDevices(filter store.ListDevicesFilter) ([]store.Device, err
 		end = start + filter.Limit
 	}
 	return out[start:end], nil
+}
+
+func (s *Store) CountDevices() (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.devices), nil
 }
 
 func (s *Store) DeleteDevice(deviceID string) error {
@@ -471,6 +490,283 @@ func (s *Store) CreateApplyResult(result store.ApplyResult) error {
 		s.states[result.DeviceID] = st
 	}
 	return nil
+}
+
+func (s *Store) CreateAuditEvent(event store.AuditEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if event.OccurredAt.IsZero() {
+		event.OccurredAt = time.Now().UTC()
+	}
+	s.auditEvents = append(s.auditEvents, event)
+	return nil
+}
+
+func (s *Store) CreateUser(user store.User) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if user.UserID == "" {
+		return errors.New("user_id required")
+	}
+	if user.Email == "" {
+		return errors.New("email required")
+	}
+	if _, ok := s.userEmailIndex[user.Email]; ok {
+		return errors.New("email already exists")
+	}
+	now := time.Now().UTC()
+	if user.CreatedAt.IsZero() {
+		user.CreatedAt = now
+	}
+	user.UpdatedAt = now
+	s.users[user.UserID] = user
+	s.userEmailIndex[user.Email] = user.UserID
+	return nil
+}
+
+func (s *Store) GetUser(userID string) (store.User, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user, ok := s.users[userID]
+	if !ok {
+		return store.User{}, false, nil
+	}
+	return user, true, nil
+}
+
+func (s *Store) GetUserByEmail(email string) (store.User, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id, ok := s.userEmailIndex[email]
+	if !ok {
+		return store.User{}, false, nil
+	}
+	user, ok := s.users[id]
+	if !ok {
+		return store.User{}, false, nil
+	}
+	return user, true, nil
+}
+
+func (s *Store) ListUsers(limit, offset int) ([]store.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if limit <= 0 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	out := make([]store.User, 0, len(s.users))
+	for _, user := range s.users {
+		out = append(out, user)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if offset >= len(out) {
+		return []store.User{}, nil
+	}
+	end := offset + limit
+	if end > len(out) {
+		end = len(out)
+	}
+	return append([]store.User{}, out[offset:end]...), nil
+}
+
+func (s *Store) UpdateUser(update store.UserUpdate) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user, ok := s.users[update.UserID]
+	if !ok {
+		return errors.New("user not found")
+	}
+	if update.DisplayName != nil {
+		user.DisplayName = *update.DisplayName
+	}
+	if update.RolesJSON != nil {
+		user.RolesJSON = update.RolesJSON
+	}
+	if update.Disabled != nil {
+		user.Disabled = *update.Disabled
+	}
+	if update.PasswordHash != nil {
+		user.PasswordHash = *update.PasswordHash
+	}
+	user.UpdatedAt = time.Now().UTC()
+	s.users[user.UserID] = user
+	return nil
+}
+
+func (s *Store) SetUserLastLogin(userID string, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user, ok := s.users[userID]
+	if !ok {
+		return errors.New("user not found")
+	}
+	user.LastLoginAt = at
+	user.UpdatedAt = time.Now().UTC()
+	s.users[user.UserID] = user
+	return nil
+}
+
+func (s *Store) CreateAuthVoucher(voucher store.AuthVoucher) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if voucher.VoucherID == "" {
+		return errors.New("voucher_id required")
+	}
+	if voucher.TokenHash == "" {
+		return errors.New("token_hash required")
+	}
+	if _, ok := s.voucherTokenIdx[voucher.TokenHash]; ok {
+		return errors.New("token already exists")
+	}
+	if voucher.ExpiresAt.IsZero() {
+		return errors.New("expires_at required")
+	}
+	now := time.Now().UTC()
+	if voucher.CreatedAt.IsZero() {
+		voucher.CreatedAt = now
+	}
+	s.vouchers[voucher.VoucherID] = voucher
+	s.voucherTokenIdx[voucher.TokenHash] = voucher.VoucherID
+	return nil
+}
+
+func (s *Store) GetAuthVoucherByTokenHash(tokenHash string) (store.AuthVoucher, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id, ok := s.voucherTokenIdx[tokenHash]
+	if !ok {
+		return store.AuthVoucher{}, false, nil
+	}
+	v, ok := s.vouchers[id]
+	if !ok {
+		return store.AuthVoucher{}, false, nil
+	}
+	return v, true, nil
+}
+
+func (s *Store) MarkAuthVoucherUsed(voucherID, usedBy string, at time.Time) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, ok := s.vouchers[voucherID]
+	if !ok {
+		return false, errors.New("voucher not found")
+	}
+	if v.Revoked || !v.UsedAt.IsZero() {
+		return false, nil
+	}
+	if !v.ExpiresAt.IsZero() && time.Now().UTC().After(v.ExpiresAt) {
+		return false, nil
+	}
+	v.UsedAt = at
+	v.UsedBy = usedBy
+	s.vouchers[voucherID] = v
+	return true, nil
+}
+
+func (s *Store) ListAuditEvents(filter store.AuditEventFilter) ([]store.AuditEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 200
+	}
+	if filter.Offset < 0 {
+		filter.Offset = 0
+	}
+	matches := make([]store.AuditEvent, 0, len(s.auditEvents))
+	for _, ev := range s.auditEvents {
+		if filter.Action != "" && ev.Action != filter.Action {
+			continue
+		}
+		if filter.ActorType != "" && ev.ActorType != filter.ActorType {
+			continue
+		}
+		if filter.ActorID != "" && ev.ActorID != filter.ActorID {
+			continue
+		}
+		if filter.ActorEmail != "" && ev.ActorEmail != filter.ActorEmail {
+			continue
+		}
+		if filter.TargetType != "" && ev.TargetType != filter.TargetType {
+			continue
+		}
+		if filter.TargetID != "" && ev.TargetID != filter.TargetID {
+			continue
+		}
+		if filter.Status != "" && ev.Status != filter.Status {
+			continue
+		}
+		if !filter.Since.IsZero() && ev.OccurredAt.Before(filter.Since) {
+			continue
+		}
+		if !filter.Until.IsZero() && ev.OccurredAt.After(filter.Until) {
+			continue
+		}
+		matches = append(matches, ev)
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].OccurredAt.After(matches[j].OccurredAt)
+	})
+	if filter.Offset >= len(matches) {
+		return []store.AuditEvent{}, nil
+	}
+	end := filter.Offset + limit
+	if end > len(matches) {
+		end = len(matches)
+	}
+	return append([]store.AuditEvent{}, matches[filter.Offset:end]...), nil
+}
+
+func (s *Store) DeleteAuditEventsBefore(cutoff time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cutoff.IsZero() {
+		return 0, nil
+	}
+	kept := make([]store.AuditEvent, 0, len(s.auditEvents))
+	deleted := 0
+	for _, ev := range s.auditEvents {
+		if ev.OccurredAt.Before(cutoff) {
+			deleted++
+			continue
+		}
+		kept = append(kept, ev)
+	}
+	s.auditEvents = kept
+	return deleted, nil
+}
+
+func (s *Store) EnsureAuditRetentionDays(days int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if days <= 0 {
+		days = 90
+	}
+	if s.auditRetention.Days != days {
+		s.auditRetention = store.AuditRetention{Days: days, UpdatedAt: time.Now().UTC()}
+	}
+	return nil
+}
+
+func (s *Store) GetAuditRetentionDays() (store.AuditRetention, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.auditRetention, nil
+}
+
+func (s *Store) SetAuditRetentionDays(days int) (store.AuditRetention, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if days <= 0 {
+		days = 90
+	}
+	s.auditRetention = store.AuditRetention{Days: days, UpdatedAt: time.Now().UTC()}
+	return s.auditRetention, nil
 }
 
 func parseJSONMap(data []byte) map[string]interface{} {

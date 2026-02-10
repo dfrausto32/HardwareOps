@@ -71,7 +71,7 @@ type UploadArtifactResponse struct {
 	Type       string `json:"type"`
 }
 
-func CreateArtifact(logger *log.Logger, st store.Store) http.HandlerFunc {
+func CreateArtifact(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req CreateArtifactRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -112,9 +112,21 @@ func CreateArtifact(logger *log.Logger, st store.Store) http.HandlerFunc {
 		}
 		if err := st.CreateArtifact(artifact); err != nil {
 			logger.Printf("create artifact error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.create", "artifact", artifact.ArtifactID), err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.create", "artifact", artifact.ArtifactID)
+		event.AfterJSON = auditJSON(map[string]any{
+			"artifactId": artifact.ArtifactID,
+			"name":       artifact.Name,
+			"version":    artifact.Version,
+			"type":       artifact.Type,
+			"sha256":     artifact.SHA256,
+			"sizeBytes":  artifact.SizeBytes,
+		})
+		writeAudit(logger, st, event, nil)
 
 		resp := ArtifactResponse{
 			ArtifactID: artifact.ArtifactID,
@@ -133,7 +145,7 @@ func CreateArtifact(logger *log.Logger, st store.Store) http.HandlerFunc {
 	}
 }
 
-func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string) http.HandlerFunc {
+func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if objStore == nil || bucket == "" {
 			http.Error(w, "object store not configured", http.StatusInternalServerError)
@@ -217,9 +229,21 @@ func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 		}
 		if err := st.CreateArtifact(artifact); err != nil {
 			logger.Printf("create artifact error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.upload", "artifact", artifactID), err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.upload", "artifact", artifactID)
+		event.AfterJSON = auditJSON(map[string]any{
+			"artifactId": artifactID,
+			"name":       name,
+			"version":    version,
+			"type":       atype,
+			"sha256":     sha,
+			"sizeBytes":  size,
+		})
+		writeAudit(logger, st, event, nil)
 
 		resp := UploadArtifactResponse{
 			ArtifactID: artifactID,
@@ -310,7 +334,7 @@ func GetArtifact(logger *log.Logger, st store.Store) http.HandlerFunc {
 	}
 }
 
-func PresignArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, expires time.Duration) http.HandlerFunc {
+func PresignArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, expires time.Duration, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		artifactID := chi.URLParam(r, "artifactId")
 		if artifactID == "" {
@@ -344,9 +368,14 @@ func PresignArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, b
 		url, err := objStore.PresignGet(r.Context(), bucket, artifact.ObjectKey, exp)
 		if err != nil {
 			logger.Printf("presign error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("system"), "artifact.presign", "artifact", artifactID), err)
 			http.Error(w, "presign error", http.StatusInternalServerError)
 			return
 		}
+
+		event := buildAuditEvent(r, trustProxy, actorUser("system"), "artifact.presign", "artifact", artifactID)
+		event.MetadataJSON = auditJSON(map[string]any{"expiresAt": time.Now().UTC().Add(exp)})
+		writeAudit(logger, st, event, nil)
 
 		resp := PresignResponse{DownloadURL: url, ExpiresAt: time.Now().UTC().Add(exp)}
 		w.Header().Set("Content-Type", "application/json")
@@ -354,7 +383,7 @@ func PresignArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, b
 	}
 }
 
-func DeleteArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string) http.HandlerFunc {
+func DeleteArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		artifactID := chi.URLParam(r, "artifactId")
 		if artifactID == "" {
@@ -379,6 +408,7 @@ func DeleteArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 		if objStore != nil && bucket != "" && artifact.ObjectKey != "" {
 			if err := objStore.DeleteObject(r.Context(), bucket, artifact.ObjectKey); err != nil {
 				logger.Printf("delete artifact object error: %v", err)
+				writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.delete", "artifact", artifactID), err)
 				http.Error(w, "object delete error", http.StatusInternalServerError)
 				return
 			}
@@ -386,9 +416,18 @@ func DeleteArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 
 		if err := st.DeleteArtifact(artifactID); err != nil {
 			logger.Printf("delete artifact error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.delete", "artifact", artifactID), err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.delete", "artifact", artifactID)
+		event.BeforeJSON = auditJSON(map[string]any{
+			"artifactId": artifact.ArtifactID,
+			"name":       artifact.Name,
+			"version":    artifact.Version,
+			"type":       artifact.Type,
+		})
+		writeAudit(logger, st, event, nil)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

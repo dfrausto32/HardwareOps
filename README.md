@@ -10,6 +10,7 @@ Forward‑looking plans for deployments, ingest modes, and RBAC:
 - `docs/development/deployment-options.md`
 - `docs/development/artifact-ingest.md`
 - `docs/development/auth-rbac.md`
+- `docs/development/auth-secrets-v1.md`
 - `docs/development/artifact-signing.md`
 - `docs/development/upgrade-strategy.md`
 
@@ -197,6 +198,27 @@ LOG_EXPORT_ADDR=tcp://localhost:5560 ./scripts/artifact-e2e.sh
 
 CSV columns:
 `timestamp, level, component, deviceId, message, fields`
+
+### Audit logging (query + CSV)
+Control-plane env:
+- `AUDIT_RETENTION_DAYS` (default `90`)
+- `AUDIT_RETENTION_CLEANUP_INTERVAL` (default `1h`)
+
+Query audit events:
+```
+curl -s "http://localhost:8080/api/v1/audit?limit=100&action=artifact.upload"
+```
+
+Export audit events (CSV):
+```
+curl -s "http://localhost:8080/api/v1/audit.csv?since=2026-02-01T00:00:00Z" -o /tmp/audit.csv
+```
+
+Get/set retention (days):
+```
+curl -s http://localhost:8080/api/v1/audit/retention
+curl -s -X PUT http://localhost:8080/api/v1/audit/retention -H "Content-Type: application/json" -d '{"days":30}'
+```
 
 ### Demo: Agent Container With Live Service
 This demo runs the control-plane normally, starts an agent container that serves `index.html` from the active artifact, then updates the artifact so the page content changes.
@@ -484,6 +506,10 @@ CONTROL_PLANE_URL=http://host.docker.internal:8080 ./scripts/run-agents.sh -d
 - `GET /api/v1/artifacts/{artifactId}` artifact detail
 - `DELETE /api/v1/artifacts/{artifactId}` delete artifact
 - `POST /api/v1/artifacts/{artifactId}/presign` presigned download URL
+- `GET /api/v1/audit` list audit events (filters via query params)
+- `GET /api/v1/audit.csv` export audit events (CSV)
+- `GET /api/v1/audit/retention` get retention days
+- `PUT /api/v1/audit/retention` update retention days
 - `GET /api/v1/logs/{deviceId}` download device logs (CSV)
 - `GET /api/v1/events` WebSocket stream of device check-ins + apply results
 - `GET /healthz`
@@ -501,6 +527,7 @@ CONTROL_PLANE_URL=http://host.docker.internal:8080 ./scripts/run-agents.sh -d
 - Enable log export by setting `LOG_EXPORT_ADDR` on agents and `LOG_INGEST_ADDR` on the control-plane.
 - Stale device cleanup: `DEVICE_STALE_TTL` (default `1h`) and `DEVICE_CLEANUP_INTERVAL` (default `5m`).
 - Cleanup uses `last_seen`; devices that never checked in are not auto-removed.
+- Audit retention cleanup: `AUDIT_RETENTION_DAYS` (default `90`) and `AUDIT_RETENTION_CLEANUP_INTERVAL` (default `1h`).
 
 ### Event Stream (WebSocket)
 The control-plane broadcasts device check-ins and apply results on a WebSocket stream.

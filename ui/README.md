@@ -18,6 +18,7 @@ npm run dev
 - `VITE_SIMULATE_PROD=1` to disable the dev proxy and force real TLS behavior (recommended)
 - `VITE_API_PROXY=1` to proxy `/api` and `/healthz` through the Vite dev server
 - `VITE_TLS=1` to default the API base to `https://localhost:8080` when not set
+- `VITE_AUTH_TOKEN` optional bearer token for auth-enabled control-plane
 
 ### Self-signed TLS (dev)
 Browsers won't allow insecure TLS from JS. Use one of these:
@@ -50,6 +51,24 @@ VITE_API_BASE_URL=https://localhost:8080
 VITE_SIMULATE_PROD=1
 npm run dev
 ```
+
+## Auth-enabled control-plane
+If `AUTH_MODE=local` is enabled on the control-plane:
+1) Create or use the bootstrap admin user (`AUTH_BOOTSTRAP_EMAIL` / `AUTH_BOOTSTRAP_PASSWORD`).
+2) Get a token:
+```
+curl -s https://localhost:8080/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@example.com","password":"change-me"}'
+```
+3) Set the token:
+```
+export VITE_AUTH_TOKEN=<token>
+npm run dev
+```
+
+You can also sign in via the **Settings → Authentication** panel or the login screen.
+Admins can generate **voucher tokens** to invite new users.
 
 ## UI structure
 - Left nav with two pages: **Dashboard** and **Logs**.
