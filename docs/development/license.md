@@ -57,11 +57,13 @@ Set these in `.env.onprem` (or control‑plane env):
 LICENSE_ENFORCE=1
 LICENSE_PATH=/opt/hardwareops/license.json
 LICENSE_PUBLIC_KEY_PATH=/opt/hardwareops/license.pub
+LICENSE_KEY_MODE=embedded
 LICENSE_CACHE_TTL=30s
 ```
 
 Notes:
-- `LICENSE_PUBLIC_KEY_PATH` points to the PEM public key.
+- **Locked mode:** set `LICENSE_KEY_MODE=embedded` and build the control‑plane with an embedded public key.
+- `LICENSE_PUBLIC_KEY_PATH` is only used when `LICENSE_KEY_MODE=env`.
 - The control‑plane **reloads the license file** on change (default cache TTL 30s).
 - If the license is invalid or expired, **enrollments will be blocked**.
 
@@ -69,6 +71,19 @@ Notes:
 1) Generate a **new license file** with the higher `maxDevices`.
 2) Replace the file at `LICENSE_PATH`.
 3) Wait for `LICENSE_CACHE_TTL` (or restart the control‑plane).
+
+## Embedding the Public Key (Locked Mode)
+Build with an embedded key (PEM public key):
+```bash
+LICENSE_EMBED_PUBKEY_PATH=./license-keys/ed25519.pub \
+./scripts/build-installers.sh
+```
+
+For upgrade bundles:
+```bash
+LICENSE_EMBED_PUBKEY_PATH=./license-keys/ed25519.pub \
+./scripts/build-upgrade-package.sh
+```
 
 ## Enforcement Behavior
 - **Enrollments** are blocked when cap is exceeded.

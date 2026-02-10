@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -93,37 +95,30 @@ func main() {
 				os.Exit(1)
 			}
 		} else {
-			desiredSource := ""
-			if resp.Desired != nil {
-				desiredSource = resp.Desired.Source
-			}
-			if desiredSource == "" {
-				desiredSource = "none"
-			}
-			logger.Infof("check-in ok desired=%v source=%s", resp.Desired != nil, desiredSource)
+			desiredComponents := desiredComponents(resp.Desired)
+			desiredSource := desiredSourceForLog(resp.Desired)
+			logger.Infof("check-in ok desired=%v components=%d source=%s", len(desiredComponents) > 0, len(desiredComponents), desiredSource)
 			if resp.Desired != nil && resp.Desired.CheckinInterval > 0 {
 				interval = time.Duration(resp.Desired.CheckinInterval) * time.Second
 			}
 
-			if resp.Desired != nil && resp.Desired.ArtifactID != "" {
-				if resp.Desired.SoftwareVersion == "" || st.CurrentVersion != resp.Desired.SoftwareVersion || st.CurrentConfigRev != resp.Desired.ConfigRev {
-					applyOpts := artifacts.ApplyOptions{
-						AllowUnsupported:     cfg.AllowUnsupportedApply,
-						SigningPublicKeyPath: cfg.SigningPubKeyPath,
-						SigningKeyID:         cfg.SigningKeyID,
-						RequireSignature:     cfg.RequireSignature,
-					}
-					applyErr := applyDesired(cfg.ArtifactRoot, c, resp.Desired, &st, logger, applyOpts)
-					if applyErr != nil {
-						if err := state.Save(cfg.StatePath, st); err != nil {
-							logger.Warnf("save state: %v", err)
-						}
-						if *once {
-							os.Exit(1)
-						}
-					} else if err := state.Save(cfg.StatePath, st); err != nil {
+			if len(desiredComponents) > 0 {
+				applyOpts := artifacts.ApplyOptions{
+					AllowUnsupported:     cfg.AllowUnsupportedApply,
+					SigningPublicKeyPath: cfg.SigningPubKeyPath,
+					SigningKeyID:         cfg.SigningKeyID,
+					RequireSignature:     cfg.RequireSignature,
+				}
+				applyErr := applyDesiredComponents(cfg.ArtifactRoot, c, desiredComponents, &st, logger, applyOpts)
+				if applyErr != nil {
+					if err := state.Save(cfg.StatePath, st); err != nil {
 						logger.Warnf("save state: %v", err)
 					}
+					if *once {
+						os.Exit(1)
+					}
+				} else if err := state.Save(cfg.StatePath, st); err != nil {
+					logger.Warnf("save state: %v", err)
 				}
 			}
 		}
@@ -225,20 +220,97 @@ func signatureKeyIDFromMetadata(meta json.RawMessage) string {
 	return strings.TrimSpace(val)
 }
 
-func applyDesired(root string, c *client.Client, desired *client.DesiredState, st *state.State, logger *logging.Logger, applyOpts artifacts.ApplyOptions) error {
-	oldVersion := st.CurrentVersion
+func desiredComponents(desired *client.DesiredState) map[string]client.DesiredComponent {
+	if desired == nil {
+		return nil
+	}
+	if len(desired.Components) > 0 {
+		return desired.Components
+	}
+	if desired.ArtifactID == "" {
+		return nil
+	}
+	return map[string]client.DesiredComponent{
+		"app_bundle": {
+			ArtifactID:      desired.ArtifactID,
+			SoftwareVersion: desired.SoftwareVersion,
+			ConfigRev:       desired.ConfigRev,
+			DownloadURL:     desired.DownloadURL,
+			Source:          desired.Source,
+		},
+	}
+}
+
+func desiredSourceForLog(desired *client.DesiredState) string {
+	if desired == nil {
+		return "none"
+	}
+	if len(desired.Components) == 0 {
+		if desired.Source != "" {
+			return desired.Source
+		}
+		return "unknown"
+	}
+	source := ""
+	for _, comp := range desired.Components {
+		if comp.Source == "" {
+			source = "mixed"
+			break
+		}
+		if source == "" {
+			source = comp.Source
+		} else if source != comp.Source {
+			source = "mixed"
+			break
+		}
+	}
+	if source == "" {
+		return "unknown"
+	}
+	return source
+}
+
+func applyDesiredComponents(root string, c *client.Client, desired map[string]client.DesiredComponent, st *state.State, logger *logging.Logger, applyOpts artifacts.ApplyOptions) error {
+	if len(desired) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(desired))
+	for key := range desired {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		component := normalizeComponentKey(key)
+		if component == "" {
+			continue
+		}
+		compDesired := desired[key]
+		if compDesired.ArtifactID == "" {
+			continue
+		}
+		if err := applyDesiredComponent(component, root, c, compDesired, st, logger, applyOpts); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyDesiredComponent(component, root string, c *client.Client, desired client.DesiredComponent, st *state.State, logger *logging.Logger, applyOpts artifacts.ApplyOptions) error {
+	st.EnsureComponents()
+	compState := st.Components[component]
+	oldVersion := compState.CurrentVersion
 	targetVersion := desired.SoftwareVersion
 
 	meta, err := c.GetArtifact(desired.ArtifactID)
 	if err != nil {
-		return reportApplyError(c, st, fmt.Sprintf("get artifact: %v", err), artifacts.ApplyOutcome{}, logger, desired.ArtifactID)
+		return reportApplyError(c, st, component, fmt.Sprintf("get artifact: %v", err), artifacts.ApplyOutcome{}, logger, desired.ArtifactID)
 	}
 
 	presign := desired.DownloadURL
 	if presign == "" {
 		pres, err := c.PresignArtifact(desired.ArtifactID)
 		if err != nil {
-			return reportApplyError(c, st, fmt.Sprintf("presign artifact: %v", err), artifacts.ApplyOutcome{}, logger, desired.ArtifactID)
+			return reportApplyError(c, st, component, fmt.Sprintf("presign artifact: %v", err), artifacts.ApplyOutcome{}, logger, desired.ArtifactID)
 		}
 		presign = pres.DownloadURL
 	}
@@ -247,14 +319,15 @@ func applyDesired(root string, c *client.Client, desired *client.DesiredState, s
 		targetVersion = meta.Version
 	}
 	if targetVersion == "" {
-		return reportApplyError(c, st, "desired version missing and artifact has no version", artifacts.ApplyOutcome{}, logger, desired.ArtifactID)
+		return reportApplyError(c, st, component, "desired version missing and artifact has no version", artifacts.ApplyOutcome{}, logger, desired.ArtifactID)
 	}
-	if st.CurrentVersion == targetVersion && st.CurrentConfigRev == desired.ConfigRev {
+	if compState.CurrentVersion == targetVersion && compState.CurrentConfigRev == desired.ConfigRev {
 		return nil
 	}
 
-	logger.Infof("apply start artifact=%s version=%s", desired.ArtifactID, targetVersion)
-	outcome, err := artifacts.Apply(root, artifacts.Desired{
+	componentRoot := componentRootPath(root, component)
+	logger.Infof("apply start component=%s artifact=%s version=%s", component, desired.ArtifactID, targetVersion)
+	outcome, err := artifacts.Apply(componentRoot, artifacts.Desired{
 		ArtifactID:      desired.ArtifactID,
 		SoftwareVersion: targetVersion,
 		ConfigRev:       desired.ConfigRev,
@@ -271,32 +344,37 @@ func applyDesired(root string, c *client.Client, desired *client.DesiredState, s
 	if err != nil {
 		errMsg := fmt.Sprintf("apply artifact: %v", err)
 		if oldVersion != "" {
-			if rbErr := artifacts.RollbackToVersion(root, oldVersion); rbErr != nil {
+			if rbErr := artifacts.RollbackToVersion(componentRoot, oldVersion); rbErr != nil {
 				errMsg = fmt.Sprintf("%s; rollback failed: %v", errMsg, rbErr)
 			}
 		}
-		return reportApplyError(c, st, errMsg, outcome, logger, desired.ArtifactID)
+		return reportApplyError(c, st, component, errMsg, outcome, logger, desired.ArtifactID)
 	}
 
-	st.PreviousVersion = oldVersion
-	st.CurrentVersion = targetVersion
-	st.CurrentConfigRev = desired.ConfigRev
-	st.LastApplyStatus = "success"
-	st.LastApplyError = ""
-	st.LastApplyAt = time.Now().UTC()
-	st.LastApplyArtifactID = desired.ArtifactID
+	compState.PreviousVersion = oldVersion
+	compState.CurrentVersion = targetVersion
+	compState.CurrentConfigRev = desired.ConfigRev
+	compState.LastApplyStatus = "success"
+	compState.LastApplyError = ""
+	compState.LastApplyAt = time.Now().UTC()
+	compState.LastApplyArtifactID = desired.ArtifactID
 	if outcome.PreApplyStatus != "" {
-		st.LastPreApplyStatus = outcome.PreApplyStatus
-		st.LastPreApplyError = outcome.PreApplyError
-		st.LastPreApplyAt = time.Now().UTC()
+		compState.LastPreApplyStatus = outcome.PreApplyStatus
+		compState.LastPreApplyError = outcome.PreApplyError
+		compState.LastPreApplyAt = time.Now().UTC()
 	}
-	logger.Infof("apply success version=%s", targetVersion)
+	st.Components[component] = compState
+	if component == "app_bundle" {
+		syncTopLevelFromComponent(st, compState)
+	}
+	logger.Infof("apply success component=%s version=%s", component, targetVersion)
 
 	if err := c.PostApplyResult(st.DeviceID, client.ApplyResultRequest{
 		Status:           "success",
 		ArtifactID:       desired.ArtifactID,
-		AppliedVersion:   st.CurrentVersion,
-		AppliedConfigRev: st.CurrentConfigRev,
+		Component:        component,
+		AppliedVersion:   compState.CurrentVersion,
+		AppliedConfigRev: compState.CurrentConfigRev,
 		PreApplyStatus:   outcome.PreApplyStatus,
 		PreApplyError:    outcome.PreApplyError,
 	}); err != nil {
@@ -305,19 +383,26 @@ func applyDesired(root string, c *client.Client, desired *client.DesiredState, s
 	return nil
 }
 
-func reportApplyError(c *client.Client, st *state.State, errMsg string, outcome artifacts.ApplyOutcome, logger *logging.Logger, artifactID string) error {
-	st.LastApplyStatus = "error"
-	st.LastApplyError = errMsg
-	st.LastApplyAt = time.Now().UTC()
-	st.LastApplyArtifactID = artifactID
+func reportApplyError(c *client.Client, st *state.State, component string, errMsg string, outcome artifacts.ApplyOutcome, logger *logging.Logger, artifactID string) error {
+	st.EnsureComponents()
+	compState := st.Components[component]
+	compState.LastApplyStatus = "error"
+	compState.LastApplyError = errMsg
+	compState.LastApplyAt = time.Now().UTC()
+	compState.LastApplyArtifactID = artifactID
 	if outcome.PreApplyStatus != "" {
-		st.LastPreApplyStatus = outcome.PreApplyStatus
-		st.LastPreApplyError = outcome.PreApplyError
-		st.LastPreApplyAt = time.Now().UTC()
+		compState.LastPreApplyStatus = outcome.PreApplyStatus
+		compState.LastPreApplyError = outcome.PreApplyError
+		compState.LastPreApplyAt = time.Now().UTC()
+	}
+	st.Components[component] = compState
+	if component == "app_bundle" {
+		syncTopLevelFromComponent(st, compState)
 	}
 	if err := c.PostApplyResult(st.DeviceID, client.ApplyResultRequest{
 		Status:         "error",
 		ArtifactID:     artifactID,
+		Component:      component,
 		Error:          errMsg,
 		PreApplyStatus: outcome.PreApplyStatus,
 		PreApplyError:  outcome.PreApplyError,
@@ -325,4 +410,29 @@ func reportApplyError(c *client.Client, st *state.State, errMsg string, outcome 
 		logger.Warnf("post apply result: %v", err)
 	}
 	return errors.New(errMsg)
+}
+
+func normalizeComponentKey(val string) string {
+	clean := strings.TrimSpace(strings.ToLower(val))
+	return clean
+}
+
+func componentRootPath(root, component string) string {
+	if component == "" || component == "app_bundle" {
+		return root
+	}
+	return filepath.Join(root, "components", component)
+}
+
+func syncTopLevelFromComponent(st *state.State, comp state.ComponentState) {
+	st.PreviousVersion = comp.PreviousVersion
+	st.CurrentVersion = comp.CurrentVersion
+	st.CurrentConfigRev = comp.CurrentConfigRev
+	st.LastApplyStatus = comp.LastApplyStatus
+	st.LastApplyError = comp.LastApplyError
+	st.LastApplyAt = comp.LastApplyAt
+	st.LastApplyArtifactID = comp.LastApplyArtifactID
+	st.LastPreApplyStatus = comp.LastPreApplyStatus
+	st.LastPreApplyError = comp.LastPreApplyError
+	st.LastPreApplyAt = comp.LastPreApplyAt
 }

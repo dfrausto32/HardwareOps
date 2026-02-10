@@ -84,7 +84,7 @@ func PutGroup(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerF
 	}
 }
 
-func ListGroups(logger *log.Logger, st store.Store) http.HandlerFunc {
+func ListGroups(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groups, err := st.ListGroups()
 		if err != nil {
@@ -101,6 +101,9 @@ func ListGroups(logger *log.Logger, st store.Store) http.HandlerFunc {
 				CreatedAt: g.CreatedAt,
 			})
 		}
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "group.list", "group", "")
+		event.MetadataJSON = auditJSON(map[string]any{"count": len(resp.Items)})
+		writeAudit(logger, st, event, nil)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	}

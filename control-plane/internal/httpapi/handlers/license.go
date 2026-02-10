@@ -26,12 +26,14 @@ type LicenseStatus struct {
 	KeyID      string     `json:"keyId,omitempty"`
 	Source     string     `json:"source,omitempty"`
 	LoadedAt   *time.Time `json:"loadedAt,omitempty"`
+	KeyMode    string     `json:"keyMode,omitempty"`
 }
 
 func GetLicenseStatus(logger *log.Logger, st store.Store, mgr *license.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		resp := LicenseStatus{Enabled: false, Valid: true}
 		if mgr == nil || !mgr.Enabled() {
+			resp.KeyMode = "disabled"
 			if st != nil {
 				if count, err := st.CountDevices(); err == nil {
 					resp.Devices = count
@@ -44,6 +46,10 @@ func GetLicenseStatus(logger *log.Logger, st store.Store, mgr *license.Manager) 
 		resp.Enabled = info.Enabled
 		resp.Valid = info.Valid
 		resp.Error = info.Error
+		resp.KeyMode = "embedded"
+		if info.Source != "" {
+			resp.KeyMode = "env"
+		}
 		resp.IssuedTo = info.Payload.IssuedTo
 		resp.MaxDevices = info.Payload.MaxDevices
 		resp.NotBefore = info.Payload.NotBefore

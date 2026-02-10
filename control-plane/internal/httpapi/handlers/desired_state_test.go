@@ -151,7 +151,7 @@ func TestListDesiredState(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/desired-state", nil)
 	w := httptest.NewRecorder()
 
-	ListDesiredState(logger, mem).ServeHTTP(w, req)
+	ListDesiredState(logger, mem, false).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)

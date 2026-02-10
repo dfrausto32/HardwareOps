@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hardwareops/control-plane/internal/events"
@@ -11,11 +12,12 @@ import (
 )
 
 type DeviceCheckinRequest struct {
-	DeviceID     string          `json:"deviceId"`
-	AgentVersion string          `json:"agentVersion"`
-	Current      DeviceCurrent   `json:"current"`
-	Labels       json.RawMessage `json:"labels,omitempty"`
-	Capabilities json.RawMessage `json:"capabilities"`
+	DeviceID          string                            `json:"deviceId"`
+	AgentVersion      string                            `json:"agentVersion"`
+	Current           DeviceCurrent                     `json:"current"`
+	CurrentComponents map[string]DeviceCurrentComponent `json:"currentComponents,omitempty"`
+	Labels            json.RawMessage                   `json:"labels,omitempty"`
+	Capabilities      json.RawMessage                   `json:"capabilities"`
 }
 
 type DeviceCurrent struct {
@@ -32,6 +34,30 @@ type DeviceCurrent struct {
 	LastPreApplyAt      *time.Time      `json:"lastPreApplyAt,omitempty"`
 }
 
+type DeviceCurrentComponent struct {
+	SoftwareVersion     string     `json:"softwareVersion,omitempty"`
+	ConfigRev           string     `json:"configRev,omitempty"`
+	LastApplyStatus     string     `json:"lastApplyStatus,omitempty"`
+	LastApplyError      string     `json:"lastApplyError,omitempty"`
+	LastApplyAt         *time.Time `json:"lastApplyAt,omitempty"`
+	LastApplyArtifactID string     `json:"lastApplyArtifactId,omitempty"`
+	LastPreApplyStatus  string     `json:"lastPreApplyStatus,omitempty"`
+	LastPreApplyError   string     `json:"lastPreApplyError,omitempty"`
+	LastPreApplyAt      *time.Time `json:"lastPreApplyAt,omitempty"`
+}
+
+type DeviceComponentState struct {
+	CurrentVersion      string     `json:"currentVersion,omitempty"`
+	CurrentConfigRev    string     `json:"currentConfigRev,omitempty"`
+	LastApplyStatus     string     `json:"lastApplyStatus,omitempty"`
+	LastApplyError      string     `json:"lastApplyError,omitempty"`
+	LastApplyAt         *time.Time `json:"lastApplyAt,omitempty"`
+	LastApplyArtifactID string     `json:"lastApplyArtifactId,omitempty"`
+	LastPreApplyStatus  string     `json:"lastPreApplyStatus,omitempty"`
+	LastPreApplyError   string     `json:"lastPreApplyError,omitempty"`
+	LastPreApplyAt      *time.Time `json:"lastPreApplyAt,omitempty"`
+}
+
 type DeviceCheckinResponse struct {
 	Desired        *DesiredState `json:"desired"`
 	PendingActions []Action      `json:"pendingActions"`
@@ -39,13 +65,25 @@ type DeviceCheckinResponse struct {
 }
 
 type DesiredState struct {
+	ArtifactID      string                      `json:"artifactId"`
+	SoftwareVersion string                      `json:"softwareVersion"`
+	ConfigRev       string                      `json:"configRev"`
+	DownloadURL     string                      `json:"downloadUrl"`
+	ApplyPolicy     json.RawMessage             `json:"applyPolicy"`
+	CheckinInterval int                         `json:"checkinIntervalSec,omitempty"`
+	Source          string                      `json:"source,omitempty"`
+	Components      map[string]DesiredComponent `json:"components,omitempty"`
+}
+
+type DesiredComponent struct {
 	ArtifactID      string          `json:"artifactId"`
+	ArtifactType    string          `json:"artifactType,omitempty"`
 	SoftwareVersion string          `json:"softwareVersion"`
 	ConfigRev       string          `json:"configRev"`
 	DownloadURL     string          `json:"downloadUrl"`
 	ApplyPolicy     json.RawMessage `json:"applyPolicy"`
-	CheckinInterval int             `json:"checkinIntervalSec,omitempty"`
 	Source          string          `json:"source,omitempty"`
+	Locked          bool            `json:"locked,omitempty"`
 }
 
 type Action struct {
@@ -75,6 +113,22 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 		req.DeviceID = device.DeviceID
 
 		now := time.Now().UTC()
+		prevState, _, _ := st.GetDeviceState(req.DeviceID)
+		prevComponents := decodeDeviceComponents(prevState.ComponentsJSON)
+		currentComponents := map[string]DeviceComponentState{}
+		for key, comp := range req.CurrentComponents {
+			component := normalizeComponentKey(key)
+			if component == "" {
+				continue
+			}
+			currentComponents[component] = mergeComponentCurrent(comp, prevComponents[component])
+		}
+		if req.Current.SoftwareVersion == "" {
+			if comp, ok := currentComponents["app_bundle"]; ok {
+				req.Current.SoftwareVersion = comp.CurrentVersion
+				req.Current.ConfigRev = comp.CurrentConfigRev
+			}
+		}
 		prevApply := prevApplyStatus(st, req.DeviceID)
 		lastApplyStatus := req.Current.LastApplyStatus
 		if lastApplyStatus == "" {
@@ -105,7 +159,7 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 			lastPreApplyAt = *req.Current.LastPreApplyAt
 		}
 		status := "active"
-		if lastApplyStatus == "error" || lastPreApplyStatus == "error" {
+		if componentHasError(currentComponents) || lastApplyStatus == "error" || lastPreApplyStatus == "error" {
 			status = "degraded"
 		}
 
@@ -125,6 +179,7 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 			CurrentConfigRev:    req.Current.ConfigRev,
 			ServicesJSON:        req.Current.Services,
 			HealthJSON:          req.Current.Health,
+			ComponentsJSON:      encodeDeviceComponents(currentComponents),
 			UpdatedAt:           now,
 			LastApplyStatus:     lastApplyStatus,
 			LastApplyError:      lastApplyError,
@@ -147,57 +202,94 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
-		var desiredResp *DesiredState
-		if hasDesired && desired.Source == "manual" {
-			desiredResp = &DesiredState{
-				ArtifactID:      desired.ArtifactID,
-				SoftwareVersion: desired.DesiredVersion,
-				ConfigRev:       desired.DesiredConfigRev,
-				ApplyPolicy:     desired.PolicyJSON,
-				CheckinInterval: desired.CheckinInterval,
-				Source:          "manual",
-			}
-		} else {
-			if req.Current.SoftwareVersion != "" || req.Current.ConfigRev != "" {
-				_ = st.UpsertDesiredStateDevice(store.DesiredStateDevice{
-					DeviceID:         req.DeviceID,
-					DesiredVersion:   req.Current.SoftwareVersion,
-					DesiredConfigRev: req.Current.ConfigRev,
-					Source:           "agent",
-					UpdatedAt:        now,
-				})
-				if desired, hasDesired, err = st.GetDesiredStateDevice(req.DeviceID); err != nil {
-					logger.Printf("get desired_state_device error: %v", err)
-					http.Error(w, "storage error", http.StatusInternalServerError)
-					return
+		desiredComponents := mergeLegacyDesiredComponents(decodeDesiredComponents(desired.ComponentsJSON), desired.ArtifactID, desired.DesiredVersion, desired.DesiredConfigRev, desired.PolicyJSON, desired.Source)
+		agentUpdate := false
+		if len(currentComponents) > 0 {
+			for key, comp := range currentComponents {
+				existing := desiredComponents[key]
+				if existing.Source == "manual" {
+					continue
 				}
+				desiredComponents[key] = DesiredComponentResponse{
+					ArtifactID:       existing.ArtifactID,
+					DesiredVersion:   comp.CurrentVersion,
+					DesiredConfigRev: comp.CurrentConfigRev,
+					Policy:           existing.Policy,
+					Source:           "agent",
+				}
+				agentUpdate = true
 			}
-
-			groupDesired, hasGroup, err := st.GetDesiredStateGroupForDevice(req.DeviceID)
-			if err != nil {
-				logger.Printf("get desired_state_group error: %v", err)
+		}
+		if agentUpdate {
+			legacy := legacyFromComponents(desiredComponents)
+			_ = st.UpsertDesiredStateDevice(store.DesiredStateDevice{
+				DeviceID:         req.DeviceID,
+				ArtifactID:       legacy.ArtifactID,
+				DesiredVersion:   legacy.DesiredVersion,
+				DesiredConfigRev: legacy.DesiredConfigRev,
+				PolicyJSON:       legacy.Policy,
+				ComponentsJSON:   encodeDesiredComponents(desiredComponents),
+				CheckinInterval:  desired.CheckinInterval,
+				Source:           "agent",
+				UpdatedAt:        now,
+			})
+			if desired, hasDesired, err = st.GetDesiredStateDevice(req.DeviceID); err != nil {
+				logger.Printf("get desired_state_device error: %v", err)
 				http.Error(w, "storage error", http.StatusInternalServerError)
 				return
 			}
+		}
 
-			if hasGroup {
-				desiredResp = &DesiredState{
-					ArtifactID:      groupDesired.ArtifactID,
-					SoftwareVersion: groupDesired.DesiredVersion,
-					ConfigRev:       groupDesired.DesiredConfigRev,
-					ApplyPolicy:     groupDesired.PolicyJSON,
-					CheckinInterval: groupDesired.CheckinInterval,
-					Source:          "group",
-				}
+		groupDesired, hasGroup, err := st.GetDesiredStateGroupForDevice(req.DeviceID)
+		if err != nil {
+			logger.Printf("get desired_state_group error: %v", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		groupComponents := mergeLegacyDesiredComponents(decodeDesiredComponents(groupDesired.ComponentsJSON), groupDesired.ArtifactID, groupDesired.DesiredVersion, groupDesired.DesiredConfigRev, groupDesired.PolicyJSON, "")
+
+		respComponents := map[string]DesiredComponent{}
+		componentKeys := map[string]struct{}{}
+		for key := range desiredComponents {
+			componentKeys[key] = struct{}{}
+		}
+		for key := range groupComponents {
+			componentKeys[key] = struct{}{}
+		}
+		for key := range componentKeys {
+			if comp, ok := desiredComponents[key]; ok && comp.Source == "manual" {
+				out := toCheckinComponent(comp)
+				out.Source = "manual"
+				respComponents[key] = out
+				continue
+			}
+			if comp, ok := groupComponents[key]; ok && (comp.ArtifactID != "" || comp.DesiredVersion != "" || comp.DesiredConfigRev != "" || len(comp.Policy) != 0) {
+				out := toCheckinComponent(comp)
+				out.Source = "group"
+				respComponents[key] = out
+				continue
+			}
+			if comp, ok := desiredComponents[key]; ok {
+				respComponents[key] = toCheckinComponent(comp)
+			}
+		}
+
+		var desiredResp *DesiredState
+		if len(respComponents) > 0 {
+			desiredResp = &DesiredState{
+				Components: respComponents,
+			}
+			if comp, ok := respComponents["app_bundle"]; ok {
+				desiredResp.ArtifactID = comp.ArtifactID
+				desiredResp.SoftwareVersion = comp.SoftwareVersion
+				desiredResp.ConfigRev = comp.ConfigRev
+				desiredResp.ApplyPolicy = comp.ApplyPolicy
+				desiredResp.Source = comp.Source
+			}
+			if hasGroup && groupDesired.CheckinInterval > 0 {
+				desiredResp.CheckinInterval = groupDesired.CheckinInterval
 			} else if hasDesired {
-				desiredResp = &DesiredState{
-					ArtifactID:      desired.ArtifactID,
-					SoftwareVersion: desired.DesiredVersion,
-					ConfigRev:       desired.DesiredConfigRev,
-					ApplyPolicy:     desired.PolicyJSON,
-					CheckinInterval: desired.CheckinInterval,
-					Source:          desired.Source,
-				}
+				desiredResp.CheckinInterval = desired.CheckinInterval
 			}
 		}
 
@@ -284,4 +376,94 @@ func desiredRespCheckinInterval(resp *DesiredState) int {
 		return 0
 	}
 	return resp.CheckinInterval
+}
+
+func normalizeComponentKey(val string) string {
+	key := strings.TrimSpace(strings.ToLower(val))
+	return key
+}
+
+func mergeComponentCurrent(cur DeviceCurrentComponent, prev DeviceComponentState) DeviceComponentState {
+	state := DeviceComponentState{
+		CurrentVersion:      cur.SoftwareVersion,
+		CurrentConfigRev:    cur.ConfigRev,
+		LastApplyStatus:     cur.LastApplyStatus,
+		LastApplyError:      cur.LastApplyError,
+		LastApplyAt:         cur.LastApplyAt,
+		LastApplyArtifactID: cur.LastApplyArtifactID,
+		LastPreApplyStatus:  cur.LastPreApplyStatus,
+		LastPreApplyError:   cur.LastPreApplyError,
+		LastPreApplyAt:      cur.LastPreApplyAt,
+	}
+	if state.CurrentVersion == "" {
+		state.CurrentVersion = prev.CurrentVersion
+	}
+	if state.CurrentConfigRev == "" {
+		state.CurrentConfigRev = prev.CurrentConfigRev
+	}
+	if state.LastApplyStatus == "" {
+		state.LastApplyStatus = prev.LastApplyStatus
+	}
+	if state.LastApplyError == "" {
+		state.LastApplyError = prev.LastApplyError
+	}
+	if state.LastApplyAt == nil {
+		state.LastApplyAt = prev.LastApplyAt
+	}
+	if state.LastApplyArtifactID == "" {
+		state.LastApplyArtifactID = prev.LastApplyArtifactID
+	}
+	if state.LastPreApplyStatus == "" {
+		state.LastPreApplyStatus = prev.LastPreApplyStatus
+	}
+	if state.LastPreApplyError == "" {
+		state.LastPreApplyError = prev.LastPreApplyError
+	}
+	if state.LastPreApplyAt == nil {
+		state.LastPreApplyAt = prev.LastPreApplyAt
+	}
+	return state
+}
+
+func decodeDeviceComponents(raw []byte) map[string]DeviceComponentState {
+	if len(raw) == 0 {
+		return map[string]DeviceComponentState{}
+	}
+	var comps map[string]DeviceComponentState
+	if err := json.Unmarshal(raw, &comps); err != nil {
+		return map[string]DeviceComponentState{}
+	}
+	return comps
+}
+
+func encodeDeviceComponents(comps map[string]DeviceComponentState) []byte {
+	if len(comps) == 0 {
+		return nil
+	}
+	out, err := json.Marshal(comps)
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
+func componentHasError(comps map[string]DeviceComponentState) bool {
+	for _, comp := range comps {
+		if comp.LastApplyStatus == "error" || comp.LastPreApplyStatus == "error" {
+			return true
+		}
+	}
+	return false
+}
+
+func toCheckinComponent(comp DesiredComponentResponse) DesiredComponent {
+	return DesiredComponent{
+		ArtifactID:      comp.ArtifactID,
+		ArtifactType:    comp.ArtifactType,
+		SoftwareVersion: comp.DesiredVersion,
+		ConfigRev:       comp.DesiredConfigRev,
+		ApplyPolicy:     comp.Policy,
+		Source:          comp.Source,
+		Locked:          comp.Locked,
+	}
 }

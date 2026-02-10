@@ -62,6 +62,7 @@ type Config struct {
 	LicensePath                   string
 	LicensePublicKey              string
 	LicensePublicKeyPath          string
+	LicenseKeyMode                string
 	LicenseEnforce                bool
 	LicenseCacheTTL               time.Duration
 }
@@ -134,6 +135,7 @@ func FromEnv() Config {
 		LicensePath:                   os.Getenv("LICENSE_PATH"),
 		LicensePublicKey:              os.Getenv("LICENSE_PUBLIC_KEY"),
 		LicensePublicKeyPath:          os.Getenv("LICENSE_PUBLIC_KEY_PATH"),
+		LicenseKeyMode:                getenvDefault("LICENSE_KEY_MODE", "env"),
 		LicenseEnforce:                parseBoolEnv("LICENSE_ENFORCE"),
 		LicenseCacheTTL:               parseDurationDefault(getenvDefault("LICENSE_CACHE_TTL", "30s"), 30*time.Second),
 	}

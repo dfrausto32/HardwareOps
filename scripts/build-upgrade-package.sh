@@ -17,6 +17,8 @@ DIST_DIR=${DIST_DIR:-$BASE_DIR/dist/upgrades/$DIST_NAME}
 PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://hardwareops.internal}
 MAINTENANCE_TOKEN=${MAINTENANCE_TOKEN:-change-me}
 ENV_FILE=${ENV_FILE:-}
+LICENSE_EMBED_PUBKEY_PATH=${LICENSE_EMBED_PUBKEY_PATH:-}
+LICENSE_EMBED_PUBKEY_B64=${LICENSE_EMBED_PUBKEY_B64:-}
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Docker not found. Install Docker or run on a machine with Docker." >&2
@@ -28,7 +30,19 @@ mkdir -p "$DIST_DIR/images" "$DIST_DIR/scripts"
 cp_tag="hardwareops-control-plane:${VERSION}-${arch}"
 gw_tag="hardwareops-gateway:${VERSION}-${arch}"
 
-docker build -t "$cp_tag" -f "$BASE_DIR/control-plane/Dockerfile" "$BASE_DIR"
+if [ -z "$LICENSE_EMBED_PUBKEY_B64" ] && [ -n "$LICENSE_EMBED_PUBKEY_PATH" ]; then
+  if [ ! -f "$LICENSE_EMBED_PUBKEY_PATH" ]; then
+    echo "LICENSE_EMBED_PUBKEY_PATH not found: $LICENSE_EMBED_PUBKEY_PATH" >&2
+    exit 1
+  fi
+  LICENSE_EMBED_PUBKEY_B64=$(openssl pkey -pubin -in "$LICENSE_EMBED_PUBKEY_PATH" -pubout -outform DER | tail -c 32 | base64 -w 0)
+fi
+build_args=()
+if [ -n "$LICENSE_EMBED_PUBKEY_B64" ]; then
+  build_args+=(--build-arg "LICENSE_EMBED_PUBKEY_B64=$LICENSE_EMBED_PUBKEY_B64")
+fi
+
+docker build -t "$cp_tag" -f "$BASE_DIR/control-plane/Dockerfile" "${build_args[@]}" "$BASE_DIR"
 docker build -t "$gw_tag" -f "$BASE_DIR/deploy/compose/nginx/Dockerfile" \
   --build-arg VITE_API_BASE_URL="$PUBLIC_BASE_URL" \
   --build-arg VITE_SIMULATE_PROD=1 \
@@ -89,6 +103,7 @@ services:
       LICENSE_PATH: \${LICENSE_PATH:-}
       LICENSE_PUBLIC_KEY: \${LICENSE_PUBLIC_KEY:-}
       LICENSE_PUBLIC_KEY_PATH: \${LICENSE_PUBLIC_KEY_PATH:-}
+      LICENSE_KEY_MODE: \${LICENSE_KEY_MODE:-env}
       LICENSE_CACHE_TTL: \${LICENSE_CACHE_TTL:-30s}
       LOG_DIR: /var/lib/hardwareops/logs
       DISABLE_HTTP2: "1"

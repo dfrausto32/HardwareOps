@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -12,32 +14,54 @@ import (
 )
 
 type DesiredStateRequest struct {
-	ArtifactID       string          `json:"artifactId"`
-	DesiredVersion   string          `json:"desiredVersion"`
-	DesiredConfigRev string          `json:"desiredConfigRev"`
-	Policy           json.RawMessage `json:"policy"`
-	CheckinInterval  int             `json:"checkinIntervalSec"`
+	ArtifactID       string                             `json:"artifactId"`
+	DesiredVersion   string                             `json:"desiredVersion"`
+	DesiredConfigRev string                             `json:"desiredConfigRev"`
+	Policy           json.RawMessage                    `json:"policy"`
+	Components       map[string]DesiredComponentRequest `json:"components,omitempty"`
+	CheckinInterval  int                                `json:"checkinIntervalSec"`
+}
+
+type DesiredComponentRequest struct {
+	ArtifactID       string          `json:"artifactId,omitempty"`
+	ArtifactType     string          `json:"artifactType,omitempty"`
+	DesiredVersion   string          `json:"desiredVersion,omitempty"`
+	DesiredConfigRev string          `json:"desiredConfigRev,omitempty"`
+	Policy           json.RawMessage `json:"policy,omitempty"`
+	Locked           bool            `json:"locked,omitempty"`
+}
+
+type DesiredComponentResponse struct {
+	ArtifactID       string          `json:"artifactId,omitempty"`
+	ArtifactType     string          `json:"artifactType,omitempty"`
+	DesiredVersion   string          `json:"desiredVersion,omitempty"`
+	DesiredConfigRev string          `json:"desiredConfigRev,omitempty"`
+	Policy           json.RawMessage `json:"policy,omitempty"`
+	Source           string          `json:"source,omitempty"`
+	Locked           bool            `json:"locked,omitempty"`
 }
 
 type DesiredStateGroupResponse struct {
-	GroupID          string          `json:"groupId"`
-	ArtifactID       string          `json:"artifactId,omitempty"`
-	DesiredVersion   string          `json:"desiredVersion,omitempty"`
-	DesiredConfigRev string          `json:"desiredConfigRev,omitempty"`
-	Policy           json.RawMessage `json:"policy,omitempty"`
-	CheckinInterval  int             `json:"checkinIntervalSec,omitempty"`
-	UpdatedAt        time.Time       `json:"updatedAt"`
+	GroupID          string                              `json:"groupId"`
+	ArtifactID       string                              `json:"artifactId,omitempty"`
+	DesiredVersion   string                              `json:"desiredVersion,omitempty"`
+	DesiredConfigRev string                              `json:"desiredConfigRev,omitempty"`
+	Policy           json.RawMessage                     `json:"policy,omitempty"`
+	Components       map[string]DesiredComponentResponse `json:"components,omitempty"`
+	CheckinInterval  int                                 `json:"checkinIntervalSec,omitempty"`
+	UpdatedAt        time.Time                           `json:"updatedAt"`
 }
 
 type DesiredStateDeviceResponse struct {
-	DeviceID         string          `json:"deviceId"`
-	ArtifactID       string          `json:"artifactId,omitempty"`
-	DesiredVersion   string          `json:"desiredVersion,omitempty"`
-	DesiredConfigRev string          `json:"desiredConfigRev,omitempty"`
-	Policy           json.RawMessage `json:"policy,omitempty"`
-	CheckinInterval  int             `json:"checkinIntervalSec,omitempty"`
-	Source           string          `json:"source"`
-	UpdatedAt        time.Time       `json:"updatedAt"`
+	DeviceID         string                              `json:"deviceId"`
+	ArtifactID       string                              `json:"artifactId,omitempty"`
+	DesiredVersion   string                              `json:"desiredVersion,omitempty"`
+	DesiredConfigRev string                              `json:"desiredConfigRev,omitempty"`
+	Policy           json.RawMessage                     `json:"policy,omitempty"`
+	Components       map[string]DesiredComponentResponse `json:"components,omitempty"`
+	CheckinInterval  int                                 `json:"checkinIntervalSec,omitempty"`
+	Source           string                              `json:"source"`
+	UpdatedAt        time.Time                           `json:"updatedAt"`
 }
 
 type DesiredStateListResponse struct {
@@ -66,17 +90,34 @@ func PutDesiredStateGroup(logger *log.Logger, st store.Store, trustProxy bool) h
 			http.Error(w, "checkinIntervalSec must be >= 0", http.StatusBadRequest)
 			return
 		}
-		if req.DesiredVersion == "" && req.ArtifactID == "" && req.CheckinInterval == 0 && len(req.Policy) == 0 {
-			http.Error(w, "artifactId required when desiredVersion is empty", http.StatusBadRequest)
+		if len(req.Components) == 0 && req.DesiredVersion == "" && req.ArtifactID == "" {
+			if req.DesiredConfigRev != "" || len(req.Policy) > 0 {
+				http.Error(w, "artifactId required when desiredVersion is empty", http.StatusBadRequest)
+				return
+			}
+			if req.DesiredConfigRev == "" && len(req.Policy) == 0 && req.CheckinInterval == 0 {
+				http.Error(w, "artifactId required when desiredVersion is empty", http.StatusBadRequest)
+				return
+			}
+		}
+		components, err := normalizeDesiredComponents(req, "", st)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		if err := enforceComponentLocks(existingGroupComponents(st, groupID), components); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		legacy := legacyFromComponents(components)
 
 		state := store.DesiredStateGroup{
 			GroupID:          groupID,
-			ArtifactID:       req.ArtifactID,
-			DesiredVersion:   req.DesiredVersion,
-			DesiredConfigRev: req.DesiredConfigRev,
-			PolicyJSON:       req.Policy,
+			ArtifactID:       legacy.ArtifactID,
+			DesiredVersion:   legacy.DesiredVersion,
+			DesiredConfigRev: legacy.DesiredConfigRev,
+			PolicyJSON:       legacy.Policy,
+			ComponentsJSON:   encodeDesiredComponents(components),
 			CheckinInterval:  req.CheckinInterval,
 			UpdatedAt:        time.Now().UTC(),
 		}
@@ -95,6 +136,7 @@ func PutDesiredStateGroup(logger *log.Logger, st store.Store, trustProxy bool) h
 			"desiredConfigRev": state.DesiredConfigRev,
 			"checkinInterval":  state.CheckinInterval,
 			"policy":           json.RawMessage(state.PolicyJSON),
+			"components":       components,
 		})
 		writeAudit(logger, st, event, nil)
 
@@ -104,6 +146,7 @@ func PutDesiredStateGroup(logger *log.Logger, st store.Store, trustProxy bool) h
 			DesiredVersion:   state.DesiredVersion,
 			DesiredConfigRev: state.DesiredConfigRev,
 			Policy:           state.PolicyJSON,
+			Components:       components,
 			CheckinInterval:  state.CheckinInterval,
 			UpdatedAt:        state.UpdatedAt,
 		}
@@ -133,17 +176,43 @@ func PutDesiredStateDevice(logger *log.Logger, st store.Store, trustProxy bool) 
 			http.Error(w, "checkinIntervalSec must be >= 0", http.StatusBadRequest)
 			return
 		}
-		if req.DesiredVersion == "" && req.ArtifactID == "" && req.CheckinInterval == 0 && len(req.Policy) == 0 {
-			http.Error(w, "artifactId required when desiredVersion is empty", http.StatusBadRequest)
+		if len(req.Components) == 0 && req.DesiredVersion == "" && req.ArtifactID == "" {
+			if req.DesiredConfigRev != "" || len(req.Policy) > 0 {
+				http.Error(w, "artifactId required when desiredVersion is empty", http.StatusBadRequest)
+				return
+			}
+			if req.DesiredConfigRev == "" && len(req.Policy) == 0 && req.CheckinInterval == 0 {
+				http.Error(w, "artifactId required when desiredVersion is empty", http.StatusBadRequest)
+				return
+			}
+		}
+		components, err := normalizeDesiredComponents(req, "manual", st)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		existing, ok, err := st.GetDesiredStateDevice(deviceID)
+		if err != nil {
+			logger.Printf("get desired_state_device error: %v", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		if ok {
+			existingComponents := decodeDesiredComponents(existing.ComponentsJSON)
+			if err := enforceComponentLocks(existingComponents, components); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		legacy := legacyFromComponents(components)
 
 		state := store.DesiredStateDevice{
 			DeviceID:         deviceID,
-			ArtifactID:       req.ArtifactID,
-			DesiredVersion:   req.DesiredVersion,
-			DesiredConfigRev: req.DesiredConfigRev,
-			PolicyJSON:       req.Policy,
+			ArtifactID:       legacy.ArtifactID,
+			DesiredVersion:   legacy.DesiredVersion,
+			DesiredConfigRev: legacy.DesiredConfigRev,
+			PolicyJSON:       legacy.Policy,
+			ComponentsJSON:   encodeDesiredComponents(components),
 			CheckinInterval:  req.CheckinInterval,
 			Source:           "manual",
 			UpdatedAt:        time.Now().UTC(),
@@ -163,6 +232,7 @@ func PutDesiredStateDevice(logger *log.Logger, st store.Store, trustProxy bool) 
 			"desiredConfigRev": state.DesiredConfigRev,
 			"checkinInterval":  state.CheckinInterval,
 			"policy":           json.RawMessage(state.PolicyJSON),
+			"components":       components,
 			"source":           state.Source,
 		})
 		writeAudit(logger, st, event, nil)
@@ -173,6 +243,7 @@ func PutDesiredStateDevice(logger *log.Logger, st store.Store, trustProxy bool) 
 			DesiredVersion:   state.DesiredVersion,
 			DesiredConfigRev: state.DesiredConfigRev,
 			Policy:           state.PolicyJSON,
+			Components:       components,
 			CheckinInterval:  state.CheckinInterval,
 			Source:           state.Source,
 			UpdatedAt:        state.UpdatedAt,
@@ -226,7 +297,7 @@ func DeleteDesiredStateGroup(logger *log.Logger, st store.Store, trustProxy bool
 	}
 }
 
-func ListDesiredState(logger *log.Logger, st store.Store) http.HandlerFunc {
+func ListDesiredState(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		scope := r.URL.Query().Get("scope")
 		resp := DesiredStateListResponse{}
@@ -240,12 +311,15 @@ func ListDesiredState(logger *log.Logger, st store.Store) http.HandlerFunc {
 			}
 			resp.Groups = make([]DesiredStateGroupResponse, 0, len(groups))
 			for _, g := range groups {
+				components := decodeDesiredComponents(g.ComponentsJSON)
+				components = mergeLegacyDesiredComponents(components, g.ArtifactID, g.DesiredVersion, g.DesiredConfigRev, g.PolicyJSON, "")
 				resp.Groups = append(resp.Groups, DesiredStateGroupResponse{
 					GroupID:          g.GroupID,
 					ArtifactID:       g.ArtifactID,
 					DesiredVersion:   g.DesiredVersion,
 					DesiredConfigRev: g.DesiredConfigRev,
 					Policy:           g.PolicyJSON,
+					Components:       components,
 					CheckinInterval:  g.CheckinInterval,
 					UpdatedAt:        g.UpdatedAt,
 				})
@@ -261,12 +335,15 @@ func ListDesiredState(logger *log.Logger, st store.Store) http.HandlerFunc {
 			}
 			resp.Devices = make([]DesiredStateDeviceResponse, 0, len(devices))
 			for _, d := range devices {
+				components := decodeDesiredComponents(d.ComponentsJSON)
+				components = mergeLegacyDesiredComponents(components, d.ArtifactID, d.DesiredVersion, d.DesiredConfigRev, d.PolicyJSON, d.Source)
 				resp.Devices = append(resp.Devices, DesiredStateDeviceResponse{
 					DeviceID:         d.DeviceID,
 					ArtifactID:       d.ArtifactID,
 					DesiredVersion:   d.DesiredVersion,
 					DesiredConfigRev: d.DesiredConfigRev,
 					Policy:           d.PolicyJSON,
+					Components:       components,
 					CheckinInterval:  d.CheckinInterval,
 					Source:           d.Source,
 					UpdatedAt:        d.UpdatedAt,
@@ -274,7 +351,193 @@ func ListDesiredState(logger *log.Logger, st store.Store) http.HandlerFunc {
 			}
 		}
 
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "desired_state.list", "desired_state", "")
+		event.MetadataJSON = auditJSON(map[string]any{
+			"scope":       scope,
+			"groupCount":  len(resp.Groups),
+			"deviceCount": len(resp.Devices),
+		})
+		writeAudit(logger, st, event, nil)
+
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	}
+}
+
+type legacyDesired struct {
+	ArtifactID       string
+	DesiredVersion   string
+	DesiredConfigRev string
+	Policy           []byte
+}
+
+func normalizeDesiredComponents(req DesiredStateRequest, source string, st store.Store) (map[string]DesiredComponentResponse, error) {
+	components := map[string]DesiredComponentResponse{}
+	for rawKey, comp := range req.Components {
+		key := normalizeDesiredComponentKey(rawKey)
+		if key == "" {
+			return nil, fmt.Errorf("component name is required")
+		}
+		if _, exists := components[key]; exists {
+			return nil, fmt.Errorf("component %s is duplicated", key)
+		}
+		if comp.ArtifactID == "" && comp.DesiredVersion == "" && comp.DesiredConfigRev == "" && len(comp.Policy) == 0 {
+			return nil, fmt.Errorf("component %s requires artifactId, desiredVersion, desiredConfigRev, or policy", key)
+		}
+		artifactType, err := resolveArtifactType(comp.ArtifactID, comp.ArtifactType, st)
+		if err != nil {
+			return nil, fmt.Errorf("component %s: %w", key, err)
+		}
+		if artifactType == "" {
+			return nil, fmt.Errorf("component %s requires artifactType", key)
+		}
+		components[key] = DesiredComponentResponse{
+			ArtifactID:       comp.ArtifactID,
+			ArtifactType:     artifactType,
+			DesiredVersion:   comp.DesiredVersion,
+			DesiredConfigRev: comp.DesiredConfigRev,
+			Policy:           comp.Policy,
+			Source:           source,
+			Locked:           comp.Locked,
+		}
+	}
+
+	if len(components) == 0 && (req.ArtifactID != "" || req.DesiredVersion != "" || req.DesiredConfigRev != "" || len(req.Policy) != 0) {
+		components["app_bundle"] = DesiredComponentResponse{
+			ArtifactID:       req.ArtifactID,
+			ArtifactType:     "app_bundle",
+			DesiredVersion:   req.DesiredVersion,
+			DesiredConfigRev: req.DesiredConfigRev,
+			Policy:           req.Policy,
+			Source:           source,
+		}
+	}
+	if len(components) == 0 {
+		return nil, nil
+	}
+	return components, nil
+}
+
+func normalizeDesiredComponentKey(val string) string {
+	key := strings.TrimSpace(strings.ToLower(val))
+	return key
+}
+
+func resolveArtifactType(artifactID, requestedType string, st store.Store) (string, error) {
+	normalized := strings.TrimSpace(strings.ToLower(requestedType))
+	if artifactID == "" {
+		return normalized, nil
+	}
+	if st == nil {
+		return normalized, nil
+	}
+	artifact, ok, err := st.GetArtifact(artifactID)
+	if err != nil {
+		return "", fmt.Errorf("artifact lookup failed: %w", err)
+	}
+	if !ok {
+		return "", fmt.Errorf("artifact not found")
+	}
+	actualType := strings.TrimSpace(strings.ToLower(artifact.Type))
+	if normalized != "" && normalized != actualType {
+		return "", fmt.Errorf("artifactType %q does not match artifact type %q", normalized, actualType)
+	}
+	return actualType, nil
+}
+
+func componentEquals(a, b DesiredComponentResponse) bool {
+	return a.ArtifactID == b.ArtifactID &&
+		a.ArtifactType == b.ArtifactType &&
+		a.DesiredVersion == b.DesiredVersion &&
+		a.DesiredConfigRev == b.DesiredConfigRev &&
+		string(a.Policy) == string(b.Policy)
+}
+
+func enforceComponentLocks(existing, incoming map[string]DesiredComponentResponse) error {
+	for key, comp := range existing {
+		if !comp.Locked {
+			continue
+		}
+		next, ok := incoming[key]
+		if !ok {
+			return fmt.Errorf("component %s is locked", key)
+		}
+		if !componentEquals(comp, next) {
+			return fmt.Errorf("component %s is locked", key)
+		}
+	}
+	return nil
+}
+
+func existingGroupComponents(st store.Store, groupID string) map[string]DesiredComponentResponse {
+	if st == nil {
+		return nil
+	}
+	groups, err := st.ListDesiredStateGroups()
+	if err != nil {
+		return nil
+	}
+	for _, group := range groups {
+		if group.GroupID == groupID {
+			return decodeDesiredComponents(group.ComponentsJSON)
+		}
+	}
+	return nil
+}
+
+func legacyFromComponents(components map[string]DesiredComponentResponse) legacyDesired {
+	if comp, ok := components["app_bundle"]; ok {
+		return legacyDesired{
+			ArtifactID:       comp.ArtifactID,
+			DesiredVersion:   comp.DesiredVersion,
+			DesiredConfigRev: comp.DesiredConfigRev,
+			Policy:           comp.Policy,
+		}
+	}
+	return legacyDesired{}
+}
+
+func encodeDesiredComponents(components map[string]DesiredComponentResponse) []byte {
+	if len(components) == 0 {
+		return nil
+	}
+	out, err := json.Marshal(components)
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
+func decodeDesiredComponents(raw []byte) map[string]DesiredComponentResponse {
+	if len(raw) == 0 {
+		return map[string]DesiredComponentResponse{}
+	}
+	var comps map[string]DesiredComponentResponse
+	if err := json.Unmarshal(raw, &comps); err != nil {
+		return map[string]DesiredComponentResponse{}
+	}
+	return comps
+}
+
+func mergeLegacyDesiredComponents(components map[string]DesiredComponentResponse, artifactID, desiredVersion, desiredConfigRev string, policy []byte, source string) map[string]DesiredComponentResponse {
+	if components == nil {
+		components = map[string]DesiredComponentResponse{}
+	}
+	if artifactID != "" || desiredVersion != "" || desiredConfigRev != "" || len(policy) != 0 {
+		if _, ok := components["app_bundle"]; !ok {
+			components["app_bundle"] = DesiredComponentResponse{
+				ArtifactID:       artifactID,
+				ArtifactType:     "app_bundle",
+				DesiredVersion:   desiredVersion,
+				DesiredConfigRev: desiredConfigRev,
+				Policy:           policy,
+				Source:           source,
+			}
+		}
+	}
+	if comp, ok := components["app_bundle"]; ok && comp.Source == "" && source != "" {
+		comp.Source = source
+		components["app_bundle"] = comp
+	}
+	return components
 }

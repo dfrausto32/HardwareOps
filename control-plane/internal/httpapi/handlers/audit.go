@@ -46,6 +46,17 @@ func buildAuditEvent(r *http.Request, trustProxy bool, actor AuditActor, action,
 			if u.AuthMethod != "" {
 				actor.AuthMethod = u.AuthMethod
 			}
+		} else if actor.ID == "" {
+			actor.ID = "admin"
+			if actor.Email == "" {
+				actor.Email = "admin@local"
+			}
+			if len(actor.Roles) == 0 {
+				actor.Roles = []string{"admin"}
+			}
+			if actor.AuthMethod == "" {
+				actor.AuthMethod = "disabled"
+			}
 		}
 	}
 	if actor.Type == "" {

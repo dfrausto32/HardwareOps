@@ -17,6 +17,9 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - ✅ Audit logging + query + CSV export + retention controls.
 - ✅ Local auth (JWT) + bootstrap admin + voucher invites.
 - ✅ Web UI for auth, audit logs, and retention management.
+- ✅ Fleet capacity enforcement (signed on‑prem license + device cap).
+- ✅ Upgrade strategy automation (preflight + staged apply + rollback health gate).
+- ✅ Multi‑artifact device management (componented desired state + per‑component apply status).
 
 ---
 
@@ -71,10 +74,10 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Dependencies:** Migration tool, versioning policy.
 - **Risks:** Data loss or downtime.
 - **Acceptance:** Zero-data-loss upgrade with rollback plan.
-- **Notes:** Upgrade runner + UI status panels exist; safe manual upgrade flow still needs automation.
+- **Notes:** Preflight + UI status panels + health gate + staged apply/rollback contract implemented.
 
 #### Fleet capacity enforcement (on‑prem licensing)
-- **Status:** ⬜ Planned
+- **Status:** 🟢 Complete
 - **Scope:** Hard cap on total devices (enrolled/active) that cannot be changed by operators in on‑prem installs.
 - **Dependencies:** License format + verification, enforcement points in API.
 - **Risks:** Accidental lockout if limit is mis‑set; failure to enforce consistently.
@@ -83,6 +86,19 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
   - Cap is loaded from a signed license file (or compiled limit) that operators cannot alter without vendor key.
   - UI shows current usage vs cap (read‑only).
 - **Notes:** Recommend signed license file with embedded public key; future hosted control‑plane can validate against vendor service.
+
+#### Multi‑artifact device management (componented desired state)
+- **Status:** 🟢 Complete
+- **Priority:** High (required for agent self‑updates + app/firmware parity)
+- **Scope:** Desired state supports multiple components (agent / app / firmware / container). Track and display per‑component current version + last apply status. App bundle no longer default; agent component is always present.
+- **Dependencies:** Desired‑state schema, apply‑result payload updates, UI rendering.
+- **Risks:** Backward compatibility with legacy single‑artifact devices.
+- **Acceptance:**
+  - Desired state supports multiple components in one payload.
+  - Agents can independently apply and report per‑component status.
+  - UI shows per‑component current/desired version + last apply status.
+  - Agent component is always reported; app_bundle is no longer default.
+- **Notes:** Enables agent self‑update and multi‑app deployments.
 
 #### Certificate rotation
 - **Status:** ⬜ Planned
@@ -285,33 +301,6 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - 🔴 Blocked
 
 ---
-
-# One-Page Customer Roadmap (Slide Content)
-
-## Platform Roadmap Overview
-
-### Today — Foundation
-- Secure artifact delivery
-- Device health & status
-- Safe rollouts & recovery
-- On‑prem deployment
-
-### Next — Operational Maturity
-- Audit logs & metrics
-- Controlled rollouts (canary/stable)
-- Artifact lifecycle management
-- CI/CD integrations
-
-### Planned — Enterprise
-- SSO (OIDC / LDAP)
-- Role-based access control
-- Secrets management
-- Break-glass recovery
-
-### Future — Cloud & Scale
-- AWS managed deployment option
-- IAM & network isolation
-- Optional multi-tenancy
 
 > **Design principle:** Start simple, scale safely, integrate where customers already operate.
 

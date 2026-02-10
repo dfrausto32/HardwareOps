@@ -9,11 +9,18 @@ DATA_DIR_BASE=${DATA_DIR:-/tmp/hardwareops-demo/data}
 IMAGE_NAME=${IMAGE_NAME:-hardwareops-agent-demo}
 CONTAINER_NAME=${CONTAINER_NAME:-hardwareops-demo-agent}
 DEMO_HTTP_PORT=${DEMO_HTTP_PORT:-8081}
+DEMO_AGENT_PORT_STEP=${DEMO_AGENT_PORT_STEP:-1000}
+DEMO_COMPONENT_PORT_STEP=${DEMO_COMPONENT_PORT_STEP:-10}
+DEMO_COMPONENTS=${DEMO_COMPONENTS:-agent_bundle}
 NO_CACHE=${NO_CACHE:-0}
 DEMO_COUNT=${DEMO_COUNT:-1}
+DEMO_RESET=${DEMO_RESET:-0}
 ALLOW_UNSUPPORTED_APPLY=${ALLOW_UNSUPPORTED_APPLY:-1}
 SIGN_ARTIFACTS=${SIGN_ARTIFACTS:-1}
 REQUIRE_ARTIFACT_SIGNATURE=${REQUIRE_ARTIFACT_SIGNATURE:-$SIGN_ARTIFACTS}
+UPLOAD_AGENT_BUNDLE=${UPLOAD_AGENT_BUNDLE:-1}
+AGENT_ARTIFACT_NAME=${AGENT_ARTIFACT_NAME:-agent}
+AGENT_ARTIFACT_VERSION=${AGENT_ARTIFACT_VERSION:-0.1.0}
 
 HOST_URL="$BASE_URL"
 if [[ "$BASE_URL" == http:* ]]; then
@@ -29,6 +36,60 @@ fi
 
 # Ensure signing keys are available for demo verification.
 source "$BASE_DIR/scripts/ensure-signing-key.sh"
+
+if [ "$UPLOAD_AGENT_BUNDLE" = "1" ]; then
+  AGENT_BUNDLE_DIR="$BASE_DIR/.tmp/agent-bundle"
+  mkdir -p "$AGENT_BUNDLE_DIR/files"
+  cat > "$AGENT_BUNDLE_DIR/files/readme.txt" <<EOF
+HardwareOps agent bundle demo
+version=${AGENT_ARTIFACT_VERSION}
+EOF
+  cat > "$AGENT_BUNDLE_DIR/files/preapply.sh" <<'EOF'
+#!/usr/bin/env sh
+set -eu
+mkdir -p files
+ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+echo "agent preapply ok ${ts}" > files/preapply.txt
+echo "${ts}" > files/last_applied.txt
+echo "${ts} artifact=${HWOPS_ARTIFACT_ID:-} version=${HWOPS_ARTIFACT_VERSION:-}" >> files/apply.log
+pid_file="${HWOPS_ARTIFACT_ROOT}/heartbeat.pid"
+log_file="${HWOPS_ARTIFACT_DIR}/files/heartbeat.log"
+if [ -f "$pid_file" ]; then
+  old_pid=$(cat "$pid_file" 2>/dev/null || true)
+  if [ -n "${old_pid:-}" ] && kill -0 "$old_pid" 2>/dev/null; then
+    kill "$old_pid" 2>/dev/null || true
+  fi
+  rm -f "$pid_file"
+fi
+( while true; do
+    beat_ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    echo "$beat_ts" >> "$log_file"
+    sleep 10
+  done ) >/dev/null 2>&1 &
+echo $! > "$pid_file"
+EOF
+  chmod 0755 "$AGENT_BUNDLE_DIR/files/preapply.sh"
+  cat > "$AGENT_BUNDLE_DIR/files/plan.yaml" <<'EOF'
+version: "v1"
+steps:
+  - id: preapply
+    type: script.preApply
+    onFail: abort
+    params:
+      command: files/preapply.sh
+      timeoutSec: 60
+EOF
+  ARTIFACT_NAME="$AGENT_ARTIFACT_NAME" \
+  ARTIFACT_VERSION="$AGENT_ARTIFACT_VERSION" \
+  ARTIFACT_TYPE="agent_bundle" \
+  INPUT_DIR="$AGENT_BUNDLE_DIR" \
+  BASE_URL="$BASE_URL" \
+  CA_CERT_PATH="$CA_CERT_PATH" \
+  SIGNING_KEY="$SIGNING_KEY" \
+  SIGNING_KEY_ID="$SIGNING_KEY_ID" \
+  "$BASE_DIR/scripts/pack-upload-artifact.sh" >/dev/null
+  echo "Uploaded agent bundle artifact ${AGENT_ARTIFACT_NAME}:${AGENT_ARTIFACT_VERSION}"
+fi
 
 curl_opts=(--cacert "$CA_CERT_PATH")
 if ! curl -s "${curl_opts[@]}" "$HOST_URL/healthz" >/dev/null; then
@@ -59,12 +120,20 @@ for i in $(seq 1 "$DEMO_COUNT"); do
 
   CERT_DIR="$CERT_DIR_BASE$suffix"
   DATA_DIR="$DATA_DIR_BASE$suffix"
-  DEMO_PORT=$((DEMO_HTTP_PORT + i - 1))
+  DEMO_PORT=$((DEMO_HTTP_PORT + (i - 1) * DEMO_AGENT_PORT_STEP))
   NAME="$CONTAINER_NAME$suffix"
 
   if docker ps -a --format '{{.Names}}' | grep -q "^$NAME$"; then
-    echo "Container $NAME already exists. Remove it with: docker rm -f $NAME" >&2
-    exit 1
+    if [ "$DEMO_RESET" = "1" ]; then
+      docker rm -f "$NAME" >/dev/null
+    else
+      echo "Container $NAME already exists. Remove it with: docker rm -f $NAME (or set DEMO_RESET=1)" >&2
+      exit 1
+    fi
+  fi
+
+  if [ "$DEMO_RESET" = "1" ]; then
+    rm -rf "$CERT_DIR" "$DATA_DIR"
   fi
 
   mkdir -p "$CERT_DIR" "$DATA_DIR"
@@ -83,9 +152,19 @@ for i in $(seq 1 "$DEMO_COUNT"); do
         -subj "/CN=hardwareops-device"
     fi
 
-    TOKEN_JSON=$(curl -s "${curl_opts[@]}" -X POST "$HOST_URL/api/v1/enrollments" \
+    token_resp=$(curl -sS "${curl_opts[@]}" -X POST "$HOST_URL/api/v1/enrollments" \
       -H "Content-Type: application/json" \
-      -d '{"expiresInSec":3600}')
+      -d '{"expiresInSec":3600}' \
+      -w $'\n%{http_code}')
+    token_status=${token_resp##*$'\n'}
+    TOKEN_JSON=${token_resp%$'\n'*}
+    if [ -z "$TOKEN_JSON" ] || [ "$token_status" != "200" ]; then
+      echo "Failed to create enrollment token (status=$token_status)." >&2
+      if [ -n "$TOKEN_JSON" ]; then
+        echo "$TOKEN_JSON" >&2
+      fi
+      exit 1
+    fi
 
     TOKEN=$(python3 - <<'PY' "$TOKEN_JSON"
 import json, sys
@@ -103,9 +182,19 @@ print(json.dumps({"token": sys.argv[1], "csr": open(sys.argv[2]).read()}))
 PY
 )
 
-    ENROLL_JSON=$(curl -s "${curl_opts[@]}" -X POST "$HOST_URL/api/v1/devices/enroll" \
+    enroll_resp=$(curl -sS "${curl_opts[@]}" -X POST "$HOST_URL/api/v1/devices/enroll" \
       -H "Content-Type: application/json" \
-      -d "$ENROLL_PAYLOAD")
+      -d "$ENROLL_PAYLOAD" \
+      -w $'\n%{http_code}')
+    enroll_status=${enroll_resp##*$'\n'}
+    ENROLL_JSON=${enroll_resp%$'\n'*}
+    if [ -z "$ENROLL_JSON" ] || [ "$enroll_status" != "200" ]; then
+      echo "Enrollment failed (status=$enroll_status)." >&2
+      if [ -n "$ENROLL_JSON" ]; then
+        echo "$ENROLL_JSON" >&2
+      fi
+      exit 1
+    fi
 
     python3 - <<'PY' "$ENROLL_JSON" "$DEVICE_CERT_PATH" "$DEVICE_ID_PATH"
 import json, sys
@@ -139,7 +228,9 @@ PY
     -e REQUIRE_ARTIFACT_SIGNATURE="$REQUIRE_ARTIFACT_SIGNATURE" \
     -e LOG_EXPORT_ADDR="${LOG_EXPORT_ADDR:-}" \
     -e LOG_LEVEL="${LOG_LEVEL:-}" \
-    -e DEMO_HTTP_PORT="$DEMO_PORT" \
+    -e DEMO_BASE_PORT="$DEMO_PORT" \
+    -e DEMO_PORT_STEP="$DEMO_COMPONENT_PORT_STEP" \
+    -e DEMO_COMPONENTS="$DEMO_COMPONENTS" \
     -e ALLOW_UNSUPPORTED_APPLY="$ALLOW_UNSUPPORTED_APPLY" \
     -v "$DATA_DIR:/data" \
     -v "$DEVICE_CERT_PATH:/certs/device.crt:ro" \
@@ -149,7 +240,16 @@ PY
     "$IMAGE_NAME" >/dev/null
 
   echo "Demo agent running as $NAME."
-  echo "Service URL: http://localhost:${DEMO_PORT}/index.html"
+  echo "Service URLs:"
+  IFS=',' read -r -a component_list <<<"$DEMO_COMPONENTS"
+  idx=0
+  for comp in "${component_list[@]}"; do
+    comp=$(echo "$comp" | xargs)
+    [ -z "$comp" ] && continue
+    port=$((DEMO_PORT + idx * DEMO_COMPONENT_PORT_STEP))
+    echo "  ${comp}: http://localhost:${port}/index.html"
+    idx=$((idx + 1))
+  done
   if [ -s "$DEVICE_ID_PATH" ]; then
     echo "Device ID: $(cat "$DEVICE_ID_PATH")"
   fi

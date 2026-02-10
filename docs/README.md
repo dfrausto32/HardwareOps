@@ -4,7 +4,6 @@ This directory contains the guides referenced throughout the repo. Use this inde
 
 ## Install + Deploy
 - `installer-flow.md` — **Fresh machine install** using installer bundles (stack + agents).
-- `onprem-deploy.md` — Full on‑prem deployment walkthrough (repo-based).
 - `installers.md` — What each installer bundle contains and how to build them.
 - `vm-testing.md` — VM-based testing (VirtualBox two‑VM flow).
 
@@ -19,6 +18,9 @@ This directory contains the guides referenced throughout the repo. Use this inde
 - `agent-systemd.md` — Agent install via systemd (with enrollment).
 - `artifact-apply-roadmap.md` — Artifact apply plan (firmware + container images).
 - `preapply-demo.md` — End‑to‑end demo including pre‑apply behavior.
+- `../scripts/multi-app-artifacts.sh` — Build/upload multiple app bundle artifacts for multi‑component testing.
+  - Writes `files/last_applied.txt` + `files/apply.log` on apply so you can verify updates without the demo web UI.
+  - Starts a heartbeat loop that appends timestamps to `files/heartbeat.log` every 10s.
 
 ## UI
 - `../ui/README.md` — UI dev workflow and environment settings.
@@ -27,7 +29,6 @@ This directory contains the guides referenced throughout the repo. Use this inde
 - `development/roadmap.md` — Phased roadmap for on‑prem, AWS, RBAC, and artifact ingest.
 - `development/deployment-options.md` — On‑prem vs AWS deployment shapes and recommendations.
 - `development/artifact-ingest.md` — Manual, CI push, and repo pull ingest modes.
-- `development/auth-rbac.md` — Auth modes, fixed roles, and break‑glass access.
 - `development/auth-secrets-v1.md` — V1 local users + JWT + secrets posture.
 - `development/artifact-signing.md` — Current Ed25519 flow and Cosign/Sigstore migration path.
 - `development/upgrade-strategy.md` — Safe upgrade/rollback process and compatibility rules.

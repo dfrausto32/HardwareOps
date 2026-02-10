@@ -26,7 +26,7 @@ func TestListDevices(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices?status=active&limit=10&offset=0", nil)
 	w := httptest.NewRecorder()
 
-	ListDevices(logger, mem).ServeHTTP(w, req)
+	ListDevices(logger, mem, false).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -56,7 +56,7 @@ func TestGetDevice(t *testing.T) {
 	req = withURLParam(req, "deviceId", id)
 	w := httptest.NewRecorder()
 
-	GetDevice(logger, mem).ServeHTTP(w, req)
+	GetDevice(logger, mem, false).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -83,7 +83,7 @@ func TestGetDevice_NotFound(t *testing.T) {
 	req = withURLParam(req, "deviceId", id)
 	w := httptest.NewRecorder()
 
-	GetDevice(logger, mem).ServeHTTP(w, req)
+	GetDevice(logger, mem, false).ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", w.Code)

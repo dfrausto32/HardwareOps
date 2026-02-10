@@ -203,9 +203,24 @@ if [ -f "$BASE_DIR/scripts/apply-upgrade.sh" ]; then
   export UPGRADE_APPLY_CMD=${UPGRADE_APPLY_CMD:-"$BASE_DIR/scripts/apply-upgrade.sh"}
 fi
 
+# Optional: embed license public key at build/run time (locked mode)
+GO_LDFLAGS=()
+if [ -n "${LICENSE_EMBED_PUBKEY_B64:-}" ] || [ -n "${LICENSE_EMBED_PUBKEY_PATH:-}" ]; then
+  if [ -z "${LICENSE_EMBED_PUBKEY_B64:-}" ] && [ -n "${LICENSE_EMBED_PUBKEY_PATH:-}" ]; then
+    if [ ! -f "$LICENSE_EMBED_PUBKEY_PATH" ]; then
+      echo "LICENSE_EMBED_PUBKEY_PATH not found: $LICENSE_EMBED_PUBKEY_PATH" >&2
+      exit 1
+    fi
+    LICENSE_EMBED_PUBKEY_B64=$(openssl pkey -pubin -in "$LICENSE_EMBED_PUBKEY_PATH" -pubout -outform DER | tail -c 32 | base64 -w 0)
+  fi
+  if [ -n "${LICENSE_EMBED_PUBKEY_B64:-}" ]; then
+    GO_LDFLAGS=(-ldflags "-X github.com/hardwareops/control-plane/internal/license.EmbeddedPublicKey=${LICENSE_EMBED_PUBKEY_B64}")
+  fi
+fi
+
 # Quick connectivity check for Postgres
 if ! docker compose -f "$BASE_DIR/deploy/compose/docker-compose.yml" ps >/dev/null 2>&1; then
   echo "Docker Compose not available or not running. Start with: make dev-up" >&2
 fi
 
-( cd "$BASE_DIR/control-plane" && go run ./cmd/control-plane )
+( cd "$BASE_DIR/control-plane" && go run "${GO_LDFLAGS[@]}" ./cmd/control-plane )

@@ -81,7 +81,17 @@ func main() {
 	store := postgres.New(pool)
 	var licenseManager *license.Manager
 	if cfg.LicenseEnforce {
-		manager, err := license.NewManager(cfg.LicensePath, cfg.LicensePublicKey, cfg.LicensePublicKeyPath, cfg.LicenseEnforce, cfg.LicenseCacheTTL)
+		keyMode := strings.ToLower(strings.TrimSpace(cfg.LicenseKeyMode))
+		inlineKey := cfg.LicensePublicKey
+		keyPath := cfg.LicensePublicKeyPath
+		if keyMode == "embedded" || keyMode == "locked" {
+			inlineKey = license.EmbeddedPublicKey
+			keyPath = ""
+			if strings.TrimSpace(inlineKey) == "" {
+				logger.Fatal("license key mode is embedded but EmbeddedPublicKey is not set at build time")
+			}
+		}
+		manager, err := license.NewManager(cfg.LicensePath, inlineKey, keyPath, cfg.LicenseEnforce, cfg.LicenseCacheTTL)
 		if err != nil {
 			logger.Fatalf("license init: %v", err)
 		}

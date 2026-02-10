@@ -9,7 +9,7 @@ INSECURE=${INSECURE:-0}
 ARTIFACT_NAME=${ARTIFACT_NAME:-type-demo}
 VERSIONS=${VERSIONS:-0.1.0,0.2.0}
 VERSION_BASE=${VERSION_BASE:-0.1.0}
-TYPES=${TYPES:-app_bundle,config_bundle,data_bundle,firmware,container_image}
+TYPES=${TYPES:-app_bundle,config_bundle,data_bundle,firmware,container_image,agent_bundle}
 OUT_DIR=${OUT_DIR:-/tmp/hardwareops-types}
 SIGN_ARTIFACTS=${SIGN_ARTIFACTS:-1}
 

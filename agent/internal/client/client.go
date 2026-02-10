@@ -53,11 +53,12 @@ func (c *Client) HTTPClient() *http.Client {
 }
 
 type CheckinRequest struct {
-	DeviceID     string            `json:"deviceId"`
-	AgentVersion string            `json:"agentVersion"`
-	Current      CheckinCurrent    `json:"current,omitempty"`
-	Capabilities any               `json:"capabilities,omitempty"`
-	Labels       map[string]string `json:"labels,omitempty"`
+	DeviceID          string                      `json:"deviceId"`
+	AgentVersion      string                      `json:"agentVersion"`
+	Current           CheckinCurrent              `json:"current,omitempty"`
+	CurrentComponents map[string]CheckinComponent `json:"currentComponents,omitempty"`
+	Capabilities      any                         `json:"capabilities,omitempty"`
+	Labels            map[string]string           `json:"labels,omitempty"`
 }
 
 type CheckinCurrent struct {
@@ -72,12 +73,33 @@ type CheckinCurrent struct {
 	LastPreApplyAt      *time.Time `json:"lastPreApplyAt,omitempty"`
 }
 
+type CheckinComponent struct {
+	SoftwareVersion     string     `json:"softwareVersion,omitempty"`
+	ConfigRev           string     `json:"configRev,omitempty"`
+	LastApplyStatus     string     `json:"lastApplyStatus,omitempty"`
+	LastApplyError      string     `json:"lastApplyError,omitempty"`
+	LastApplyAt         *time.Time `json:"lastApplyAt,omitempty"`
+	LastApplyArtifactID string     `json:"lastApplyArtifactId,omitempty"`
+	LastPreApplyStatus  string     `json:"lastPreApplyStatus,omitempty"`
+	LastPreApplyError   string     `json:"lastPreApplyError,omitempty"`
+	LastPreApplyAt      *time.Time `json:"lastPreApplyAt,omitempty"`
+}
+
 type DesiredState struct {
+	ArtifactID      string                      `json:"artifactId"`
+	SoftwareVersion string                      `json:"softwareVersion"`
+	ConfigRev       string                      `json:"configRev"`
+	DownloadURL     string                      `json:"downloadUrl"`
+	CheckinInterval int                         `json:"checkinIntervalSec"`
+	Source          string                      `json:"source,omitempty"`
+	Components      map[string]DesiredComponent `json:"components,omitempty"`
+}
+
+type DesiredComponent struct {
 	ArtifactID      string `json:"artifactId"`
 	SoftwareVersion string `json:"softwareVersion"`
 	ConfigRev       string `json:"configRev"`
 	DownloadURL     string `json:"downloadUrl"`
-	CheckinInterval int    `json:"checkinIntervalSec"`
 	Source          string `json:"source,omitempty"`
 }
 
@@ -105,6 +127,7 @@ type PresignResponse struct {
 type ApplyResultRequest struct {
 	Status           string `json:"status"`
 	ArtifactID       string `json:"artifactId,omitempty"`
+	Component        string `json:"component,omitempty"`
 	AppliedVersion   string `json:"appliedVersion,omitempty"`
 	AppliedConfigRev string `json:"appliedConfigRev,omitempty"`
 	Error            string `json:"error,omitempty"`
@@ -127,6 +150,22 @@ func (c *Client) CheckIn(st state.State) (*CheckinResponse, error) {
 			LastPreApplyError:   st.LastPreApplyError,
 			LastPreApplyAt:      timePtr(st.LastPreApplyAt),
 		},
+	}
+	if len(st.Components) > 0 {
+		payload.CurrentComponents = map[string]CheckinComponent{}
+		for key, comp := range st.Components {
+			payload.CurrentComponents[key] = CheckinComponent{
+				SoftwareVersion:     comp.CurrentVersion,
+				ConfigRev:           comp.CurrentConfigRev,
+				LastApplyStatus:     comp.LastApplyStatus,
+				LastApplyError:      comp.LastApplyError,
+				LastApplyAt:         timePtr(comp.LastApplyAt),
+				LastApplyArtifactID: comp.LastApplyArtifactID,
+				LastPreApplyStatus:  comp.LastPreApplyStatus,
+				LastPreApplyError:   comp.LastPreApplyError,
+				LastPreApplyAt:      timePtr(comp.LastPreApplyAt),
+			}
+		}
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

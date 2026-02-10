@@ -259,7 +259,7 @@ func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 	}
 }
 
-func ListArtifacts(logger *log.Logger, st store.Store) http.HandlerFunc {
+func ListArtifacts(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := r.URL.Query().Get("name")
 		version := r.URL.Query().Get("version")
@@ -289,12 +289,22 @@ func ListArtifacts(logger *log.Logger, st store.Store) http.HandlerFunc {
 			})
 		}
 
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.list", "artifact", "")
+		event.MetadataJSON = auditJSON(map[string]any{
+			"name":    name,
+			"version": version,
+			"limit":   limit,
+			"offset":  offset,
+			"count":   len(resp.Items),
+		})
+		writeAudit(logger, st, event, nil)
+
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	}
 }
 
-func GetArtifact(logger *log.Logger, st store.Store) http.HandlerFunc {
+func GetArtifact(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		artifactID := chi.URLParam(r, "artifactId")
 		if artifactID == "" {
@@ -329,6 +339,13 @@ func GetArtifact(logger *log.Logger, st store.Store) http.HandlerFunc {
 			Metadata:   json.RawMessage(artifact.MetadataJSON),
 			CreatedAt:  artifact.CreatedAt,
 		}
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.read", "artifact", artifactID)
+		event.MetadataJSON = auditJSON(map[string]any{
+			"name":    artifact.Name,
+			"version": artifact.Version,
+			"type":    artifact.Type,
+		})
+		writeAudit(logger, st, event, nil)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	}
@@ -440,6 +457,7 @@ var allowedArtifactTypes = map[string]struct{}{
 	"data_bundle":    {},
 	"firmware":       {},
 	"container_image": {},
+	"agent_bundle":   {},
 }
 
 func normalizeArtifactType(val string) (string, error) {

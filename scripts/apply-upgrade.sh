@@ -11,6 +11,9 @@ ENV_FILE=${ENV_FILE:-}
 PROJECT_NAME=${PROJECT_NAME:-hardwareops}
 MIN_DOCKER_API=${MIN_DOCKER_API:-1.44}
 ROLLBACK_ON_FAILURE=${ROLLBACK_ON_FAILURE:-1}
+UPGRADE_HEALTH_TIMEOUT=${UPGRADE_HEALTH_TIMEOUT:-120}
+UPGRADE_HEALTH_INTERVAL=${UPGRADE_HEALTH_INTERVAL:-5}
+UPGRADE_HEALTH_URLS=${UPGRADE_HEALTH_URLS:-}
 
 rollback_compose=""
 prev_cp_image=""
@@ -47,6 +50,41 @@ rollback() {
   docker compose -f "$COMPOSE_FILE" -f "$rollback_compose" "${ENV_ARGS[@]}" -p "$PROJECT_NAME" up -d
 }
 
+wait_for_url() {
+  local url=$1
+  local timeout=$2
+  local interval=$3
+  local start
+  start=$(date +%s)
+  while true; do
+    if "${curl_args[@]}" -L "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    now=$(date +%s)
+    if [ $((now - start)) -ge "$timeout" ]; then
+      return 1
+    fi
+    sleep "$interval"
+  done
+}
+
+health_gate() {
+  local timeout=$1
+  local interval=$2
+  shift 2
+  local urls=("$@")
+  if [ "${#urls[@]}" -eq 0 ]; then
+    return 0
+  fi
+  for url in "${urls[@]}"; do
+    echo "Waiting for healthy: $url"
+    if ! wait_for_url "$url" "$timeout" "$interval"; then
+      echo "Health check failed: $url" >&2
+      return 1
+    fi
+  done
+}
+
 on_error() {
   echo "Upgrade failed; attempting rollback..." >&2
   rollback || true
@@ -71,12 +109,14 @@ if [ -n "$UPDATE_TARBALL" ] && [ -f "$UPDATE_TARBALL" ]; then
     STACK_DIR="$bundle_dir"
     COMPOSE_FILE=""
     ENV_FILE=""
+    echo "$bundle_dir" >"$STAGED_DIR/ACTIVE"
   else
     compose_path=$(find "$STAGED_DIR" -maxdepth 3 -type f -name "docker-compose.onprem.bundle.yml" | head -n 1 || true)
     if [ -n "$compose_path" ]; then
       STACK_DIR=$(cd "$(dirname "$compose_path")" && pwd)
       COMPOSE_FILE=""
       ENV_FILE=""
+      echo "$STACK_DIR" >"$STAGED_DIR/ACTIVE"
     fi
   fi
 fi
@@ -203,9 +243,17 @@ else
   curl_args+=(-k)
 fi
 
+if [ -z "$UPGRADE_HEALTH_URLS" ]; then
+  UPGRADE_HEALTH_URLS="$PUBLIC_BASE_URL/healthz,$PUBLIC_BASE_URL/"
+fi
+
+IFS=',' read -r -a HEALTH_URLS <<<"$UPGRADE_HEALTH_URLS"
+
 echo "Running post-upgrade checks..."
-"${curl_args[@]}" "$PUBLIC_BASE_URL/healthz" >/dev/null
-"${curl_args[@]}" -L "$PUBLIC_BASE_URL/" >/dev/null
+if ! health_gate "$UPGRADE_HEALTH_TIMEOUT" "$UPGRADE_HEALTH_INTERVAL" "${HEALTH_URLS[@]}"; then
+  echo "Post-upgrade health checks failed." >&2
+  on_error
+fi
 
 set_kv() {
   local file=$1

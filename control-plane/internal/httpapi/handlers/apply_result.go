@@ -15,6 +15,7 @@ import (
 type ApplyResultRequest struct {
 	Status           string `json:"status"`
 	ArtifactID       string `json:"artifactId"`
+	Component        string `json:"component,omitempty"`
 	AppliedVersion   string `json:"appliedVersion"`
 	AppliedConfigRev string `json:"appliedConfigRev"`
 	Error            string `json:"error"`
@@ -75,6 +76,7 @@ func PostApplyResult(logger *log.Logger, st store.Store, hub *events.Hub, trustP
 			ApplyID:          uuid.NewString(),
 			DeviceID:         device.DeviceID,
 			ArtifactID:       req.ArtifactID,
+			Component:        normalizeComponentKey(req.Component),
 			Status:           req.Status,
 			AppliedVersion:   req.AppliedVersion,
 			AppliedConfigRev: req.AppliedConfigRev,
@@ -88,6 +90,7 @@ func PostApplyResult(logger *log.Logger, st store.Store, hub *events.Hub, trustP
 		event.MetadataJSON = auditJSON(map[string]any{
 			"applyId":          res.ApplyID,
 			"artifactId":       res.ArtifactID,
+			"component":        res.Component,
 			"status":           res.Status,
 			"appliedVersion":   res.AppliedVersion,
 			"appliedConfigRev": res.AppliedConfigRev,
@@ -116,6 +119,32 @@ func PostApplyResult(logger *log.Logger, st store.Store, hub *events.Hub, trustP
 		if prev, ok, err := st.GetDeviceState(device.DeviceID); err != nil {
 			logger.Printf("get device_state error: %v", err)
 		} else if ok {
+			component := normalizeComponentKey(req.Component)
+			components := decodeDeviceComponents(prev.ComponentsJSON)
+			compState := components[component]
+			if res.Status != "" {
+				compState.LastApplyStatus = res.Status
+				compState.LastApplyError = res.Error
+				compState.LastApplyAt = timePtr(res.CreatedAt)
+				if res.ArtifactID != "" {
+					compState.LastApplyArtifactID = res.ArtifactID
+				}
+				if res.PreApplyStatus != "" {
+					compState.LastPreApplyStatus = res.PreApplyStatus
+					compState.LastPreApplyError = res.PreApplyError
+					compState.LastPreApplyAt = timePtr(res.CreatedAt)
+				}
+				if res.Status == "success" {
+					if res.AppliedVersion != "" {
+						compState.CurrentVersion = res.AppliedVersion
+					}
+					if res.AppliedConfigRev != "" {
+						compState.CurrentConfigRev = res.AppliedConfigRev
+					}
+				}
+				components[component] = compState
+				state.ComponentsJSON = encodeDeviceComponents(components)
+			}
 			state.CurrentVersion = prev.CurrentVersion
 			state.CurrentConfigRev = prev.CurrentConfigRev
 			state.ServicesJSON = prev.ServicesJSON
@@ -129,6 +158,22 @@ func PostApplyResult(logger *log.Logger, st store.Store, hub *events.Hub, trustP
 				state.LastPreApplyError = prev.LastPreApplyError
 				state.LastPreApplyAt = prev.LastPreApplyAt
 			}
+			if res.Component != "" && res.Component != "app_bundle" {
+				state.LastApplyStatus = prev.LastApplyStatus
+				state.LastApplyError = prev.LastApplyError
+				state.LastApplyAt = prev.LastApplyAt
+				state.LastApplyArtifactID = prev.LastApplyArtifactID
+				state.LastPreApplyStatus = prev.LastPreApplyStatus
+				state.LastPreApplyError = prev.LastPreApplyError
+				state.LastPreApplyAt = prev.LastPreApplyAt
+			} else if res.Status == "success" {
+				if res.AppliedVersion != "" {
+					state.CurrentVersion = res.AppliedVersion
+				}
+				if res.AppliedConfigRev != "" {
+					state.CurrentConfigRev = res.AppliedConfigRev
+				}
+			}
 		}
 		if err := st.UpsertDeviceState(state); err != nil {
 			logger.Printf("upsert device_state error: %v", err)
@@ -141,6 +186,7 @@ func PostApplyResult(logger *log.Logger, st store.Store, hub *events.Hub, trustP
 			payload, _ := json.Marshal(map[string]any{
 				"status":           res.Status,
 				"artifactId":       res.ArtifactID,
+				"component":        res.Component,
 				"appliedVersion":   res.AppliedVersion,
 				"appliedConfigRev": res.AppliedConfigRev,
 				"error":            res.Error,

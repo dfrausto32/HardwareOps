@@ -1,0 +1,8 @@
+version: "v1"
+steps:
+  - id: preapply
+    type: script.preApply
+    onFail: abort
+    params:
+      command: files/preapply.sh
+      timeoutSec: 60

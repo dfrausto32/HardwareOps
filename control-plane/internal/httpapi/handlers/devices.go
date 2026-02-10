@@ -21,18 +21,19 @@ type DeviceSummary struct {
 }
 
 type DeviceCurrentState struct {
-	SoftwareVersion    string          `json:"softwareVersion"`
-	ConfigRev          string          `json:"configRev"`
-	Services           json.RawMessage `json:"services,omitempty"`
-	Health             json.RawMessage `json:"health,omitempty"`
-	UpdatedAt          *time.Time      `json:"updatedAt,omitempty"`
-	LastApplyStatus    string          `json:"lastApplyStatus,omitempty"`
-	LastApplyError     string          `json:"lastApplyError,omitempty"`
-	LastApplyAt        *time.Time      `json:"lastApplyAt,omitempty"`
-	LastApplyArtifactID string         `json:"lastApplyArtifactId,omitempty"`
-	LastPreApplyStatus string          `json:"lastPreApplyStatus,omitempty"`
-	LastPreApplyError  string          `json:"lastPreApplyError,omitempty"`
-	LastPreApplyAt     *time.Time      `json:"lastPreApplyAt,omitempty"`
+	SoftwareVersion     string                          `json:"softwareVersion"`
+	ConfigRev           string                          `json:"configRev"`
+	Services            json.RawMessage                 `json:"services,omitempty"`
+	Health              json.RawMessage                 `json:"health,omitempty"`
+	Components          map[string]DeviceComponentState `json:"components,omitempty"`
+	UpdatedAt           *time.Time                      `json:"updatedAt,omitempty"`
+	LastApplyStatus     string                          `json:"lastApplyStatus,omitempty"`
+	LastApplyError      string                          `json:"lastApplyError,omitempty"`
+	LastApplyAt         *time.Time                      `json:"lastApplyAt,omitempty"`
+	LastApplyArtifactID string                          `json:"lastApplyArtifactId,omitempty"`
+	LastPreApplyStatus  string                          `json:"lastPreApplyStatus,omitempty"`
+	LastPreApplyError   string                          `json:"lastPreApplyError,omitempty"`
+	LastPreApplyAt      *time.Time                      `json:"lastPreApplyAt,omitempty"`
 }
 
 type DeviceDetail struct {
@@ -51,7 +52,7 @@ type DeviceUpdateRequest struct {
 	Metadata *json.RawMessage `json:"metadata,omitempty"`
 }
 
-func ListDevices(logger *log.Logger, st store.Store) http.HandlerFunc {
+func ListDevices(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		limit := parseInt(r.URL.Query().Get("limit"), 100)
 		offset := parseInt(r.URL.Query().Get("offset"), 0)
@@ -78,6 +79,15 @@ func ListDevices(logger *log.Logger, st store.Store) http.HandlerFunc {
 				Metadata: json.RawMessage(d.MetadataJSON),
 			})
 		}
+
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "device.list", "device", "")
+		event.MetadataJSON = auditJSON(map[string]any{
+			"status": status,
+			"limit":  limit,
+			"offset": offset,
+			"count":  len(resp.Items),
+		})
+		writeAudit(logger, st, event, nil)
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
@@ -175,7 +185,7 @@ func PatchDevice(logger *log.Logger, st store.Store, trustProxy bool) http.Handl
 	}
 }
 
-func GetDevice(logger *log.Logger, st store.Store) http.HandlerFunc {
+func GetDevice(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		deviceID := chi.URLParam(r, "deviceId")
 		if deviceID == "" {
@@ -201,18 +211,19 @@ func GetDevice(logger *log.Logger, st store.Store) http.HandlerFunc {
 		var current *DeviceCurrentState
 		if stRec, ok, err := st.GetDeviceState(deviceID); err == nil && ok {
 			current = &DeviceCurrentState{
-				SoftwareVersion:    stRec.CurrentVersion,
-				ConfigRev:          stRec.CurrentConfigRev,
-				Services:           json.RawMessage(stRec.ServicesJSON),
-				Health:             json.RawMessage(stRec.HealthJSON),
-				UpdatedAt:          timePtr(stRec.UpdatedAt),
-				LastApplyStatus:    stRec.LastApplyStatus,
-				LastApplyError:     stRec.LastApplyError,
-				LastApplyAt:        timePtr(stRec.LastApplyAt),
+				SoftwareVersion:     stRec.CurrentVersion,
+				ConfigRev:           stRec.CurrentConfigRev,
+				Services:            json.RawMessage(stRec.ServicesJSON),
+				Health:              json.RawMessage(stRec.HealthJSON),
+				Components:          decodeDeviceComponents(stRec.ComponentsJSON),
+				UpdatedAt:           timePtr(stRec.UpdatedAt),
+				LastApplyStatus:     stRec.LastApplyStatus,
+				LastApplyError:      stRec.LastApplyError,
+				LastApplyAt:         timePtr(stRec.LastApplyAt),
 				LastApplyArtifactID: stRec.LastApplyArtifactID,
-				LastPreApplyStatus: stRec.LastPreApplyStatus,
-				LastPreApplyError:  stRec.LastPreApplyError,
-				LastPreApplyAt:     timePtr(stRec.LastPreApplyAt),
+				LastPreApplyStatus:  stRec.LastPreApplyStatus,
+				LastPreApplyError:   stRec.LastPreApplyError,
+				LastPreApplyAt:      timePtr(stRec.LastPreApplyAt),
 			}
 		}
 
@@ -226,6 +237,12 @@ func GetDevice(logger *log.Logger, st store.Store) http.HandlerFunc {
 			},
 			Current: current,
 		}
+
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "device.read", "device", deviceID)
+		event.MetadataJSON = auditJSON(map[string]any{
+			"hasState": current != nil,
+		})
+		writeAudit(logger, st, event, nil)
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)

@@ -267,6 +267,39 @@ tr.artifact-group-start td {
   border-top: 2px solid var(--border);
 }
 
+.component-table {
+  margin-top: 16px;
+}
+
+.component-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.component-row {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.component-row .inline-row {
+  gap: 8px;
+}
+
+.inline-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .mono {
   font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-size: 12px;
@@ -831,6 +864,7 @@ tr.artifact-group-start td {
   border-left: 1px solid var(--border);
   padding: 20px;
   overflow-y: auto;
+  position: relative;
 }
 
 .drawer-header {
@@ -844,6 +878,16 @@ tr.artifact-group-start td {
 .drawer-content {
   display: grid;
   gap: 16px;
+}
+
+.drawer-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 8px;
+  height: 100%;
+  cursor: ew-resize;
+  background: linear-gradient(90deg, rgba(0, 0, 0, 0.2), transparent);
 }
 
 .detail-note {

@@ -5,6 +5,8 @@ BASE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 GO_BIN=${GO_BIN:-go}
 VERSION=${VERSION:-$(date +%Y%m%d%H%M%S)}
 DIST_DIR=${DIST_DIR:-$BASE_DIR/dist/installers/$VERSION}
+LICENSE_EMBED_PUBKEY_PATH=${LICENSE_EMBED_PUBKEY_PATH:-}
+LICENSE_EMBED_PUBKEY_B64=${LICENSE_EMBED_PUBKEY_B64:-}
 
 AGENT_PLATFORMS_DEFAULT="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64"
 CONTROL_PLANE_PLATFORMS_DEFAULT="linux/amd64 linux/arm64"
@@ -160,11 +162,23 @@ build_control_plane() {
     ext=".exe"
   fi
 
+  local ldflags=""
+  if [ -z "$LICENSE_EMBED_PUBKEY_B64" ] && [ -n "$LICENSE_EMBED_PUBKEY_PATH" ]; then
+    if [ ! -f "$LICENSE_EMBED_PUBKEY_PATH" ]; then
+      echo "LICENSE_EMBED_PUBKEY_PATH not found: $LICENSE_EMBED_PUBKEY_PATH" >&2
+      exit 1
+    fi
+    LICENSE_EMBED_PUBKEY_B64=$(openssl pkey -pubin -in "$LICENSE_EMBED_PUBKEY_PATH" -pubout -outform DER | tail -c 32 | base64 -w 0)
+  fi
+  if [ -n "$LICENSE_EMBED_PUBKEY_B64" ]; then
+    ldflags="-ldflags=-X=github.com/hardwareops/control-plane/internal/license.EmbeddedPublicKey=$LICENSE_EMBED_PUBKEY_B64"
+  fi
+
   local stage="$DIST_DIR/control-plane-${VERSION}-${goos}-${goarch}"
   mkdir -p "$stage"
 
   (cd "$BASE_DIR/control-plane" && CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
-    "$GO_BIN" build -o "$stage/control-plane$ext" ./cmd/control-plane)
+    "$GO_BIN" build $ldflags -o "$stage/control-plane$ext" ./cmd/control-plane)
 
   if [ ! -f "$stage/control-plane$ext" ]; then
     echo "Control-plane build failed for $goos/$goarch (binary missing)." >&2
@@ -237,7 +251,19 @@ build_stack_bundle() {
   mkdir -p "$stage/images" "$stage/scripts"
   mkdir -p "$stage/desktop"
 
-  docker build -t "$cp_tag" -f "$BASE_DIR/control-plane/Dockerfile" "$BASE_DIR"
+  local build_args=()
+  if [ -n "$LICENSE_EMBED_PUBKEY_B64" ]; then
+    build_args+=(--build-arg "LICENSE_EMBED_PUBKEY_B64=$LICENSE_EMBED_PUBKEY_B64")
+  elif [ -n "$LICENSE_EMBED_PUBKEY_PATH" ]; then
+    if [ ! -f "$LICENSE_EMBED_PUBKEY_PATH" ]; then
+      echo "LICENSE_EMBED_PUBKEY_PATH not found: $LICENSE_EMBED_PUBKEY_PATH" >&2
+      exit 1
+    fi
+    LICENSE_EMBED_PUBKEY_B64=$(openssl pkey -pubin -in "$LICENSE_EMBED_PUBKEY_PATH" -pubout -outform DER | tail -c 32 | base64 -w 0)
+    build_args+=(--build-arg "LICENSE_EMBED_PUBKEY_B64=$LICENSE_EMBED_PUBKEY_B64")
+  fi
+
+  docker build -t "$cp_tag" -f "$BASE_DIR/control-plane/Dockerfile" "${build_args[@]}" "$BASE_DIR"
   docker build -t "$gw_tag" -f "$BASE_DIR/deploy/compose/nginx/Dockerfile" \
     --build-arg VITE_API_BASE_URL="https://hardwareops.internal" \
     --build-arg VITE_SIMULATE_PROD=1 \
@@ -305,6 +331,7 @@ services:
       LICENSE_PATH: \${LICENSE_PATH:-}
       LICENSE_PUBLIC_KEY: \${LICENSE_PUBLIC_KEY:-}
       LICENSE_PUBLIC_KEY_PATH: \${LICENSE_PUBLIC_KEY_PATH:-}
+      LICENSE_KEY_MODE: \${LICENSE_KEY_MODE:-env}
       LICENSE_CACHE_TTL: \${LICENSE_CACHE_TTL:-30s}
       LOG_DIR: /var/lib/hardwareops/logs
       DISABLE_HTTP2: "1"

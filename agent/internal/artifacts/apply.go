@@ -151,7 +151,7 @@ func Apply(root string, desired Desired, meta ArtifactMeta, httpClient *http.Cli
 	}
 
 	switch atype {
-	case "app_bundle", "config_bundle", "data_bundle":
+	case "app_bundle", "config_bundle", "data_bundle", "agent_bundle":
 		return outcome, applyBundle(ctx, planData, current)
 	case "firmware":
 		return outcome, applyFirmware(ctx, planData, current, opts)

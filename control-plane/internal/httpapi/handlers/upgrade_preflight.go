@@ -1,9 +1,15 @@
 package handlers
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -54,10 +60,48 @@ func BuildUpgradePreflight(runner *upgrade.Runner, updatesDir string) PreflightR
 		addCheck("Runner mode", "ok", runnerCfg.Mode)
 	}
 	if strings.EqualFold(runnerCfg.Mode, "docker") {
+		if _, err := exec.LookPath("docker"); err != nil {
+			addCheck("Docker CLI", "error", "docker not found in PATH")
+		} else {
+			addCheck("Docker CLI", "ok", "docker available")
+		}
+		if err := dockerDaemonOK(); err != nil {
+			addCheck("Docker daemon", "error", err.Error())
+		} else {
+			addCheck("Docker daemon", "ok", "reachable")
+		}
+		minVer := strings.TrimSpace(os.Getenv("MIN_DOCKER_API"))
+		if minVer == "" {
+			minVer = "1.44"
+		}
+		if ver, err := dockerClientAPIVersion(); err != nil {
+			addCheck("Docker API", "warn", "unable to detect")
+		} else if compareVersions(ver, minVer) < 0 {
+			addCheck("Docker API", "error", fmt.Sprintf("client %s < required %s", ver, minVer))
+		} else {
+			addCheck("Docker API", "ok", ver)
+		}
+
 		if runnerCfg.Image == "" {
-			addCheck("Runner image", "warn", "UPGRADE_RUNNER_IMAGE not set (will attempt auto-detect)")
+			if detected := detectSelfImage(); detected != "" {
+				addCheck("Runner image", "ok", detected)
+			} else {
+				addCheck("Runner image", "error", "UPGRADE_RUNNER_IMAGE not set and auto-detect failed")
+			}
 		} else {
 			addCheck("Runner image", "ok", runnerCfg.Image)
+		}
+		if img := firstNonEmpty(runnerCfg.Image, detectSelfImage()); img != "" {
+			if err := dockerImageInspect(img); err != nil {
+				addCheck("Runner image inspect", "error", err.Error())
+			} else {
+				addCheck("Runner image inspect", "ok", "image available")
+			}
+		}
+		if src := detectMountSource("/stack"); src == "" {
+			addCheck("Stack mount", "error", "stack mount not detected; ensure /stack is mounted into control-plane")
+		} else {
+			addCheck("Stack mount", "ok", src)
 		}
 		envCandidates := []string{
 			"/stack/.env.onprem",
@@ -105,6 +149,13 @@ func BuildUpgradePreflight(runner *upgrade.Runner, updatesDir string) PreflightR
 				addCheck("Upgrade bundle", "warn", "No upgrade bundles found")
 			} else {
 				addCheck("Upgrade bundle", "ok", strings.Join(matches, ", "))
+				if ok, missing, err := checkBundleContents(matches[0]); err != nil {
+					addCheck("Bundle contents", "warn", err.Error())
+				} else if !ok {
+					addCheck("Bundle contents", "error", "Missing required files: "+strings.Join(missing, ", "))
+				} else {
+					addCheck("Bundle contents", "ok", "compose + env present")
+				}
 			}
 		}
 	} else {
@@ -147,6 +198,133 @@ func writeJSON(w http.ResponseWriter, payload any) {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func dockerDaemonOK() error {
+	cmd := exec.Command("docker", "info")
+	if err := cmd.Run(); err != nil {
+		return errors.New("docker daemon not reachable")
+	}
+	return nil
+}
+
+func dockerClientAPIVersion() (string, error) {
+	out, err := exec.Command("docker", "version", "--format", "{{.Client.APIVersion}}").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func compareVersions(a, b string) int {
+	as := strings.Split(a, ".")
+	bs := strings.Split(b, ".")
+	for len(as) < len(bs) {
+		as = append(as, "0")
+	}
+	for len(bs) < len(as) {
+		bs = append(bs, "0")
+	}
+	for i := 0; i < len(as); i++ {
+		ai := parseVersionPart(strings.TrimSpace(as[i]))
+		bi := parseVersionPart(strings.TrimSpace(bs[i]))
+		if ai < bi {
+			return -1
+		}
+		if ai > bi {
+			return 1
+		}
+	}
+	return 0
+}
+
+func parseVersionPart(raw string) int {
+	if raw == "" {
+		return 0
+	}
+	n := 0
+	for _, ch := range raw {
+		if ch < '0' || ch > '9' {
+			break
+		}
+		n = n*10 + int(ch-'0')
+	}
+	return n
+}
+
+func dockerImageInspect(image string) error {
+	if strings.TrimSpace(image) == "" {
+		return errors.New("image not set")
+	}
+	if err := exec.Command("docker", "image", "inspect", image).Run(); err != nil {
+		return fmt.Errorf("image not found: %s", image)
+	}
+	return nil
+}
+
+func detectSelfImage() string {
+	container := strings.TrimSpace(os.Getenv("HOSTNAME"))
+	if container == "" {
+		return ""
+	}
+	out, err := exec.Command("docker", "inspect", container, "--format", "{{.Config.Image}}").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func detectMountSource(dest string) string {
+	container := strings.TrimSpace(os.Getenv("HOSTNAME"))
+	if container == "" {
+		return ""
+	}
+	format := fmt.Sprintf("{{range .Mounts}}{{if eq .Destination %q}}{{.Source}}{{end}}{{end}}", dest)
+	out, err := exec.Command("docker", "inspect", container, "--format", format).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func checkBundleContents(path string) (bool, []string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, nil, err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return false, nil, err
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	required := map[string]bool{
+		"docker-compose.onprem.bundle.yml": false,
+		".env.onprem.example":              false,
+	}
+	for {
+		hdr, err := tr.Next()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return false, nil, err
+		}
+		name := strings.TrimPrefix(hdr.Name, "./")
+		for req := range required {
+			if strings.HasSuffix(name, "/"+req) || name == req {
+				required[req] = true
+			}
+		}
+	}
+	missing := []string{}
+	for k, ok := range required {
+		if !ok {
+			missing = append(missing, k)
+		}
+	}
+	return len(missing) == 0, missing, nil
 }
 
 func freeSpace(path string) (uint64, error) {

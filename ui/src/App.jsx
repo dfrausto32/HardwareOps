@@ -43,6 +43,52 @@ const nav = [
   { id: 'settings', label: 'Settings', icon: 'icon-settings' },
 ]
 
+const componentTypes = [
+  { id: 'app_bundle', label: 'App Bundle' },
+  { id: 'config_bundle', label: 'Config Bundle' },
+  { id: 'data_bundle', label: 'Data Bundle' },
+  { id: 'firmware', label: 'Firmware' },
+  { id: 'container_image', label: 'Container Image' },
+  { id: 'agent_bundle', label: 'Agent Bundle' },
+]
+
+function newComponentRow(overrides = {}) {
+  return {
+    id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `cmp-${Date.now()}-${Math.random()}`,
+    key: '',
+    artifactType: '',
+    artifactId: '',
+    desiredVersion: '',
+    desiredConfigRev: '',
+    locked: false,
+    ...overrides,
+  }
+}
+
+function normalizeArtifactType(val) {
+  if (!val) return ''
+  return String(val).trim().toLowerCase()
+}
+
+function filterArtifactGroupsByType(groups, type) {
+  const target = normalizeArtifactType(type)
+  if (!target) return groups
+  return groups
+    .map((group) => ({
+      ...group,
+      versions: group.versions.filter((artifact) => normalizeArtifactType(artifact.type) === target),
+    }))
+    .filter((group) => group.versions.length > 0)
+}
+
+function fallbackComponentType(key, artifactType) {
+  const normalized = normalizeArtifactType(artifactType)
+  if (normalized) return normalized
+  if (key === 'agent_bundle') return 'agent_bundle'
+  if (key === 'app_bundle') return 'app_bundle'
+  return ''
+}
+
 function parseCSVLine(line) {
   const out = []
   let cur = ''
@@ -253,7 +299,12 @@ export default function App() {
   const [deviceDetail, setDeviceDetail] = useState(null)
   const [deviceDetailError, setDeviceDetailError] = useState('')
   const [deviceDrawerOpen, setDeviceDrawerOpen] = useState(false)
+  const [drawerWidth, setDrawerWidth] = useState(() => {
+    const stored = Number(localStorage.getItem('hwops-drawer-width') || '')
+    return Number.isFinite(stored) && stored > 0 ? stored : 420
+  })
   const [artifactModalOpen, setArtifactModalOpen] = useState(false)
+  const [artifactPickerTarget, setArtifactPickerTarget] = useState(null)
   const [artifactUploadOpen, setArtifactUploadOpen] = useState(false)
 
   const [groups, setGroups] = useState([])
@@ -272,10 +323,8 @@ export default function App() {
   const [groupDesiredOpen, setGroupDesiredOpen] = useState(false)
   const [groupDesiredForm, setGroupDesiredForm] = useState({
     groupId: '',
-    artifactId: '',
-    desiredVersion: '',
-    desiredConfigRev: '',
     checkinIntervalSec: '',
+    components: [newComponentRow()],
   })
 
   const [artifacts, setArtifacts] = useState([])
@@ -290,10 +339,8 @@ export default function App() {
 
   const [deviceForm, setDeviceForm] = useState({
     deviceId: '',
-    artifactId: '',
-    desiredVersion: '',
-    desiredConfigRev: '',
     checkinIntervalSec: '',
+    components: [newComponentRow()],
   })
   const [deviceFormDirty, setDeviceFormDirty] = useState(false)
 
@@ -343,17 +390,154 @@ export default function App() {
   const eventsConnRef = useRef('disconnected')
   const lastEventAtRef = useRef(0)
   const eventsHeartbeatRef = useRef(null)
+  const drawerResizingRef = useRef(false)
 
   const [theme, setTheme] = useState(() => {
     return localStorage.getItem('hwops-theme') || 'dark'
   })
   const maintenanceToken = import.meta.env.VITE_MAINTENANCE_TOKEN || ''
   const canToggleMaintenance = Boolean(maintenanceToken)
+  const preflightOk = Boolean(upgradePreflight.ok)
+  const upgradeReady = Boolean(preflightOk && upgradeAvailable.available)
+
+  function buildComponentRows(desiredComponents, legacy, current, fallbackKey = '') {
+    const rows = []
+    const source = desiredComponents && Object.keys(desiredComponents).length > 0 ? desiredComponents : null
+    if (source) {
+      Object.entries(source).forEach(([key, comp]) => {
+        if (key === 'app_bundle') return
+        rows.push(newComponentRow({
+          key,
+          artifactType: fallbackComponentType(key, comp.artifactType),
+          artifactId: comp.artifactId || '',
+          desiredVersion: comp.desiredVersion || '',
+          desiredConfigRev: comp.desiredConfigRev || '',
+          locked: Boolean(comp.locked),
+        }))
+      })
+    }
+    if (rows.length === 0 && current?.components) {
+      Object.entries(current.components).forEach(([key, comp]) => {
+        if (key === 'app_bundle') return
+        rows.push(newComponentRow({
+          key,
+          artifactType: fallbackComponentType(key, ''),
+          desiredVersion: comp.currentVersion || '',
+          desiredConfigRev: comp.currentConfigRev || '',
+        }))
+      })
+    }
+    if (rows.length === 0) {
+      rows.push(newComponentRow({
+        key: fallbackKey,
+        artifactType: fallbackComponentType(fallbackKey, ''),
+        desiredVersion: current?.softwareVersion || '',
+        desiredConfigRev: current?.configRev || '',
+      }))
+    }
+    return rows
+  }
+
+  function normalizeComponentKeyUI(value) {
+    return String(value || '').trim().toLowerCase()
+  }
+
+  function buildComponentsPayload(rows) {
+    const components = {}
+    for (const row of rows || []) {
+      const hasValues = Boolean(
+        row.key ||
+        row.artifactType ||
+        row.artifactId ||
+        row.desiredVersion ||
+        row.desiredConfigRev ||
+        row.locked,
+      )
+      if (!hasValues) continue
+      const key = normalizeComponentKeyUI(row.key)
+      if (!key) {
+        return { error: 'Component name is required.' }
+      }
+      if (components[key]) {
+        return { error: `Duplicate component name: ${key}` }
+      }
+      const artifactType = normalizeArtifactType(row.artifactType)
+      if (!artifactType) {
+        return { error: `Component ${key} requires an artifact type.` }
+      }
+      components[key] = {
+        artifactId: row.artifactId || undefined,
+        artifactType,
+        desiredVersion: row.desiredVersion || undefined,
+        desiredConfigRev: row.desiredConfigRev || undefined,
+        locked: row.locked,
+      }
+    }
+    return { components }
+  }
+
+  function updateDeviceComponent(index, patch) {
+    setDeviceForm((prev) => {
+      const next = [...(prev.components || [])]
+      if (!next[index]) return prev
+      next[index] = { ...next[index], ...patch }
+      return { ...prev, components: next }
+    })
+    setDeviceFormDirty(true)
+  }
+
+  function addDeviceComponent() {
+    setDeviceForm((prev) => ({
+      ...prev,
+      components: [...(prev.components || []), newComponentRow()],
+    }))
+    setDeviceFormDirty(true)
+  }
+
+  function removeDeviceComponent(index) {
+    setDeviceForm((prev) => ({
+      ...prev,
+      components: (prev.components || []).filter((_, idx) => idx !== index),
+    }))
+    setDeviceFormDirty(true)
+  }
+
+  function updateGroupComponent(index, patch) {
+    setGroupDesiredForm((prev) => {
+      const next = [...(prev.components || [])]
+      if (!next[index]) return prev
+      next[index] = { ...next[index], ...patch }
+      return { ...prev, components: next }
+    })
+  }
+
+  function addGroupComponent() {
+    setGroupDesiredForm((prev) => ({
+      ...prev,
+      components: [...(prev.components || []), newComponentRow()],
+    }))
+  }
+
+  function removeGroupComponent(index) {
+    setGroupDesiredForm((prev) => ({
+      ...prev,
+      components: (prev.components || []).filter((_, idx) => idx !== index),
+    }))
+  }
+
+  function openArtifactPicker(scope, index) {
+    setArtifactPickerTarget({ scope, index })
+    setArtifactModalOpen(true)
+  }
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     localStorage.setItem('hwops-theme', theme)
   }, [theme])
+
+  useEffect(() => {
+    localStorage.setItem('hwops-drawer-width', String(drawerWidth))
+  }, [drawerWidth])
 
   useEffect(() => {
     selectedDeviceIdRef.current = selectedDeviceId
@@ -398,12 +582,29 @@ export default function App() {
     const desired = desiredState.devices?.find((d) => d.deviceId === selectedDeviceId)
     const current = deviceDetail?.current
     if (deviceFormDirty) return
+    const desiredKeys = desired?.components ? Object.keys(desired.components) : []
+    const currentKeys = current?.components ? Object.keys(current.components) : []
+    const pickDefaultKey = (keys) => {
+      if (keys.includes('agent_bundle')) return 'agent_bundle'
+      const nonLegacy = keys.filter((key) => key !== 'app_bundle')
+      return nonLegacy[0] || ''
+    }
+    const fallbackComponentKey = desiredKeys.length > 0
+      ? pickDefaultKey(desiredKeys)
+      : (currentKeys.length > 0 ? pickDefaultKey(currentKeys) : '')
     setDeviceForm({
       deviceId: selectedDeviceId,
-      artifactId: desired?.artifactId || '',
-      desiredVersion: desired?.desiredVersion || current?.softwareVersion || '',
-      desiredConfigRev: desired?.desiredConfigRev || current?.configRev || '',
       checkinIntervalSec: desired?.checkinIntervalSec ? String(desired.checkinIntervalSec) : '',
+      components: buildComponentRows(
+        desired?.components || {},
+        {
+          artifactId: desired?.artifactId || '',
+          desiredVersion: desired?.desiredVersion || current?.softwareVersion || '',
+          desiredConfigRev: desired?.desiredConfigRev || current?.configRev || '',
+        },
+        current,
+        fallbackComponentKey,
+      ),
     })
   }, [selectedDeviceId, desiredState, deviceDetail, deviceFormDirty])
 
@@ -412,10 +613,16 @@ export default function App() {
     const desired = desiredState.groups?.find((g) => g.groupId === selectedGroupId)
     setGroupDesiredForm({
       groupId: selectedGroupId,
-      artifactId: desired?.artifactId || '',
-      desiredVersion: desired?.desiredVersion || '',
-      desiredConfigRev: desired?.desiredConfigRev || '',
       checkinIntervalSec: desired?.checkinIntervalSec ? String(desired.checkinIntervalSec) : '',
+      components: buildComponentRows(
+        desired?.components || {},
+        {
+          artifactId: desired?.artifactId || '',
+          desiredVersion: desired?.desiredVersion || '',
+          desiredConfigRev: desired?.desiredConfigRev || '',
+        },
+        null,
+      ),
     })
   }, [selectedGroupId, desiredState])
 
@@ -426,6 +633,34 @@ export default function App() {
     }, 5000)
     return () => clearInterval(timer)
   }, [upgrade.running])
+
+  useEffect(() => {
+    if (!deviceDrawerOpen) return
+    const viewport = window.innerWidth
+    const autoWidth = Math.min(Math.max(560, viewport * 0.6), viewport * 0.9)
+    if (drawerWidth < autoWidth) {
+      setDrawerWidth(autoWidth)
+    }
+  }, [deviceDrawerOpen, drawerWidth])
+
+  useEffect(() => {
+    if (!deviceDrawerOpen) return undefined
+    const handlePointerMove = (event) => {
+      if (!drawerResizingRef.current) return
+      const viewport = window.innerWidth
+      const next = Math.min(Math.max(viewport - event.clientX, 320), viewport * 0.9)
+      setDrawerWidth(next)
+    }
+    const handlePointerUp = () => {
+      drawerResizingRef.current = false
+    }
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp)
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+    }
+  }, [deviceDrawerOpen])
 
   useEffect(() => {
     if (authStatus.loaded && authStatus.enabled && !authToken) {
@@ -761,10 +996,13 @@ export default function App() {
   function handleDesiredDevice(e) {
     e.preventDefault()
     setDesiredStatus('Setting desired state...')
+    const { components, error } = buildComponentsPayload(deviceForm.components)
+    if (error) {
+      setDesiredStatus(error)
+      return
+    }
     const payload = {
-      artifactId: deviceForm.artifactId || undefined,
-      desiredVersion: deviceForm.desiredVersion || undefined,
-      desiredConfigRev: deviceForm.desiredConfigRev || undefined,
+      components,
       checkinIntervalSec: deviceForm.checkinIntervalSec
         ? Number(deviceForm.checkinIntervalSec)
         : undefined,
@@ -903,10 +1141,13 @@ export default function App() {
   async function handleGroupDesired(e) {
     e.preventDefault()
     setGroupsStatus('Setting group desired state...')
+    const { components, error } = buildComponentsPayload(groupDesiredForm.components)
+    if (error) {
+      setGroupsStatus(error)
+      return
+    }
     const payload = {
-      artifactId: groupDesiredForm.artifactId || undefined,
-      desiredVersion: groupDesiredForm.desiredVersion || undefined,
-      desiredConfigRev: groupDesiredForm.desiredConfigRev || undefined,
+      components,
       checkinIntervalSec: groupDesiredForm.checkinIntervalSec
         ? Number(groupDesiredForm.checkinIntervalSec)
         : undefined,
@@ -1142,8 +1383,6 @@ export default function App() {
 
   const selectedDesired = desiredState.devices?.find((d) => d.deviceId === selectedDeviceId)
   const selectedGroupDesired = desiredState.groups?.find((g) => g.groupId === selectedGroupId)
-  const selectedArtifact = artifacts.find((a) => a.artifactId === deviceForm.artifactId)
-  const selectedGroupArtifact = artifacts.find((a) => a.artifactId === groupDesiredForm.artifactId)
   const lastAppliedArtifact = artifacts.find((a) => a.artifactId === deviceDetail?.current?.lastApplyArtifactId)
   const artifactGroups = useMemo(() => {
     const map = new Map()
@@ -1159,12 +1398,16 @@ export default function App() {
       })
       .sort((a, b) => a.name.localeCompare(b.name))
   }, [artifacts])
-  const selectedArtifactGroup = selectedArtifact
-    ? artifactGroups.find((g) => g.name === selectedArtifact.name)
-    : null
-  const selectedGroupArtifactGroup = selectedGroupArtifact
-    ? artifactGroups.find((g) => g.name === selectedGroupArtifact.name)
-    : null
+  const artifactModalGroups = useMemo(() => {
+    if (!artifactPickerTarget) return artifactGroups
+    const { scope, index } = artifactPickerTarget
+    const row = scope === 'group'
+      ? groupDesiredForm.components?.[index]
+      : deviceForm.components?.[index]
+    const type = normalizeArtifactType(row?.artifactType)
+    if (!type) return artifactGroups
+    return filterArtifactGroupsByType(artifactGroups, type)
+  }, [artifactGroups, artifactPickerTarget, deviceForm.components, groupDesiredForm.components])
   const selectedGroup = groups.find((g) => g.groupId === selectedGroupId)
   const selectedGroupSelector = selectedGroup ? normalizeObject(selectedGroup.selector) : {}
   const groupDeviceList = useMemo(() => {
@@ -2145,106 +2388,107 @@ export default function App() {
               </div>
 
               <div className="settings-section">
-              <div className="settings-title">Update Packages</div>
-              {!upgradeAvailable.available ? (
-                  <div className="placeholder">
-                    No updates found{upgradeAvailable.updatesDir ? ` in ${upgradeAvailable.updatesDir}.` : '.'}
-                  </div>
-                ) : (
-                  <div className="detail-grid">
-                    <div>
-                      <div className="detail-label">Latest</div>
-                      <div className="detail-value">{upgradeAvailable.latest}</div>
-                    </div>
-                    <div>
-                      <div className="detail-label">Updates Dir</div>
-                      <div className="detail-value">{upgradeAvailable.updatesDir || '—'}</div>
-                    </div>
-                    <div className="full">
-                      <div className="detail-label">Bundles</div>
-                      <div className="detail-value">{(upgradeAvailable.bundles || []).join(', ')}</div>
-                    </div>
-                  </div>
-                )}
-                {canToggleMaintenance && maintenance.enabled && upgrade.enabled && (
-                  <div className="inline-row">
-                    <button
-                      className="button ghost"
-                      onClick={startUpgrade}
-                      disabled={upgrade.running || !upgradeAvailable.available}
-                    >
-                      {upgrade.running ? 'Applying update…' : 'Apply update'}
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              <div className="settings-section">
-                <div className="settings-title">Upgrade Preflight</div>
-                <div className="inline-row">
-                  <button className="button ghost" onClick={loadUpgradePreflight}>
-                    Run preflight
-                  </button>
-                  {upgradePreflightStatus && <div className="status">{upgradePreflightStatus}</div>}
-                </div>
-                {upgradePreflightError && <div className="error">{upgradePreflightError}</div>}
-                <div className="preflight-list">
-                  {(upgradePreflight.checks || []).map((check) => (
-                    <div key={check.name} className={`preflight-item ${check.status}`}>
-                      <div className="preflight-title">
-                        <span className={`preflight-badge ${check.status}`}>{check.status}</span>
-                        {check.name}
-                      </div>
-                      <div className="preflight-msg">{check.message}</div>
-                    </div>
-                  ))}
-                  {(!upgradePreflight.checks || upgradePreflight.checks.length === 0) && (
-                    <div className="placeholder">No preflight results yet.</div>
-                  )}
-                </div>
-              </div>
-
-              <div className="settings-section">
-                <div className="settings-title">Upgrade Status</div>
+                <div className="settings-title">Upgrade</div>
                 {!upgrade.enabled ? (
                   <div className="placeholder">Upgrade runner not configured.</div>
                 ) : (
-                  <div className="detail-grid">
-                    <div>
-                      <div className="detail-label">State</div>
-                      <div className="detail-value">{upgrade.state || 'idle'}</div>
-                    </div>
-                    <div>
-                      <div className="detail-label">Running</div>
-                      <div className="detail-value">{upgrade.running ? 'yes' : 'no'}</div>
-                    </div>
-                    <div>
-                      <div className="detail-label">Exit Code</div>
-                      <div className="detail-value">{upgrade.exitCode ?? '—'}</div>
-                    </div>
-                    <div className="full">
-                      <div className="detail-label">Runner Container</div>
-                      <div className="detail-value">{upgrade.runnerContainer || '—'}</div>
-                    </div>
-                    <div className="full">
-                      <div className="detail-label">Last Started</div>
-                      <div className="detail-value">{upgrade.startedAt ? new Date(upgrade.startedAt).toLocaleString() : '—'}</div>
-                    </div>
-                    <div className="full">
-                      <div className="detail-label">Last Finished</div>
-                      <div className="detail-value">{upgrade.finishedAt ? new Date(upgrade.finishedAt).toLocaleString() : '—'}</div>
-                    </div>
-                    <div className="full">
-                      <div className="detail-label">Log Path</div>
-                      <div className="detail-value">{upgrade.logPath || '—'}</div>
-                    </div>
-                    {upgrade.error && (
+                  <>
+                    <div className="detail-grid">
+                      <div>
+                        <div className="detail-label">Maintenance</div>
+                        <div className="detail-value">{maintenance.enabled ? 'enabled' : 'disabled'}</div>
+                      </div>
+                      <div>
+                        <div className="detail-label">Updates</div>
+                        <div className="detail-value">{upgradeAvailable.available ? 'available' : 'none'}</div>
+                      </div>
+                      <div>
+                        <div className="detail-label">Preflight</div>
+                        <div className="detail-value">{preflightOk ? 'ok' : 'not run / failed'}</div>
+                      </div>
+                      <div>
+                        <div className="detail-label">Last Preflight</div>
+                        <div className="detail-value">
+                          {upgradePreflight.timestamp ? new Date(upgradePreflight.timestamp).toLocaleString() : '—'}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="detail-label">State</div>
+                        <div className="detail-value">{upgrade.state || 'idle'}</div>
+                      </div>
+                      <div>
+                        <div className="detail-label">Running</div>
+                        <div className="detail-value">{upgrade.running ? 'yes' : 'no'}</div>
+                      </div>
                       <div className="full">
-                        <div className="detail-label">Error</div>
-                        <div className="detail-value">{upgrade.error}</div>
+                        <div className="detail-label">Log Path</div>
+                        <div className="detail-value">{upgrade.logPath || '—'}</div>
+                      </div>
+                      {upgrade.error && (
+                        <div className="full">
+                          <div className="detail-label">Error</div>
+                          <div className="detail-value">{upgrade.error}</div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="inline-row">
+                      <button className="button ghost" onClick={loadUpgradeAvailable}>
+                        Refresh updates
+                      </button>
+                      <button className="button ghost" onClick={loadUpgradePreflight}>
+                        Run preflight
+                      </button>
+                      {canToggleMaintenance && maintenance.enabled && upgrade.enabled && (
+                        <button
+                          className="button ghost"
+                          onClick={startUpgrade}
+                          disabled={upgrade.running || !upgradeReady}
+                        >
+                          {upgrade.running ? 'Applying update…' : 'Apply update'}
+                        </button>
+                      )}
+                    </div>
+                    {upgradeAvailableError && <div className="error">{upgradeAvailableError}</div>}
+                    {upgradePreflightStatus && <div className="status">{upgradePreflightStatus}</div>}
+                    {upgradePreflightError && <div className="error">{upgradePreflightError}</div>}
+
+                    {!upgradeAvailable.available ? (
+                      <div className="placeholder">
+                        No updates found{upgradeAvailable.updatesDir ? ` in ${upgradeAvailable.updatesDir}.` : '.'}
+                      </div>
+                    ) : (
+                      <div className="detail-grid">
+                        <div>
+                          <div className="detail-label">Latest</div>
+                          <div className="detail-value">{upgradeAvailable.latest}</div>
+                        </div>
+                        <div>
+                          <div className="detail-label">Updates Dir</div>
+                          <div className="detail-value">{upgradeAvailable.updatesDir || '—'}</div>
+                        </div>
+                        <div className="full">
+                          <div className="detail-label">Bundles</div>
+                          <div className="detail-value">{(upgradeAvailable.bundles || []).join(', ')}</div>
+                        </div>
                       </div>
                     )}
-                  </div>
+
+                    <div className="preflight-list">
+                      {(upgradePreflight.checks || []).map((check) => (
+                        <div key={check.name} className={`preflight-item ${check.status}`}>
+                          <div className="preflight-title">
+                            <span className={`preflight-badge ${check.status}`}>{check.status}</span>
+                            {check.name}
+                          </div>
+                          <div className="preflight-msg">{check.message}</div>
+                        </div>
+                      ))}
+                      {(!upgradePreflight.checks || upgradePreflight.checks.length === 0) && (
+                        <div className="placeholder">No preflight results yet.</div>
+                      )}
+                    </div>
+                  </>
                 )}
               </div>
             </div>
@@ -2254,7 +2498,18 @@ export default function App() {
 
       {deviceDrawerOpen && (
         <div className="drawer-backdrop" onClick={() => setDeviceDrawerOpen(false)}>
-          <div className="drawer" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="drawer"
+            style={{ width: `min(${drawerWidth}px, 90vw)` }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              className="drawer-handle"
+              onPointerDown={(event) => {
+                drawerResizingRef.current = true
+                event.preventDefault()
+              }}
+            />
             <div className="drawer-header">
               <div>
                 <div className="detail-label">Device</div>
@@ -2321,6 +2576,39 @@ export default function App() {
                   </div>
                 </div>
 
+                {deviceDetail.current?.components && Object.keys(deviceDetail.current.components).some((key) => key !== 'app_bundle') && (
+                  <div className="component-table">
+                    <h4>Components</h4>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Component</th>
+                          <th>Current</th>
+                          <th>Last Apply</th>
+                          <th>Artifact</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(deviceDetail.current.components)
+                          .filter(([key]) => key !== 'app_bundle')
+                          .map(([key, comp]) => (
+                          <tr key={key}>
+                            <td>{key}</td>
+                            <td>{comp.currentVersion || '—'}</td>
+                            <td>
+                              <span className={`pill ${comp.lastApplyStatus === 'error' ? 'error' : 'success'}`}>
+                                {comp.lastApplyStatus || '—'}
+                              </span>
+                              {comp.lastApplyAt && <div className="detail-note">{comp.lastApplyAt}</div>}
+                            </td>
+                            <td>{comp.lastApplyArtifactId || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
                 <form
                   className="form"
                   onSubmit={(e) => {
@@ -2331,90 +2619,126 @@ export default function App() {
                   {desiredError && <div className="error">{desiredError}</div>}
                   <label>Device ID</label>
                   <input value={deviceForm.deviceId} readOnly />
-                  <label>Artifact</label>
-                  <div className="inline-row">
-                    <select
-                      value={selectedArtifact?.name || ''}
-                      onChange={(e) => {
-                        const name = e.target.value
-                        const group = artifactGroups.find((g) => g.name === name)
-                        if (!group) {
-                          setDeviceForm({ ...deviceForm, artifactId: '', desiredVersion: '' })
-                        } else {
-                          const pick = group.versions[group.versions.length - 1]
-                          setDeviceForm({
-                            ...deviceForm,
-                            artifactId: pick.artifactId,
-                            desiredVersion: pick.version,
-                          })
-                        }
-                        setDeviceFormDirty(true)
-                      }}
-                    >
-                      <option value="">Select artifact</option>
-                      {artifactGroups.map((group) => (
-                        <option key={group.name} value={group.name}>{group.name}</option>
-                      ))}
-                    </select>
-                    <button className="button ghost" type="button" onClick={() => setArtifactModalOpen(true)}>
-                      Browse
+                  <label>Components</label>
+                  <div className="component-editor">
+                    {deviceForm.components.map((row, idx) => {
+                      const locked = Boolean(row.locked)
+                      const type = normalizeArtifactType(row.artifactType)
+                      const groupsForType = filterArtifactGroupsByType(artifactGroups, type)
+                      const selected = artifacts.find((a) => a.artifactId === row.artifactId)
+                      const selectedGroup = selected
+                        ? groupsForType.find((g) => g.name === selected.name)
+                        : null
+                      return (
+                        <div className="component-row" key={row.id || `${row.key}-${idx}`}>
+                          <div className="inline-row">
+                            <input
+                              value={row.key}
+                              onChange={(e) => updateDeviceComponent(idx, { key: e.target.value })}
+                              placeholder="component key (e.g. app:customer)"
+                              disabled={locked}
+                            />
+                            <input
+                              list="artifact-types"
+                              value={row.artifactType}
+                              onChange={(e) => updateDeviceComponent(idx, { artifactType: e.target.value })}
+                              placeholder="artifact type"
+                              disabled={locked}
+                            />
+                            <label className="inline-toggle">
+                              <input
+                                type="checkbox"
+                                checked={locked}
+                                onChange={(e) => updateDeviceComponent(idx, { locked: e.target.checked })}
+                              />
+                              Lock
+                            </label>
+                            <button
+                              className="button ghost"
+                              type="button"
+                              onClick={() => removeDeviceComponent(idx)}
+                              disabled={locked || deviceForm.components.length <= 1}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                          <div className="inline-row">
+                            <select
+                              value={selected?.name || ''}
+                              onChange={(e) => {
+                                const name = e.target.value
+                                const group = groupsForType.find((g) => g.name === name)
+                                if (!group) {
+                                  updateDeviceComponent(idx, { artifactId: '', desiredVersion: '' })
+                                } else {
+                                  const pick = group.versions[group.versions.length - 1]
+                                  updateDeviceComponent(idx, {
+                                    artifactId: pick.artifactId,
+                                    desiredVersion: pick.version,
+                                    artifactType: normalizeArtifactType(pick.type),
+                                  })
+                                }
+                              }}
+                              disabled={locked}
+                            >
+                              <option value="">Select artifact</option>
+                              {groupsForType.map((group) => (
+                                <option key={group.name} value={group.name}>{group.name}</option>
+                              ))}
+                            </select>
+                            <button
+                              className="button ghost"
+                              type="button"
+                              onClick={() => openArtifactPicker('device', idx)}
+                              disabled={locked}
+                            >
+                              Browse
+                            </button>
+                            <select
+                              value={selected?.version || ''}
+                              onChange={(e) => {
+                                const version = e.target.value
+                                const pick = selectedGroup?.versions.find((v) => v.version === version)
+                                if (pick) {
+                                  updateDeviceComponent(idx, {
+                                    artifactId: pick.artifactId,
+                                    desiredVersion: pick.version,
+                                    artifactType: normalizeArtifactType(pick.type),
+                                  })
+                                }
+                              }}
+                              disabled={locked}
+                            >
+                              <option value="">Select version</option>
+                              {(selectedGroup?.versions || []).map((artifact) => (
+                                <option key={artifact.artifactId} value={artifact.version}>
+                                  {artifact.version}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="inline-row">
+                            <input value={row.artifactId} readOnly placeholder="artifact uuid" />
+                            <input
+                              value={row.desiredVersion}
+                              onChange={(e) => updateDeviceComponent(idx, { desiredVersion: e.target.value })}
+                              placeholder="desired version"
+                              disabled={locked}
+                            />
+                            <input
+                              value={row.desiredConfigRev}
+                              onChange={(e) => updateDeviceComponent(idx, { desiredConfigRev: e.target.value })}
+                              placeholder="config rev"
+                              disabled={locked}
+                            />
+                          </div>
+                        </div>
+                      )
+                    })}
+                    <button className="button ghost" type="button" onClick={addDeviceComponent}>
+                      Add component
                     </button>
                   </div>
-                  <label>Artifact Version</label>
-                  <select
-                    value={selectedArtifact?.version || ''}
-                    onChange={(e) => {
-                      const version = e.target.value
-                      const group = selectedArtifactGroup
-                      const pick = group?.versions.find((v) => v.version === version)
-                      if (pick) {
-                        setDeviceForm({
-                          ...deviceForm,
-                          artifactId: pick.artifactId,
-                          desiredVersion: pick.version,
-                        })
-                        setDeviceFormDirty(true)
-                      }
-                    }}
-                  >
-                    <option value="">Select version</option>
-                    {(selectedArtifactGroup?.versions || []).map((artifact) => (
-                      <option key={artifact.artifactId} value={artifact.version}>
-                        {artifact.version}
-                      </option>
-                    ))}
-                  </select>
-                  <label>Artifact ID</label>
-                  <input value={deviceForm.artifactId} readOnly placeholder="artifact uuid" />
-                  {selectedArtifact && (
-                    <div className="artifact-summary">
-                      <div><strong>{selectedArtifact.name}</strong> v{selectedArtifact.version}</div>
-                      <div className="mono">{selectedArtifact.artifactId}</div>
-                      <div>
-                        <span className={`pill ${selectedArtifact.signature ? 'signed' : 'unsigned'}`}>
-                          {selectedArtifact.signature ? 'signed' : 'unsigned'}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                  <label>Desired Version</label>
-                  <input
-                    value={deviceForm.desiredVersion}
-                    onChange={(e) => {
-                      setDeviceForm({ ...deviceForm, desiredVersion: e.target.value })
-                      setDeviceFormDirty(true)
-                    }}
-                    placeholder="1.0.0"
-                  />
-                  <label>Config Rev</label>
-                  <input
-                    value={deviceForm.desiredConfigRev}
-                    onChange={(e) => {
-                      setDeviceForm({ ...deviceForm, desiredConfigRev: e.target.value })
-                      setDeviceFormDirty(true)
-                    }}
-                    placeholder="c1"
-                  />
                   <label>Check-in Interval (sec)</label>
                   <input
                     value={deviceForm.checkinIntervalSec}
@@ -2442,10 +2766,16 @@ export default function App() {
                         setDeviceFormDirty(false)
                         setDeviceForm({
                           deviceId: selectedDeviceId,
-                          artifactId: selectedDesired?.artifactId || '',
-                          desiredVersion: selectedDesired?.desiredVersion || deviceDetail.current?.softwareVersion || '',
-                          desiredConfigRev: selectedDesired?.desiredConfigRev || deviceDetail.current?.configRev || '',
                           checkinIntervalSec: selectedDesired?.checkinIntervalSec ? String(selectedDesired.checkinIntervalSec) : '',
+                          components: buildComponentRows(
+                            selectedDesired?.components || {},
+                            {
+                              artifactId: selectedDesired?.artifactId || '',
+                              desiredVersion: selectedDesired?.desiredVersion || deviceDetail.current?.softwareVersion || '',
+                              desiredConfigRev: selectedDesired?.desiredConfigRev || deviceDetail.current?.configRev || '',
+                            },
+                            deviceDetail?.current,
+                          ),
                         })
                       }}
                     >
@@ -2472,11 +2802,23 @@ export default function App() {
       )}
 
       {artifactModalOpen && (
-        <div className="modal-backdrop" onClick={() => setArtifactModalOpen(false)}>
+        <div
+          className="modal-backdrop"
+          onClick={() => {
+            setArtifactModalOpen(false)
+            setArtifactPickerTarget(null)
+          }}
+        >
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="section-header">
               <h3>Select Artifact</h3>
-              <button className="button ghost" onClick={() => setArtifactModalOpen(false)}>
+              <button
+                className="button ghost"
+                onClick={() => {
+                  setArtifactModalOpen(false)
+                  setArtifactPickerTarget(null)
+                }}
+              >
                 Close
               </button>
             </div>
@@ -2492,7 +2834,7 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {artifactGroups.map((group) => (
+                  {artifactModalGroups.map((group) => (
                     group.versions.map((a, idx) => (
                       <tr key={a.artifactId} className={idx === 0 ? 'artifact-group-start' : ''}>
                         <td>{idx === 0 ? group.name : ''}</td>
@@ -2506,11 +2848,23 @@ export default function App() {
                         <td>
                           <button
                             className="button ghost"
-                            onClick={() => {
-                              setDeviceForm({ ...deviceForm, artifactId: a.artifactId, desiredVersion: a.version })
-                              setDeviceFormDirty(true)
-                              setArtifactModalOpen(false)
-                            }}
+                          onClick={() => {
+                            if (artifactPickerTarget?.scope === 'group') {
+                              updateGroupComponent(artifactPickerTarget.index, {
+                                artifactId: a.artifactId,
+                                desiredVersion: a.version,
+                                artifactType: normalizeArtifactType(a.type),
+                              })
+                            } else if (artifactPickerTarget?.scope === 'device') {
+                              updateDeviceComponent(artifactPickerTarget.index, {
+                                artifactId: a.artifactId,
+                                desiredVersion: a.version,
+                                artifactType: normalizeArtifactType(a.type),
+                              })
+                            }
+                            setArtifactModalOpen(false)
+                            setArtifactPickerTarget(null)
+                          }}
                           >
                             Select
                           </button>
@@ -2668,82 +3022,126 @@ export default function App() {
             <form className="form" onSubmit={handleGroupDesired}>
               <label>Group ID</label>
               <input value={groupDesiredForm.groupId} readOnly />
-              <label>Artifact</label>
-              <div className="inline-row">
-                <select
-                  value={selectedGroupArtifact?.name || ''}
-                  onChange={(e) => {
-                    const name = e.target.value
-                    const group = artifactGroups.find((g) => g.name === name)
-                    if (!group) {
-                      setGroupDesiredForm({ ...groupDesiredForm, artifactId: '', desiredVersion: '' })
-                    } else {
-                      const pick = group.versions[group.versions.length - 1]
-                      setGroupDesiredForm({
-                        ...groupDesiredForm,
-                        artifactId: pick.artifactId,
-                        desiredVersion: pick.version,
-                      })
-                    }
-                  }}
-                >
-                  <option value="">Select artifact</option>
-                  {artifactGroups.map((group) => (
-                    <option key={group.name} value={group.name}>{group.name}</option>
-                  ))}
-                </select>
-                <button className="button ghost" type="button" onClick={() => setArtifactModalOpen(true)}>
-                  Browse
+              <label>Components</label>
+              <div className="component-editor">
+                {groupDesiredForm.components.map((row, idx) => {
+                  const locked = Boolean(row.locked)
+                  const type = normalizeArtifactType(row.artifactType)
+                  const groupsForType = filterArtifactGroupsByType(artifactGroups, type)
+                  const selected = artifacts.find((a) => a.artifactId === row.artifactId)
+                  const selectedGroup = selected
+                    ? groupsForType.find((g) => g.name === selected.name)
+                    : null
+                  return (
+                    <div className="component-row" key={row.id || `${row.key}-${idx}`}>
+                      <div className="inline-row">
+                        <input
+                          value={row.key}
+                          onChange={(e) => updateGroupComponent(idx, { key: e.target.value })}
+                          placeholder="component key (e.g. app:customer)"
+                          disabled={locked}
+                        />
+                        <input
+                          list="artifact-types"
+                          value={row.artifactType}
+                          onChange={(e) => updateGroupComponent(idx, { artifactType: e.target.value })}
+                          placeholder="artifact type"
+                          disabled={locked}
+                        />
+                        <label className="inline-toggle">
+                          <input
+                            type="checkbox"
+                            checked={locked}
+                            onChange={(e) => updateGroupComponent(idx, { locked: e.target.checked })}
+                          />
+                          Lock
+                        </label>
+                        <button
+                          className="button ghost"
+                          type="button"
+                          onClick={() => removeGroupComponent(idx)}
+                          disabled={locked || groupDesiredForm.components.length <= 1}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      <div className="inline-row">
+                        <select
+                          value={selected?.name || ''}
+                          onChange={(e) => {
+                            const name = e.target.value
+                            const group = groupsForType.find((g) => g.name === name)
+                            if (!group) {
+                              updateGroupComponent(idx, { artifactId: '', desiredVersion: '' })
+                            } else {
+                              const pick = group.versions[group.versions.length - 1]
+                              updateGroupComponent(idx, {
+                                artifactId: pick.artifactId,
+                                desiredVersion: pick.version,
+                                artifactType: normalizeArtifactType(pick.type),
+                              })
+                            }
+                          }}
+                          disabled={locked}
+                        >
+                          <option value="">Select artifact</option>
+                          {groupsForType.map((group) => (
+                            <option key={group.name} value={group.name}>{group.name}</option>
+                          ))}
+                        </select>
+                        <button
+                          className="button ghost"
+                          type="button"
+                          onClick={() => openArtifactPicker('group', idx)}
+                          disabled={locked}
+                        >
+                          Browse
+                        </button>
+                        <select
+                          value={selected?.version || ''}
+                          onChange={(e) => {
+                            const version = e.target.value
+                            const pick = selectedGroup?.versions.find((v) => v.version === version)
+                            if (pick) {
+                              updateGroupComponent(idx, {
+                                artifactId: pick.artifactId,
+                                desiredVersion: pick.version,
+                                artifactType: normalizeArtifactType(pick.type),
+                              })
+                            }
+                          }}
+                          disabled={locked}
+                        >
+                          <option value="">Select version</option>
+                          {(selectedGroup?.versions || []).map((artifact) => (
+                            <option key={artifact.artifactId} value={artifact.version}>
+                              {artifact.version}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="inline-row">
+                        <input value={row.artifactId} readOnly placeholder="artifact uuid" />
+                        <input
+                          value={row.desiredVersion}
+                          onChange={(e) => updateGroupComponent(idx, { desiredVersion: e.target.value })}
+                          placeholder="desired version"
+                          disabled={locked}
+                        />
+                        <input
+                          value={row.desiredConfigRev}
+                          onChange={(e) => updateGroupComponent(idx, { desiredConfigRev: e.target.value })}
+                          placeholder="config rev"
+                          disabled={locked}
+                        />
+                      </div>
+                    </div>
+                  )
+                })}
+                <button className="button ghost" type="button" onClick={addGroupComponent}>
+                  Add component
                 </button>
               </div>
-              <label>Artifact Version</label>
-              <select
-                value={selectedGroupArtifact?.version || ''}
-                onChange={(e) => {
-                  const version = e.target.value
-                  const group = selectedGroupArtifactGroup
-                  const pick = group?.versions.find((v) => v.version === version)
-                  if (pick) {
-                    setGroupDesiredForm({
-                      ...groupDesiredForm,
-                      artifactId: pick.artifactId,
-                      desiredVersion: pick.version,
-                    })
-                  }
-                }}
-              >
-                <option value="">Select version</option>
-                {(selectedGroupArtifactGroup?.versions || []).map((artifact) => (
-                  <option key={artifact.artifactId} value={artifact.version}>
-                    {artifact.version}
-                  </option>
-                ))}
-              </select>
-              <label>Artifact ID</label>
-              <input value={groupDesiredForm.artifactId} readOnly placeholder="artifact uuid" />
-              {selectedGroupArtifact && (
-                <div className="artifact-summary">
-                  <div><strong>{selectedGroupArtifact.name}</strong> v{selectedGroupArtifact.version}</div>
-                  <div className="mono">{selectedGroupArtifact.artifactId}</div>
-                  <div>
-                    <span className={`pill ${selectedGroupArtifact.signature ? 'signed' : 'unsigned'}`}>
-                      {selectedGroupArtifact.signature ? 'signed' : 'unsigned'}
-                    </span>
-                  </div>
-                </div>
-              )}
-              <label>Desired Version</label>
-              <input
-                value={groupDesiredForm.desiredVersion}
-                onChange={(e) => setGroupDesiredForm({ ...groupDesiredForm, desiredVersion: e.target.value })}
-                placeholder="1.0.0"
-              />
-              <label>Config Rev</label>
-              <input
-                value={groupDesiredForm.desiredConfigRev}
-                onChange={(e) => setGroupDesiredForm({ ...groupDesiredForm, desiredConfigRev: e.target.value })}
-                placeholder="c1"
-              />
               <label>Check-in Interval (sec)</label>
               <input
                 value={groupDesiredForm.checkinIntervalSec}
@@ -2763,6 +3161,11 @@ export default function App() {
           </div>
         </div>
       )}
+      <datalist id="artifact-types">
+        {componentTypes.map((comp) => (
+          <option key={comp.id} value={comp.id}>{comp.label}</option>
+        ))}
+      </datalist>
     </div>
   )
 }

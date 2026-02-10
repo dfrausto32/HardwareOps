@@ -325,10 +325,18 @@ func healthProbeHTTP(h plan.Health) error {
 		if timeout == 0 {
 			break
 		}
-		if time.Now().Add(interval).After(deadline) {
+		remaining = time.Until(deadline)
+		if remaining <= 0 {
 			break
 		}
-		time.Sleep(interval)
+		sleep := interval
+		if sleep <= 0 {
+			break
+		}
+		if sleep > remaining {
+			sleep = remaining
+		}
+		time.Sleep(sleep)
 	}
 
 	if lastErr != nil {

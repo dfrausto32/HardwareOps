@@ -9,9 +9,10 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/hardwareops/control-plane/internal/store"
 )
 
-func GetDeviceLogs(logger *log.Logger, logDir string) http.HandlerFunc {
+func GetDeviceLogs(logger *log.Logger, st store.Store, logDir string, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if logDir == "" {
 			http.Error(w, "log dir not configured", http.StatusNotFound)
@@ -38,6 +39,8 @@ func GetDeviceLogs(logger *log.Logger, logDir string) http.HandlerFunc {
 			return
 		}
 		defer f.Close()
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "device.logs.download", "device", deviceID)
+		writeAudit(logger, st, event, nil)
 		w.Header().Set("Content-Type", "text/csv")
 		w.Header().Set("Content-Disposition", "attachment; filename=\"device-"+deviceID+".csv\"")
 		http.ServeContent(w, r, path, fileModTime(path), f)

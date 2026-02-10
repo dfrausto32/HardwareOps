@@ -40,16 +40,18 @@ func (s *Store) UpsertDevice(device store.Device) error {
 func (s *Store) UpsertDeviceState(state store.DeviceState) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	components := nullIfEmptyBytes(state.ComponentsJSON)
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO device_state (device_id, current_version, current_config_rev, services, health, updated_at,
+		INSERT INTO device_state (device_id, current_version, current_config_rev, services, health, components, updated_at,
 			last_apply_status, last_apply_error, last_apply_at, last_apply_artifact_id,
 			last_preapply_status, last_preapply_error, last_preapply_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		ON CONFLICT (device_id) DO UPDATE SET
 			current_version = EXCLUDED.current_version,
 			current_config_rev = EXCLUDED.current_config_rev,
 			services = EXCLUDED.services,
 			health = EXCLUDED.health,
+			components = COALESCE(EXCLUDED.components, device_state.components),
 			updated_at = EXCLUDED.updated_at,
 			last_apply_status = COALESCE(EXCLUDED.last_apply_status, device_state.last_apply_status),
 			last_apply_error = COALESCE(EXCLUDED.last_apply_error, device_state.last_apply_error),
@@ -58,7 +60,7 @@ func (s *Store) UpsertDeviceState(state store.DeviceState) error {
 			last_preapply_status = COALESCE(EXCLUDED.last_preapply_status, device_state.last_preapply_status),
 			last_preapply_error = COALESCE(EXCLUDED.last_preapply_error, device_state.last_preapply_error),
 			last_preapply_at = COALESCE(EXCLUDED.last_preapply_at, device_state.last_preapply_at)
-	`, state.DeviceID, state.CurrentVersion, state.CurrentConfigRev, state.ServicesJSON, state.HealthJSON, state.UpdatedAt,
+	`, state.DeviceID, state.CurrentVersion, state.CurrentConfigRev, state.ServicesJSON, state.HealthJSON, components, state.UpdatedAt,
 		nullIfEmpty(state.LastApplyStatus), nullIfEmpty(state.LastApplyError), nullIfZeroTime(state.LastApplyAt), nullIfEmpty(state.LastApplyArtifactID),
 		nullIfEmpty(state.LastPreApplyStatus), nullIfEmpty(state.LastPreApplyError), nullIfZeroTime(state.LastPreApplyAt))
 	return err
@@ -146,13 +148,13 @@ func (s *Store) GetDeviceState(deviceID string) (store.DeviceState, bool, error)
 
 	var st store.DeviceState
 	err := s.pool.QueryRow(ctx, `
-		SELECT device_id, COALESCE(current_version, ''), COALESCE(current_config_rev, ''), services, health, updated_at,
+		SELECT device_id, COALESCE(current_version, ''), COALESCE(current_config_rev, ''), services, health, COALESCE(components, '{}'::jsonb), updated_at,
 		       COALESCE(last_apply_status, ''), COALESCE(last_apply_error, ''), COALESCE(last_apply_at, 'epoch'::timestamptz),
 		       COALESCE(last_apply_artifact_id::text, ''),
 		       COALESCE(last_preapply_status, ''), COALESCE(last_preapply_error, ''), COALESCE(last_preapply_at, 'epoch'::timestamptz)
 		FROM device_state
 		WHERE device_id = $1
-	`, deviceID).Scan(&st.DeviceID, &st.CurrentVersion, &st.CurrentConfigRev, &st.ServicesJSON, &st.HealthJSON, &st.UpdatedAt,
+	`, deviceID).Scan(&st.DeviceID, &st.CurrentVersion, &st.CurrentConfigRev, &st.ServicesJSON, &st.HealthJSON, &st.ComponentsJSON, &st.UpdatedAt,
 		&st.LastApplyStatus, &st.LastApplyError, &st.LastApplyAt, &st.LastApplyArtifactID,
 		&st.LastPreApplyStatus, &st.LastPreApplyError, &st.LastPreApplyAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -379,18 +381,20 @@ func (s *Store) UpsertDesiredStateGroup(state store.DesiredStateGroup) error {
 
 	artifact := nullIfEmpty(state.ArtifactID)
 	policy := nullIfEmptyBytes(state.PolicyJSON)
+	components := nullIfEmptyBytes(state.ComponentsJSON)
 	interval := nullIfZeroInt(state.CheckinInterval)
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO desired_state_group (group_id, artifact_id, desired_version, desired_config_rev, policy, checkin_interval_sec, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO desired_state_group (group_id, artifact_id, desired_version, desired_config_rev, policy, components, checkin_interval_sec, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (group_id) DO UPDATE SET
 			artifact_id = EXCLUDED.artifact_id,
 			desired_version = EXCLUDED.desired_version,
 			desired_config_rev = EXCLUDED.desired_config_rev,
 			policy = EXCLUDED.policy,
+			components = COALESCE(EXCLUDED.components, desired_state_group.components),
 			checkin_interval_sec = EXCLUDED.checkin_interval_sec,
 			updated_at = EXCLUDED.updated_at
-	`, state.GroupID, artifact, state.DesiredVersion, state.DesiredConfigRev, policy, interval, state.UpdatedAt)
+	`, state.GroupID, artifact, state.DesiredVersion, state.DesiredConfigRev, policy, components, interval, state.UpdatedAt)
 	return err
 }
 
@@ -400,23 +404,25 @@ func (s *Store) UpsertDesiredStateDevice(state store.DesiredStateDevice) error {
 
 	artifact := nullIfEmpty(state.ArtifactID)
 	policy := nullIfEmptyBytes(state.PolicyJSON)
+	components := nullIfEmptyBytes(state.ComponentsJSON)
 	source := state.Source
 	if source == "" {
 		source = "manual"
 	}
 	interval := nullIfZeroInt(state.CheckinInterval)
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO desired_state_device (device_id, artifact_id, desired_version, desired_config_rev, policy, checkin_interval_sec, source, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO desired_state_device (device_id, artifact_id, desired_version, desired_config_rev, policy, components, checkin_interval_sec, source, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (device_id) DO UPDATE SET
 			artifact_id = EXCLUDED.artifact_id,
 			desired_version = EXCLUDED.desired_version,
 			desired_config_rev = EXCLUDED.desired_config_rev,
 			policy = EXCLUDED.policy,
+			components = COALESCE(EXCLUDED.components, desired_state_device.components),
 			checkin_interval_sec = EXCLUDED.checkin_interval_sec,
 			source = EXCLUDED.source,
 			updated_at = EXCLUDED.updated_at
-	`, state.DeviceID, artifact, state.DesiredVersion, state.DesiredConfigRev, policy, interval, source, state.UpdatedAt)
+	`, state.DeviceID, artifact, state.DesiredVersion, state.DesiredConfigRev, policy, components, interval, source, state.UpdatedAt)
 	return err
 }
 
@@ -431,12 +437,13 @@ func (s *Store) GetDesiredStateDevice(deviceID string) (store.DesiredStateDevice
 		       COALESCE(desired_version, ''),
 		       COALESCE(desired_config_rev, ''),
 		       policy,
+		       COALESCE(components, '{}'::jsonb),
 		       COALESCE(checkin_interval_sec, 0),
 		       source,
 		       updated_at
 		FROM desired_state_device
 		WHERE device_id = $1
-	`, deviceID).Scan(&d.DeviceID, &d.ArtifactID, &d.DesiredVersion, &d.DesiredConfigRev, &d.PolicyJSON, &d.CheckinInterval, &d.Source, &d.UpdatedAt)
+	`, deviceID).Scan(&d.DeviceID, &d.ArtifactID, &d.DesiredVersion, &d.DesiredConfigRev, &d.PolicyJSON, &d.ComponentsJSON, &d.CheckinInterval, &d.Source, &d.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.DesiredStateDevice{}, false, nil
 	}
@@ -457,6 +464,7 @@ func (s *Store) GetDesiredStateGroupForDevice(deviceID string) (store.DesiredSta
 		       COALESCE(dsg.desired_version, ''),
 		       COALESCE(dsg.desired_config_rev, ''),
 		       dsg.policy,
+		       COALESCE(dsg.components, '{}'::jsonb),
 		       COALESCE(dsg.checkin_interval_sec, 0),
 		       dsg.updated_at
 		FROM desired_state_group dsg
@@ -465,7 +473,7 @@ func (s *Store) GetDesiredStateGroupForDevice(deviceID string) (store.DesiredSta
 		WHERE COALESCE(d.labels, '{}'::jsonb) @> g.selector
 		ORDER BY dsg.updated_at DESC
 		LIMIT 1
-	`, deviceID).Scan(&d.GroupID, &d.ArtifactID, &d.DesiredVersion, &d.DesiredConfigRev, &d.PolicyJSON, &d.CheckinInterval, &d.UpdatedAt)
+	`, deviceID).Scan(&d.GroupID, &d.ArtifactID, &d.DesiredVersion, &d.DesiredConfigRev, &d.PolicyJSON, &d.ComponentsJSON, &d.CheckinInterval, &d.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.DesiredStateGroup{}, false, nil
 	}
@@ -485,6 +493,7 @@ func (s *Store) ListDesiredStateGroups() ([]store.DesiredStateGroup, error) {
 		       COALESCE(desired_version, ''),
 		       COALESCE(desired_config_rev, ''),
 		       policy,
+		       COALESCE(components, '{}'::jsonb),
 		       COALESCE(checkin_interval_sec, 0),
 		       updated_at
 		FROM desired_state_group
@@ -498,7 +507,7 @@ func (s *Store) ListDesiredStateGroups() ([]store.DesiredStateGroup, error) {
 	out := []store.DesiredStateGroup{}
 	for rows.Next() {
 		var d store.DesiredStateGroup
-		if err := rows.Scan(&d.GroupID, &d.ArtifactID, &d.DesiredVersion, &d.DesiredConfigRev, &d.PolicyJSON, &d.CheckinInterval, &d.UpdatedAt); err != nil {
+		if err := rows.Scan(&d.GroupID, &d.ArtifactID, &d.DesiredVersion, &d.DesiredConfigRev, &d.PolicyJSON, &d.ComponentsJSON, &d.CheckinInterval, &d.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -529,6 +538,7 @@ func (s *Store) ListDesiredStateDevices() ([]store.DesiredStateDevice, error) {
 		       COALESCE(desired_version, ''),
 		       COALESCE(desired_config_rev, ''),
 		       policy,
+		       COALESCE(components, '{}'::jsonb),
 		       COALESCE(checkin_interval_sec, 0),
 		       source,
 		       updated_at
@@ -543,7 +553,7 @@ func (s *Store) ListDesiredStateDevices() ([]store.DesiredStateDevice, error) {
 	out := []store.DesiredStateDevice{}
 	for rows.Next() {
 		var d store.DesiredStateDevice
-		if err := rows.Scan(&d.DeviceID, &d.ArtifactID, &d.DesiredVersion, &d.DesiredConfigRev, &d.PolicyJSON, &d.CheckinInterval, &d.Source, &d.UpdatedAt); err != nil {
+		if err := rows.Scan(&d.DeviceID, &d.ArtifactID, &d.DesiredVersion, &d.DesiredConfigRev, &d.PolicyJSON, &d.ComponentsJSON, &d.CheckinInterval, &d.Source, &d.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -657,6 +667,28 @@ func (s *Store) DeleteArtifact(artifactID string) error {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
+		UPDATE desired_state_device
+		SET components = (
+			SELECT COALESCE(jsonb_object_agg(key, value), '{}'::jsonb)
+			FROM jsonb_each(components)
+			WHERE value->>'artifactId' <> $1
+		)
+		WHERE components IS NOT NULL AND components <> '{}'::jsonb
+	`, artifactID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE desired_state_group
+		SET components = (
+			SELECT COALESCE(jsonb_object_agg(key, value), '{}'::jsonb)
+			FROM jsonb_each(components)
+			WHERE value->>'artifactId' <> $1
+		)
+		WHERE components IS NOT NULL AND components <> '{}'::jsonb
+	`, artifactID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
 		DELETE FROM artifacts WHERE artifact_id = $1
 	`, artifactID); err != nil {
 		return err
@@ -669,43 +701,11 @@ func (s *Store) CreateApplyResult(result store.ApplyResult) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	preApplyAt := time.Time{}
-	if result.PreApplyStatus != "" {
-		preApplyAt = result.CreatedAt
-	}
-
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO device_apply_results (apply_id, device_id, artifact_id, status, applied_version, applied_config_rev, error, preapply_status, preapply_error, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-	`, result.ApplyID, result.DeviceID, nullIfEmpty(result.ArtifactID), result.Status, nullIfEmpty(result.AppliedVersion), nullIfEmpty(result.AppliedConfigRev),
-		nullIfEmpty(result.Error), nullIfEmpty(result.PreApplyStatus), nullIfEmpty(result.PreApplyError), result.CreatedAt)
-	if err != nil {
-		return err
-	}
-
-	_, err = s.pool.Exec(ctx, `
-		UPDATE device_state
-		SET last_apply_status = $2,
-		    last_apply_error = $3,
-		    last_apply_at = $4,
-		    last_apply_artifact_id = COALESCE($5, last_apply_artifact_id),
-		    last_preapply_status = COALESCE($6, last_preapply_status),
-		    last_preapply_error = COALESCE($7, last_preapply_error),
-		    last_preapply_at = COALESCE($8, last_preapply_at),
-		    current_version = COALESCE($9, current_version),
-		    current_config_rev = COALESCE($10, current_config_rev),
-		    updated_at = now()
-		WHERE device_id = $1
-	`, result.DeviceID,
-		result.Status,
-		nullIfEmpty(result.Error),
-		result.CreatedAt,
-		nullIfEmpty(result.ArtifactID),
-		nullIfEmpty(result.PreApplyStatus),
-		nullIfEmpty(result.PreApplyError),
-		nullIfZeroTime(preApplyAt),
-		nullIfEmpty(result.AppliedVersion),
-		nullIfEmpty(result.AppliedConfigRev))
+		INSERT INTO device_apply_results (apply_id, device_id, artifact_id, component, status, applied_version, applied_config_rev, error, preapply_status, preapply_error, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	`, result.ApplyID, result.DeviceID, nullIfEmpty(result.ArtifactID), nullIfEmpty(result.Component), result.Status, nullIfEmpty(result.AppliedVersion),
+		nullIfEmpty(result.AppliedConfigRev), nullIfEmpty(result.Error), nullIfEmpty(result.PreApplyStatus), nullIfEmpty(result.PreApplyError), result.CreatedAt)
 	return err
 }
 

@@ -48,7 +48,7 @@ func TestListGroups(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/groups", nil)
 	w := httptest.NewRecorder()
 
-	ListGroups(logger, mem).ServeHTTP(w, req)
+	ListGroups(logger, mem, false).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)

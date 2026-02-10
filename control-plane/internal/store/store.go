@@ -17,6 +17,7 @@ type DeviceState struct {
 	CurrentConfigRev    string
 	ServicesJSON        []byte
 	HealthJSON          []byte
+	ComponentsJSON      []byte
 	UpdatedAt           time.Time
 	LastApplyStatus     string
 	LastApplyError      string
@@ -57,6 +58,7 @@ type ApplyResult struct {
 	ApplyID          string
 	DeviceID         string
 	ArtifactID       string
+	Component        string
 	Status           string
 	AppliedVersion   string
 	AppliedConfigRev string
@@ -147,6 +149,7 @@ type DesiredStateGroup struct {
 	DesiredVersion   string
 	DesiredConfigRev string
 	PolicyJSON       []byte
+	ComponentsJSON   []byte
 	CheckinInterval  int
 	UpdatedAt        time.Time
 }
@@ -157,6 +160,7 @@ type DesiredStateDevice struct {
 	DesiredVersion   string
 	DesiredConfigRev string
 	PolicyJSON       []byte
+	ComponentsJSON   []byte
 	CheckinInterval  int
 	Source           string
 	UpdatedAt        time.Time

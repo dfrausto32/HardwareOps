@@ -87,6 +87,69 @@ The Settings page includes a **Preflight** panel that verifies:
 - Disk space at workdir/updates dir
 Use this to catch missing mounts or packages before applying.
 
+### Staged Apply + Rollback Contract (draft)
+**Purpose:** define a deterministic apply path with explicit staging and a clear rollback trigger.
+
+**Scope (v1):**
+- Docker runner only (`UPGRADE_RUNNER_MODE=docker`).
+- On‑prem stack bundles (`hardwareops-upgrade-*.tar.gz`).
+- Rollback covers **gateway + control‑plane images** only (DB rollback requires backup restore).
+
+**Inputs (must be present before apply):**
+- Upgrade tarball in `/stack/updates` (mounted into control‑plane container).
+- Runner image resolved and available locally.
+- Env file available (`/stack/.env.onprem` or `.env.onprem.example`).
+- Docker socket mounted into control‑plane container.
+
+**Staging step (idempotent):**
+1) Extract tarball to `/stack/updates/current/<bundle>/`.
+2) Validate bundle contains:
+   - `docker-compose.onprem.bundle.yml`
+   - `.env.onprem.example`
+   - `images/` (optional) or a registry pull plan
+3) Mark staged bundle as “active” (e.g. `updates/current/ACTIVE` file).
+
+**Apply step (runner container):**
+- Start dedicated runner container with explicit image + env:
+  - `--env-file /stack/.env.onprem`
+  - `COMPOSE_FILE=/stack/updates/current/<bundle>/docker-compose.onprem.bundle.yml`
+  - `PROJECT_NAME=hardwareops`
+- Load images from `images/*.tar` (if present), else pull.
+- Run `docker compose up -d`.
+
+**Health gate (blocking):**
+- Check **gateway** and **control‑plane** health:
+  - `https://<PUBLIC_BASE_URL>/healthz`
+  - `https://<PUBLIC_BASE_URL>/` (UI served)
+- Optional (if managed locally):
+  - Postgres TCP check
+  - MinIO `/minio/health/ready`
+- Timeout: **120s**, retry every **5s**.
+- If health gate fails → rollback.
+
+**Health gate envs (optional):**
+- `UPGRADE_HEALTH_TIMEOUT` (seconds, default 120)
+- `UPGRADE_HEALTH_INTERVAL` (seconds, default 5)
+- `UPGRADE_HEALTH_URLS` (comma‑separated URLs; defaults to `/healthz` + `/`)
+
+**Rollback contract:**
+- Capture **previous image tags** for `control-plane` + `gateway` before apply.
+- If health gate fails:
+  - Re‑apply compose with overrides for previous images.
+  - Re‑run health gate to confirm rollback success.
+  - Leave **maintenance enabled** if rollback occurred.
+ - Staged bundle path is recorded in `updates/current/ACTIVE` for traceability.
+
+**Observability:**
+- Runner writes logs to `/var/lib/hardwareops/logs/upgrade-<ts>.log`.
+- Upgrade status endpoint reports:
+  - `state`, `running`, `exitCode`, `logPath`, `error`.
+
+**Acceptance criteria (for implementation later):**
+- Applying a broken bundle triggers rollback to prior images.
+- Rollback leaves UI + control‑plane healthy.
+- Preflight blocks apply when runner image or env file missing.
+
 ### B) Auto‑Migrate on Startup (dev / small env)
 **Use when:** development, staging, or single‑node environments.
 

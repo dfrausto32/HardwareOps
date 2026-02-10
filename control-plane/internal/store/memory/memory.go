@@ -69,6 +69,9 @@ func (s *Store) UpsertDeviceState(state store.DeviceState) error {
 		return errors.New("device_id required")
 	}
 	if prev, ok := s.states[state.DeviceID]; ok {
+		if len(state.ComponentsJSON) == 0 {
+			state.ComponentsJSON = prev.ComponentsJSON
+		}
 		if state.LastApplyStatus == "" {
 			state.LastApplyStatus = prev.LastApplyStatus
 		}
@@ -255,10 +258,60 @@ func computeDeviceStatus(lastSeen time.Time, staleCutoff, offlineCutoff time.Tim
 	if !staleCutoff.IsZero() && lastSeen.Before(staleCutoff) {
 		return "stale"
 	}
+	if componentsHaveErrors(st.ComponentsJSON) {
+		return "degraded"
+	}
 	if st.LastApplyStatus == "error" || st.LastPreApplyStatus == "error" {
 		return "degraded"
 	}
 	return "active"
+}
+
+func componentsHaveErrors(raw []byte) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var comps map[string]map[string]any
+	if err := json.Unmarshal(raw, &comps); err != nil {
+		return false
+	}
+	for _, comp := range comps {
+		if val, ok := comp["lastApplyStatus"].(string); ok && val == "error" {
+			return true
+		}
+		if val, ok := comp["lastPreApplyStatus"].(string); ok && val == "error" {
+			return true
+		}
+	}
+	return false
+}
+
+func pruneComponentsJSON(raw []byte, artifactID string) []byte {
+	if len(raw) == 0 || artifactID == "" {
+		return nil
+	}
+	var comps map[string]map[string]any
+	if err := json.Unmarshal(raw, &comps); err != nil {
+		return nil
+	}
+	changed := false
+	for key, comp := range comps {
+		if val, ok := comp["artifactId"].(string); ok && val == artifactID {
+			delete(comps, key)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if len(comps) == 0 {
+		return []byte("{}")
+	}
+	updated, err := json.Marshal(comps)
+	if err != nil {
+		return nil
+	}
+	return updated
 }
 
 func (s *Store) UpsertGroup(group store.Group) error {
@@ -449,11 +502,21 @@ func (s *Store) DeleteArtifact(artifactID string) error {
 	for id, d := range s.desiredDevices {
 		if d.ArtifactID == artifactID {
 			delete(s.desiredDevices, id)
+			continue
+		}
+		if updated := pruneComponentsJSON(d.ComponentsJSON, artifactID); updated != nil {
+			d.ComponentsJSON = updated
+			s.desiredDevices[id] = d
 		}
 	}
 	for id, g := range s.desiredGroups {
 		if g.ArtifactID == artifactID {
 			delete(s.desiredGroups, id)
+			continue
+		}
+		if updated := pruneComponentsJSON(g.ComponentsJSON, artifactID); updated != nil {
+			g.ComponentsJSON = updated
+			s.desiredGroups[id] = g
 		}
 	}
 	return nil
@@ -466,29 +529,6 @@ func (s *Store) CreateApplyResult(result store.ApplyResult) error {
 		return errors.New("apply_id and device_id required")
 	}
 	s.applyResults[result.ApplyID] = result
-	// update device_state with last apply fields
-	st, ok := s.states[result.DeviceID]
-	if ok {
-		if result.AppliedVersion != "" {
-			st.CurrentVersion = result.AppliedVersion
-		}
-		if result.AppliedConfigRev != "" {
-			st.CurrentConfigRev = result.AppliedConfigRev
-		}
-		st.LastApplyStatus = result.Status
-		st.LastApplyError = result.Error
-		st.LastApplyAt = result.CreatedAt
-		if result.ArtifactID != "" {
-			st.LastApplyArtifactID = result.ArtifactID
-		}
-		if result.PreApplyStatus != "" {
-			st.LastPreApplyStatus = result.PreApplyStatus
-			st.LastPreApplyError = result.PreApplyError
-			st.LastPreApplyAt = result.CreatedAt
-		}
-		st.UpdatedAt = time.Now().UTC()
-		s.states[result.DeviceID] = st
-	}
 	return nil
 }
 
