@@ -6,6 +6,7 @@ This directory contains the guides referenced throughout the repo. Use this inde
 - `installer-flow.md` — **Fresh machine install** using installer bundles (stack + agents).
 - `installers.md` — What each installer bundle contains and how to build them.
 - `vm-testing.md` — VM-based testing (VirtualBox two‑VM flow).
+- `backup-restore.md` — Postgres + MinIO backup/restore runbook.
 
 ## Local Development
 - `local-dev-wsl.md` — WSL2 dev setup (control‑plane + UI + agent).
@@ -13,6 +14,7 @@ This directory contains the guides referenced throughout the repo. Use this inde
 ## Networking + TLS
 - `dns-coredns.md` — CoreDNS setup for local DNS and VM scenarios.
 - `certs.md` — CA + TLS certificate setup and trust instructions.
+  - Includes **CA rotation** explanation, runbook, and hot‑reload steps.
 
 ## Agents + Updates
 - `agent-systemd.md` — Agent install via systemd (with enrollment).

@@ -24,6 +24,7 @@ type Config struct {
 	SigningPubKeyPath     string
 	SigningKeyID          string
 	RequireSignature      bool
+	AutoReenroll          bool
 }
 
 func FromEnv() Config {
@@ -70,6 +71,7 @@ func FromEnv() Config {
 		SigningPubKeyPath:     os.Getenv("SIGNING_PUB_KEY_PATH"),
 		SigningKeyID:          os.Getenv("SIGNING_KEY_ID"),
 		RequireSignature:      parseBoolEnv("REQUIRE_ARTIFACT_SIGNATURE"),
+		AutoReenroll:          parseBoolEnvDefault("AUTO_REENROLL", true),
 	}
 }
 
@@ -81,6 +83,14 @@ func parseBoolEnv(key string) bool {
 	default:
 		return false
 	}
+}
+
+func parseBoolEnvDefault(key string, def bool) bool {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	return parseBoolEnv(key)
 }
 
 func parseDurationEnv(key string, def time.Duration) time.Duration {

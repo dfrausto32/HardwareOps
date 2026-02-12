@@ -12,6 +12,9 @@ type Config struct {
 	DatabaseURL                   string
 	CACertPath                    string
 	CAKeyPath                     string
+	CABundlePath                  string
+	ActiveCACertPath              string
+	ActiveCAKeyPath               string
 	TLSCertPath                   string
 	TLSKeyPath                    string
 	TLSClientCA                   string
@@ -47,6 +50,17 @@ type Config struct {
 	UpgradeUpdatesDir             string
 	UpgradeRunnerMode             string
 	UpgradeRunnerImage            string
+	BackupCmd                     string
+	BackupWorkDir                 string
+	BackupLogDir                  string
+	BackupDir                     string
+	BackupRunnerMode              string
+	BackupRunnerImage             string
+	BackupPostgresContainer       string
+	BackupMinioContainer          string
+	BackupPostgresUser            string
+	BackupPostgresDB              string
+	RestoreCmd                    string
 	DisableHTTP2                  bool
 	CORSAllowedOrigins            []string
 	AuditRetentionDays            int
@@ -85,6 +99,9 @@ func FromEnv() Config {
 		DatabaseURL:                   os.Getenv("DATABASE_URL"),
 		CACertPath:                    os.Getenv("CA_CERT_PATH"),
 		CAKeyPath:                     os.Getenv("CA_KEY_PATH"),
+		CABundlePath:                  os.Getenv("CA_BUNDLE_PATH"),
+		ActiveCACertPath:              os.Getenv("ACTIVE_CA_CERT_PATH"),
+		ActiveCAKeyPath:               os.Getenv("ACTIVE_CA_KEY_PATH"),
 		TLSCertPath:                   os.Getenv("TLS_CERT_PATH"),
 		TLSKeyPath:                    os.Getenv("TLS_KEY_PATH"),
 		TLSClientCA:                   os.Getenv("TLS_CLIENT_CA_PATH"),
@@ -120,6 +137,17 @@ func FromEnv() Config {
 		UpgradeUpdatesDir:             os.Getenv("UPGRADE_UPDATES_DIR"),
 		UpgradeRunnerMode:             getenvDefault("UPGRADE_RUNNER_MODE", "disabled"),
 		UpgradeRunnerImage:            os.Getenv("UPGRADE_RUNNER_IMAGE"),
+		BackupCmd:                     os.Getenv("BACKUP_CMD"),
+		BackupWorkDir:                 os.Getenv("BACKUP_WORK_DIR"),
+		BackupLogDir:                  os.Getenv("BACKUP_LOG_DIR"),
+		BackupDir:                     getenvDefault("BACKUP_DIR", "/stack/backups"),
+		BackupRunnerMode:              getenvDefault("BACKUP_RUNNER_MODE", "disabled"),
+		BackupRunnerImage:             os.Getenv("BACKUP_RUNNER_IMAGE"),
+		BackupPostgresContainer:       os.Getenv("BACKUP_POSTGRES_CONTAINER"),
+		BackupMinioContainer:          os.Getenv("BACKUP_MINIO_CONTAINER"),
+		BackupPostgresUser:            getenvDefault("BACKUP_POSTGRES_USER", "hardwareops"),
+		BackupPostgresDB:              getenvDefault("BACKUP_POSTGRES_DB", "hardwareops"),
+		RestoreCmd:                    os.Getenv("RESTORE_CMD"),
 		DisableHTTP2:                  os.Getenv("DISABLE_HTTP2") == "1",
 		CORSAllowedOrigins:            parseCSV(getenvDefault("CORS_ALLOWED_ORIGINS", "")),
 		AuditRetentionDays:            getenvInt("AUDIT_RETENTION_DAYS", 90),

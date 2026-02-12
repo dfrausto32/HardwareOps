@@ -3,16 +3,17 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/hardwareops/control-plane/internal/auth"
+	"github.com/hardwareops/control-plane/internal/backup"
+	"github.com/hardwareops/control-plane/internal/certs"
 	"github.com/hardwareops/control-plane/internal/config"
-	cpcrypto "github.com/hardwareops/control-plane/internal/crypto"
 	"github.com/hardwareops/control-plane/internal/events"
 	"github.com/hardwareops/control-plane/internal/httpapi"
 	"github.com/hardwareops/control-plane/internal/license"
@@ -45,21 +46,30 @@ func main() {
 		logger.Printf("auto-migrate complete (%s)", cfg.MigrationsDir)
 	}
 
-	var signer httpapi.CertSigner
-	if cfg.CACertPath != "" && cfg.CAKeyPath != "" {
-		certPEM, err := os.ReadFile(cfg.CACertPath)
-		if err != nil {
-			logger.Fatalf("read CA cert: %v", err)
-		}
-		keyPEM, err := os.ReadFile(cfg.CAKeyPath)
-		if err != nil {
-			logger.Fatalf("read CA key: %v", err)
-		}
-		ca, err := cpcrypto.LoadCA(certPEM, keyPEM)
-		if err != nil {
-			logger.Fatalf("load CA: %v", err)
-		}
-		signer = &cpcrypto.CASigner{CA: ca, CAPEM: certPEM}
+	activeCertPath := cfg.ActiveCACertPath
+	activeKeyPath := cfg.ActiveCAKeyPath
+	if activeCertPath == "" {
+		activeCertPath = cfg.CACertPath
+	}
+	if activeKeyPath == "" {
+		activeKeyPath = cfg.CAKeyPath
+	}
+
+	clientCAPath := cfg.CABundlePath
+	if clientCAPath == "" {
+		clientCAPath = cfg.TLSClientCA
+	}
+	if clientCAPath == "" {
+		clientCAPath = cfg.CACertPath
+	}
+
+	certManager := certs.NewManager()
+	state, err := certManager.Load(activeCertPath, activeKeyPath, clientCAPath)
+	if err != nil {
+		logger.Fatalf("cert manager load: %v", err)
+	}
+	if state.ActiveCert != nil && state.Signer == nil {
+		logger.Printf("active CA cert set but ACTIVE_CA_KEY_PATH missing; signer disabled")
 	}
 
 	var objStore httpapi.ObjectStore
@@ -132,6 +142,50 @@ func main() {
 			upgradeRunner.ConfigureDocker(cfg.UpgradeRunnerImage, "", env)
 		}
 	}
+
+	backupLogDir := cfg.BackupLogDir
+	if backupLogDir == "" {
+		backupLogDir = cfg.LogDir
+	}
+	var backupRunner *backup.Runner
+	if strings.EqualFold(cfg.BackupRunnerMode, "docker") || strings.EqualFold(cfg.BackupRunnerMode, "local") {
+		backupRunner = backup.NewRunner("backup", cfg.BackupCmd, cfg.BackupWorkDir, backupLogDir, logger.Printf)
+	} else if cfg.BackupRunnerMode != "" && !strings.EqualFold(cfg.BackupRunnerMode, "disabled") {
+		logger.Printf("backup runner disabled: mode %q not supported (docker/local only)", cfg.BackupRunnerMode)
+	}
+	if backupRunner != nil && strings.EqualFold(cfg.BackupRunnerMode, "docker") {
+		certsDir := ""
+		if cfg.CACertPath != "" {
+			certsDir = filepath.Dir(cfg.CACertPath)
+		}
+		env := map[string]string{
+			"BACKUP_DIR":                cfg.BackupDir,
+			"BACKUP_POSTGRES_CONTAINER": cfg.BackupPostgresContainer,
+			"BACKUP_MINIO_CONTAINER":    cfg.BackupMinioContainer,
+			"BACKUP_POSTGRES_USER":      cfg.BackupPostgresUser,
+			"BACKUP_POSTGRES_DB":        cfg.BackupPostgresDB,
+		}
+		backupRunner.ConfigureDocker(cfg.BackupRunnerImage, certsDir, env)
+	}
+
+	var restoreRunner *backup.Runner
+	if strings.EqualFold(cfg.BackupRunnerMode, "docker") || strings.EqualFold(cfg.BackupRunnerMode, "local") {
+		restoreRunner = backup.NewRunner("restore", cfg.RestoreCmd, cfg.BackupWorkDir, backupLogDir, logger.Printf)
+	}
+	if restoreRunner != nil && strings.EqualFold(cfg.BackupRunnerMode, "docker") {
+		certsDir := ""
+		if cfg.CACertPath != "" {
+			certsDir = filepath.Dir(cfg.CACertPath)
+		}
+		env := map[string]string{
+			"BACKUP_DIR":                cfg.BackupDir,
+			"BACKUP_POSTGRES_CONTAINER": cfg.BackupPostgresContainer,
+			"BACKUP_MINIO_CONTAINER":    cfg.BackupMinioContainer,
+			"BACKUP_POSTGRES_USER":      cfg.BackupPostgresUser,
+			"BACKUP_POSTGRES_DB":        cfg.BackupPostgresDB,
+		}
+		restoreRunner.ConfigureDocker(cfg.BackupRunnerImage, certsDir, env)
+	}
 	var authManager *auth.Manager
 	if cfg.AuthMode != "" && cfg.AuthMode != "disabled" {
 		manager, err := auth.NewManager(cfg.AuthMode, cfg.AuthJWTSecret, cfg.AuthTokenTTL, cfg.AuthIssuer, store)
@@ -149,7 +203,7 @@ func main() {
 	}
 	deps := httpapi.Dependencies{
 		Store:            store,
-		Signer:           signer,
+		Signer:           certManager,
 		ObjectStore:      objStore,
 		S3Bucket:         cfg.S3Bucket,
 		PresignExpires:   cfg.PresignTTL,
@@ -168,8 +222,12 @@ func main() {
 		MaintenanceToken:   cfg.MaintenanceToken,
 		Upgrade:            upgradeRunner,
 		UpgradeUpdatesDir:  cfg.UpgradeUpdatesDir,
+		Backup:             backupRunner,
+		Restore:            restoreRunner,
+		BackupDir:          cfg.BackupDir,
 		Auth:               authManager,
 		License:            licenseManager,
+		CertManager:        certManager,
 	}
 
 	if err := store.EnsureAuditRetentionDays(cfg.AuditRetentionDays); err != nil {
@@ -266,30 +324,36 @@ func main() {
 			MinVersion: tls.VersionTLS12,
 		}
 
-		clientCAPath := cfg.TLSClientCA
-		if clientCAPath == "" {
-			clientCAPath = cfg.CACertPath
+		certPair, err := tls.LoadX509KeyPair(cfg.TLSCertPath, cfg.TLSKeyPath)
+		if err != nil {
+			logger.Fatalf("load TLS cert/key error: %v", err)
 		}
+		tlsConfig.Certificates = []tls.Certificate{certPair}
+
 		if clientCAPath == "" {
 			logger.Fatal("TLS enabled but TLS_CLIENT_CA_PATH or CA_CERT_PATH not set")
 		}
-		caPEM, err := os.ReadFile(clientCAPath)
-		if err != nil {
-			logger.Fatalf("read client CA: %v", err)
-		}
-		pool := x509.NewCertPool()
-		if ok := pool.AppendCertsFromPEM(caPEM); !ok {
+		pool := certManager.ClientPool()
+		if pool == nil {
 			logger.Fatal("invalid client CA cert")
 		}
 		tlsConfig.ClientCAs = pool
 		tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
+		tlsConfig.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			cfg := tlsConfig.Clone()
+			cfg.GetConfigForClient = nil
+			if nextPool := certManager.ClientPool(); nextPool != nil {
+				cfg.ClientCAs = nextPool
+			}
+			return cfg, nil
+		}
 
 		srv.TLSConfig = tlsConfig
 		if cfg.DisableHTTP2 {
 			srv.TLSNextProto = map[string]func(*http.Server, *tls.Conn, http.Handler){}
 		}
 		logger.Printf("control-plane listening on https://%s", cfg.HTTPAddr)
-		if err := srv.ListenAndServeTLS(cfg.TLSCertPath, cfg.TLSKeyPath); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
 			logger.Fatalf("server error: %v", err)
 		}
 		return

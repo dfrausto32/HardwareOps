@@ -647,6 +647,47 @@ tr.artifact-group-start td {
   margin-bottom: 8px;
 }
 
+.rotation-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.rotation-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--panel);
+  display: grid;
+  gap: 8px;
+}
+
+.rotation-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.rotation-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.rotation-row span:last-child {
+  text-align: right;
+  word-break: break-all;
+}
+
+.rotation-note {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
 .audit-card .form.inline {
   margin-bottom: 8px;
 }

@@ -29,6 +29,7 @@ Edit `/etc/hardwareops/agent/agent.env` and set:
 ```
 CONTROL_PLANE_URL=https://hardwareops.internal
 CONTROL_PLANE_CA_CERT_PATH=/etc/hardwareops/agent/certs/ca.crt
+AUTO_REENROLL=1
 ```
 
 ## 3) Enroll the device

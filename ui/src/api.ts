@@ -245,6 +245,47 @@ export async function applyUpgrade(token?: string) {
   })
 }
 
+export async function getRotationStatus() {
+  return requestJson('/api/v1/cert-rotation')
+}
+
+export async function reloadRotation() {
+  return requestJson('/api/v1/cert-rotation/reload', {
+    method: 'POST',
+  })
+}
+
+export async function rotateRotation() {
+  return requestJson('/api/v1/cert-rotation/rotate', {
+    method: 'POST',
+  })
+}
+
+export async function listBackups() {
+  return requestJson('/api/v1/maintenance/backups')
+}
+
+export async function getBackupStatus() {
+  return requestJson('/api/v1/maintenance/backup')
+}
+
+export async function startBackup() {
+  return requestJson('/api/v1/maintenance/backup', {
+    method: 'POST',
+  })
+}
+
+export async function getRestoreStatus() {
+  return requestJson('/api/v1/maintenance/restore')
+}
+
+export async function startRestore(id: string) {
+  return requestJson('/api/v1/maintenance/restore', {
+    method: 'POST',
+    body: JSON.stringify({ id, wipe: true }),
+  })
+}
+
 export async function login(email: string, password: string) {
   return requestJson('/api/v1/auth/login', {
     method: 'POST',

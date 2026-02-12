@@ -16,13 +16,13 @@ func TestDeviceCheckin_Valid(t *testing.T) {
 	logger := log.New(&bytes.Buffer{}, "", 0)
 	mem := memory.New()
 	deviceID := uuid.NewString()
-	reqBody := []byte(`{"deviceId":"` + deviceID + `","agentVersion":"0.1.0","current":{"softwareVersion":"v1","configRev":"c1"}}`)
+	reqBody := []byte(`{"deviceId":"` + deviceID + `","agentVersion":"0.1.0","current":{"softwareVersion":"v1","configRev":"c1"},"currentComponents":{"agent_bundle":{"softwareVersion":"v1","configRev":"c1"}}}`)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/checkin", bytes.NewReader(reqBody))
 	req, deviceID = attachMTLSDevice(t, mem, req, deviceID)
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "").ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -34,8 +34,12 @@ func TestDeviceCheckin_Valid(t *testing.T) {
 	if resp.ServerTime.IsZero() {
 		t.Fatalf("expected serverTime set")
 	}
-	if resp.Desired == nil || resp.Desired.SoftwareVersion != "v1" {
+	if resp.Desired == nil || resp.Desired.Components == nil {
 		t.Fatalf("expected desired set by agent")
+	}
+	comp, ok := resp.Desired.Components["agent_bundle"]
+	if !ok || comp.SoftwareVersion != "v1" {
+		t.Fatalf("expected desired component set by agent")
 	}
 	if _, ok, _ := mem.GetDevice(deviceID); !ok {
 		t.Fatalf("device not persisted")
@@ -54,7 +58,7 @@ func TestDeviceCheckin_MissingDeviceID(t *testing.T) {
 	req, _ = attachMTLSDevice(t, mem, req, "")
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "").ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -70,7 +74,7 @@ func TestDeviceCheckin_InvalidDeviceID(t *testing.T) {
 	req, _ = attachMTLSDevice(t, mem, req, "")
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "").ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", w.Code)

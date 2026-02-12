@@ -203,6 +203,44 @@ if [ -f "$BASE_DIR/scripts/apply-upgrade.sh" ]; then
   export UPGRADE_APPLY_CMD=${UPGRADE_APPLY_CMD:-"$BASE_DIR/scripts/apply-upgrade.sh"}
 fi
 
+# Backup/restore defaults (local dev)
+export BACKUP_DIR=${BACKUP_DIR:-$BASE_DIR/backups}
+mkdir -p "$BACKUP_DIR"
+export BACKUP_CMD=${BACKUP_CMD:-"$BASE_DIR/scripts/backup-stack.sh"}
+export RESTORE_CMD=${RESTORE_CMD:-"$BASE_DIR/scripts/restore-stack.sh"}
+export BACKUP_RUNNER_MODE=${BACKUP_RUNNER_MODE:-local}
+export BACKUP_LOG_DIR=${BACKUP_LOG_DIR:-$LOG_DIR}
+export BACKUP_WORK_DIR=${BACKUP_WORK_DIR:-$BASE_DIR}
+export BACKUP_POSTGRES_CONTAINER=${BACKUP_POSTGRES_CONTAINER:-compose-postgres-1}
+export BACKUP_MINIO_CONTAINER=${BACKUP_MINIO_CONTAINER:-compose-minio-1}
+export BACKUP_POSTGRES_USER=${BACKUP_POSTGRES_USER:-hardwareops}
+export BACKUP_POSTGRES_DB=${BACKUP_POSTGRES_DB:-hardwareops}
+
+# Rotation defaults: keep active CA + bundle paths stable for local dev.
+ROTATION_DEFAULTS=${ROTATION_DEFAULTS:-1}
+if [ "$ROTATION_DEFAULTS" = "1" ]; then
+  cert_dir=$(dirname "$CA_CERT")
+  cert_base=$(basename "$CA_CERT")
+  cert_prefix=${cert_base%.crt}
+  ACTIVE_CA_CERT_PATH=${ACTIVE_CA_CERT_PATH:-$cert_dir/${cert_prefix}-active.crt}
+  ACTIVE_CA_KEY_PATH=${ACTIVE_CA_KEY_PATH:-$cert_dir/${cert_prefix}-active.key}
+  CA_BUNDLE_PATH=${CA_BUNDLE_PATH:-$cert_dir/${cert_prefix}-bundle.crt}
+
+  if [ ! -f "$ACTIVE_CA_CERT_PATH" ]; then
+    cp -f "$CA_CERT" "$ACTIVE_CA_CERT_PATH"
+  fi
+  if [ ! -f "$ACTIVE_CA_KEY_PATH" ]; then
+    cp -f "$CA_KEY" "$ACTIVE_CA_KEY_PATH"
+  fi
+  if [ ! -f "$CA_BUNDLE_PATH" ]; then
+    cat "$CA_CERT" "$ACTIVE_CA_CERT_PATH" > "$CA_BUNDLE_PATH"
+  fi
+
+  export ACTIVE_CA_CERT_PATH
+  export ACTIVE_CA_KEY_PATH
+  export CA_BUNDLE_PATH
+fi
+
 # Optional: embed license public key at build/run time (locked mode)
 GO_LDFLAGS=()
 if [ -n "${LICENSE_EMBED_PUBKEY_B64:-}" ] || [ -n "${LICENSE_EMBED_PUBKEY_PATH:-}" ]; then

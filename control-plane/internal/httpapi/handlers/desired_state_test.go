@@ -181,7 +181,7 @@ func TestDeviceCheckin_AgentDesiredOverrides(t *testing.T) {
 	req, _ = attachMTLSDevice(t, mem, req, deviceID)
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "").ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -209,7 +209,7 @@ func TestDeviceCheckin_GroupDesiredOverridesAgent(t *testing.T) {
 	req, _ = attachMTLSDevice(t, mem, req, deviceID)
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "").ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -230,12 +230,12 @@ func TestDeviceCheckin_AgentSetsDesired(t *testing.T) {
 	mem := memory.New()
 
 	deviceID := uuid.NewString()
-	body := []byte(`{"deviceId":"` + deviceID + `","agentVersion":"0.1.0","current":{"softwareVersion":"v1","configRev":"c1"}}`)
+	body := []byte(`{"deviceId":"` + deviceID + `","agentVersion":"0.1.0","current":{"softwareVersion":"v1","configRev":"c1"},"currentComponents":{"agent_bundle":{"softwareVersion":"v1","configRev":"c1"}}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/checkin", bytes.NewReader(body))
 	req, _ = attachMTLSDevice(t, mem, req, deviceID)
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "").ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -244,7 +244,11 @@ func TestDeviceCheckin_AgentSetsDesired(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("invalid response json: %v", err)
 	}
-	if resp.Desired == nil || resp.Desired.SoftwareVersion != "v1" {
+	if resp.Desired == nil || resp.Desired.Components == nil {
 		t.Fatalf("expected desired to be set by agent")
+	}
+	comp, ok := resp.Desired.Components["agent_bundle"]
+	if !ok || comp.SoftwareVersion != "v1" {
+		t.Fatalf("expected desired component to be set by agent")
 	}
 }

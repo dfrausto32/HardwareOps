@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/hardwareops/control-plane/internal/auth"
+	"github.com/hardwareops/control-plane/internal/backup"
+	"github.com/hardwareops/control-plane/internal/certs"
 	"github.com/hardwareops/control-plane/internal/events"
 	"github.com/hardwareops/control-plane/internal/license"
 	"github.com/hardwareops/control-plane/internal/store"
@@ -47,6 +49,10 @@ type Dependencies struct {
 	MaintenanceToken   string
 	Upgrade            *upgrade.Runner
 	UpgradeUpdatesDir  string
+	Backup             *backup.Runner
+	Restore            *backup.Runner
+	BackupDir          string
 	Auth               *auth.Manager
 	License            *license.Manager
+	CertManager        *certs.Manager
 }

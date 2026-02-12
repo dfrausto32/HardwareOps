@@ -20,6 +20,8 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - ✅ Fleet capacity enforcement (signed on‑prem license + device cap).
 - ✅ Upgrade strategy automation (preflight + staged apply + rollback health gate).
 - ✅ Multi‑artifact device management (componented desired state + per‑component apply status).
+- ✅ Certificate rotation (CA bundle + active signer + UI rotate/reload + auto re‑enroll).
+- ✅ Backup + restore runbooks + UI workflows (Postgres + MinIO).
 
 ---
 
@@ -101,20 +103,20 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Notes:** Enables agent self‑update and multi‑app deployments.
 
 #### Certificate rotation
-- **Status:** ⬜ Planned
-- **Scope:** CA rotation process; device re-enrollment guidance.
-- **Dependencies:** CA tooling; device enrollment flow.
-- **Risks:** Bricking agents during rotation.
+**Status:** 🟢 Complete
+- **Scope:** CA rotation process; device re-enrollment guidance; admin UI rotate/reload.
+- **Dependencies:** CA tooling; device enrollment flow; writable cert paths.
+- **Risks:** Bricking agents during rotation if bundle missing or certs read-only.
 - **Acceptance:** Rotation can be executed without full fleet outage.
-- **Notes:** 
+- **Notes:** CA bundle trust + active signer + UI rotate/reload + agent auto‑reenroll implemented. Server‑TLS rotation runbook documented in `docs/certs.md`.
 
 #### Backup & restore runbooks
-- **Status:** ⬜ Planned
-- **Scope:** Postgres + object store recovery; tested restore procedure.
+- **Status:** 🟢 Complete
+- **Scope:** Postgres + object store recovery; tested restore procedure; UI-driven backup/restore + wipe.
 - **Dependencies:** Backup tooling; storage policy.
 - **Risks:** Incomplete restores.
 - **Acceptance:** Restore tested with documented RTO/RPO.
-- **Notes:** 
+- **Notes:** UI supports create/restore + wipe; scripts included for on‑prem and local dev. See `docs/backup-restore.md`.
 
 ---
 
@@ -150,6 +152,14 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Risks:** Storage growth.
 - **Acceptance:** Events are queryable over defined retention window.
 - **Notes:** 
+
+#### Certificate rotation cleanup (hybrid)
+- **Status:** ⬜ Planned
+- **Scope:** Remove old CA from bundle once coverage reaches 100% or after max grace period (whichever comes first); warn if devices still on old CA.
+- **Dependencies:** Rotation status counts; scheduled task; UI warning/banners.
+- **Risks:** Offline devices stranded after grace expiry.
+- **Acceptance:** Old CA pruned safely; operators warned with clear counts and timestamps.
+- **Notes:** Hybrid approach added; not required for Phase A.
 
 #### Artifact lifecycle management
 - **Status:** ⬜ Planned

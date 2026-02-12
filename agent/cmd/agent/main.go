@@ -2,8 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	crand "crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -95,6 +101,14 @@ func main() {
 				os.Exit(1)
 			}
 		} else {
+			if cfg.AutoReenroll && resp != nil && len(resp.PendingActions) > 0 {
+				if reenrolled, err := handlePendingActions(resp.PendingActions, cfg, c, &st, logger); err != nil {
+					logger.Warnf("handle pending actions: %v", err)
+				} else if reenrolled {
+					tlsConfig = buildTLSConfig(cfg, logger)
+					c = client.NewWithTLS(cfg.ControlPlaneURL, tlsConfig)
+				}
+			}
 			desiredComponents := desiredComponents(resp.Desired)
 			desiredSource := desiredSourceForLog(resp.Desired)
 			logger.Infof("check-in ok desired=%v components=%d source=%s", len(desiredComponents) > 0, len(desiredComponents), desiredSource)
@@ -128,6 +142,86 @@ func main() {
 		}
 		time.Sleep(interval + jitterDuration(jitterMax(interval, cfg), rng))
 	}
+}
+
+func handlePendingActions(actions []client.Action, cfg config.Config, c *client.Client, st *state.State, logger *logging.Logger) (bool, error) {
+	for _, action := range actions {
+		if action.Type != "device.reenroll" {
+			continue
+		}
+		logger.Infof("reenroll requested action=%s", action.ActionID)
+		if err := reenrollDevice(c, cfg, st, logger); err != nil {
+			return false, err
+		}
+		logger.Infof("reenroll complete")
+		return true, nil
+	}
+	return false, nil
+}
+
+func reenrollDevice(c *client.Client, cfg config.Config, st *state.State, logger *logging.Logger) error {
+	if cfg.DeviceKeyPath == "" || cfg.DeviceCertPath == "" {
+		return errors.New("device key/cert path required for reenroll")
+	}
+	key, err := loadPrivateKey(cfg.DeviceKeyPath)
+	if err != nil {
+		return fmt.Errorf("load device key: %w", err)
+	}
+	deviceID := st.DeviceID
+	if deviceID == "" {
+		return errors.New("device id missing")
+	}
+	csrPEM, err := generateCSR(key, deviceID)
+	if err != nil {
+		return fmt.Errorf("generate csr: %w", err)
+	}
+	resp, err := c.Reenroll(csrPEM)
+	if err != nil {
+		return fmt.Errorf("reenroll: %w", err)
+	}
+	if err := os.WriteFile(cfg.DeviceCertPath, []byte(resp.CertPEM), 0o644); err != nil {
+		return fmt.Errorf("write device cert: %w", err)
+	}
+	return nil
+}
+
+func loadPrivateKey(path string) (crypto.Signer, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return nil, errors.New("invalid key pem")
+	}
+	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+	if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
+		switch k := key.(type) {
+		case *rsa.PrivateKey:
+			return k, nil
+		case *ecdsa.PrivateKey:
+			return k, nil
+		case ed25519.PrivateKey:
+			return k, nil
+		default:
+			return nil, errors.New("unsupported pkcs8 key")
+		}
+	}
+	if key, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+	return nil, errors.New("unsupported key format")
+}
+
+func generateCSR(key crypto.Signer, commonName string) ([]byte, error) {
+	req := &x509.CertificateRequest{Subject: pkix.Name{CommonName: commonName}}
+	der, err := x509.CreateCertificateRequest(crand.Reader, req, key)
+	if err != nil {
+		return nil, err
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der}), nil
 }
 
 func buildTLSConfig(cfg config.Config, logger *logging.Logger) *tls.Config {

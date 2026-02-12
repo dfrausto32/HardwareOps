@@ -173,11 +173,20 @@ func DeviceEnroll(logger *log.Logger, st store.Store, lic *license.Manager, sign
 			return
 		}
 
+		meta := []byte(nil)
+		if caFingerprint, _, err := caFingerprintFromPEM(signer.CACertPEM()); err == nil {
+			meta = updateCertMeta(nil, map[string]any{
+				"active":        true,
+				"caFingerprint": caFingerprint,
+				"checkedAt":     time.Now().UTC().Format(time.RFC3339),
+			})
+		}
 		if err := st.CreateDevice(store.Device{
 			DeviceID:        deviceID,
 			CertFingerprint: fingerprint,
 			Status:          "active",
 			LastSeen:        time.Now().UTC(),
+			MetadataJSON:    meta,
 		}); err != nil {
 			logger.Printf("create device error: %v", err)
 			http.Error(w, "storage error", http.StatusInternalServerError)

@@ -22,6 +22,14 @@ import {
   getUpgradeAvailable,
   getUpgradePreflight,
   applyUpgrade,
+  listBackups,
+  getBackupStatus,
+  startBackup,
+  getRestoreStatus,
+  startRestore,
+  getRotationStatus,
+  reloadRotation,
+  rotateRotation,
   listAuditEvents,
   downloadAuditCSV,
   getAuditRetention,
@@ -369,6 +377,10 @@ export default function App() {
   const [auditRetentionDays, setAuditRetentionDays] = useState('90')
   const [auditRetentionStatus, setAuditRetentionStatus] = useState('')
   const [logsTab, setLogsTab] = useState('device')
+  const [rotationStatus, setRotationStatus] = useState(null)
+  const [rotationLoading, setRotationLoading] = useState(false)
+  const [rotationError, setRotationError] = useState('')
+  const [rotationMessage, setRotationMessage] = useState('')
 
   const [eventsFeed, setEventsFeed] = useState([])
   const [eventsStatus, setEventsStatus] = useState('disconnected')
@@ -384,6 +396,12 @@ export default function App() {
   const [upgradePreflight, setUpgradePreflight] = useState({ ok: false, checks: [], timestamp: '' })
   const [upgradePreflightStatus, setUpgradePreflightStatus] = useState('')
   const [upgradePreflightError, setUpgradePreflightError] = useState('')
+  const [backups, setBackups] = useState([])
+  const [backupStatus, setBackupStatus] = useState({ enabled: false, running: false, state: 'disabled' })
+  const [restoreStatus, setRestoreStatus] = useState({ enabled: false, running: false, state: 'disabled' })
+  const [backupError, setBackupError] = useState('')
+  const [backupMessage, setBackupMessage] = useState('')
+  const [selectedBackupId, setSelectedBackupId] = useState('')
   const selectedDeviceIdRef = useRef('')
   const refreshTimerRef = useRef(null)
   const deviceOrderRef = useRef([])
@@ -559,6 +577,9 @@ export default function App() {
     loadUpgrade()
     loadUpgradeAvailable()
     loadUpgradePreflight()
+    loadBackups()
+    loadBackupStatus()
+    loadRestoreStatus()
     loadAuditRetention()
   }, [authStatus.loaded, authStatus.enabled, authToken])
 
@@ -633,6 +654,28 @@ export default function App() {
     }, 5000)
     return () => clearInterval(timer)
   }, [upgrade.running])
+
+  useEffect(() => {
+    if (!backupStatus.running) return
+    const timer = setInterval(() => {
+      loadBackupStatus()
+      loadBackups()
+    }, 5000)
+    return () => clearInterval(timer)
+  }, [backupStatus.running])
+
+  useEffect(() => {
+    if (!restoreStatus.running) return
+    const timer = setInterval(() => {
+      loadRestoreStatus()
+    }, 5000)
+    return () => clearInterval(timer)
+  }, [restoreStatus.running])
+
+  useEffect(() => {
+    if (view !== 'logs' || logsTab !== 'rotation') return
+    loadRotationStatus()
+  }, [view, logsTab])
 
   useEffect(() => {
     if (!deviceDrawerOpen) return
@@ -764,6 +807,9 @@ export default function App() {
   const isAdmin = useMemo(() => {
     return (authUser?.roles || []).includes('admin')
   }, [authUser])
+  const canRotate = useMemo(() => {
+    return !authStatus.enabled || isAdmin
+  }, [authStatus.enabled, isAdmin])
 
   const notifications = useMemo(() => {
     const items = []
@@ -1263,6 +1309,51 @@ export default function App() {
     }
   }
 
+  async function loadRotationStatus() {
+    setRotationLoading(true)
+    setRotationError('')
+    try {
+      const res = await getRotationStatus()
+      setRotationStatus(res)
+    } catch (err) {
+      setRotationError(err.message || String(err))
+    } finally {
+      setRotationLoading(false)
+    }
+  }
+
+  async function handleReloadRotation() {
+    if (!canRotate) return
+    setRotationMessage('Reloading CA files...')
+    setRotationError('')
+    try {
+      const res = await reloadRotation()
+      setRotationStatus(res)
+      setRotationMessage('CA files reloaded')
+    } catch (err) {
+      setRotationMessage('')
+      setRotationError(err.message || String(err))
+    }
+  }
+
+  async function handleRotateRotation() {
+    if (!canRotate) return
+    const confirmed = window.confirm(
+      'Rotate CA now? This will generate a new CA, rebuild the bundle, and trigger device re-enroll.',
+    )
+    if (!confirmed) return
+    setRotationMessage('Rotating CA...')
+    setRotationError('')
+    try {
+      const res = await rotateRotation()
+      setRotationStatus(res)
+      setRotationMessage('CA rotated')
+    } catch (err) {
+      setRotationMessage('')
+      setRotationError(err.message || String(err))
+    }
+  }
+
   async function loadAuditRetention() {
     try {
       const res = await getAuditRetention()
@@ -1329,6 +1420,76 @@ export default function App() {
     } catch (err) {
       setUpgradePreflightStatus('')
       setUpgradePreflightError(err.message || String(err))
+    }
+  }
+
+  async function loadBackups() {
+    setBackupError('')
+    try {
+      const res = await listBackups()
+      setBackups(res.items || [])
+      if (!selectedBackupId && res.items && res.items.length > 0) {
+        setSelectedBackupId(res.items[0].id)
+      }
+    } catch (err) {
+      setBackupError(err.message || String(err))
+    }
+  }
+
+  async function loadBackupStatus() {
+    setBackupError('')
+    try {
+      const res = await getBackupStatus()
+      setBackupStatus(res || { enabled: false, running: false, state: 'disabled' })
+    } catch (err) {
+      setBackupError(err.message || String(err))
+    }
+  }
+
+  async function loadRestoreStatus() {
+    setBackupError('')
+    try {
+      const res = await getRestoreStatus()
+      setRestoreStatus(res || { enabled: false, running: false, state: 'disabled' })
+    } catch (err) {
+      setBackupError(err.message || String(err))
+    }
+  }
+
+  async function handleStartBackup() {
+    if (!isAdmin) return
+    setBackupMessage('Starting backup...')
+    setBackupError('')
+    try {
+      await startBackup()
+      setBackupMessage('Backup started')
+      loadBackupStatus()
+      setTimeout(loadBackups, 1500)
+    } catch (err) {
+      setBackupMessage('')
+      setBackupError(err.message || String(err))
+    }
+  }
+
+  async function handleRestore() {
+    if (!isAdmin) return
+    if (!selectedBackupId) {
+      setBackupError('Select a backup to restore')
+      return
+    }
+    const confirmed = window.confirm(
+      `Restore backup ${selectedBackupId}? This will wipe the current database and object store.`,
+    )
+    if (!confirmed) return
+    setBackupMessage('Starting restore...')
+    setBackupError('')
+    try {
+      await startRestore(selectedBackupId)
+      setBackupMessage('Restore started')
+      loadRestoreStatus()
+    } catch (err) {
+      setBackupMessage('')
+      setBackupError(err.message || String(err))
     }
   }
 
@@ -1949,9 +2110,15 @@ export default function App() {
                 >
                   Audit Log
                 </button>
+                <button
+                  className={`tab ${logsTab === 'rotation' ? 'active' : ''}`}
+                  onClick={() => setLogsTab('rotation')}
+                >
+                  CA Rotation
+                </button>
               </div>
               <div className="logs-actions">
-                {logsTab === 'device' ? (
+                {logsTab === 'device' && (
                   <>
                     <select value={logFilter} onChange={(e) => setLogFilter(e.target.value)}>
                       <option value="ALL">All</option>
@@ -1968,7 +2135,8 @@ export default function App() {
                       Fetch Logs
                     </button>
                   </>
-                ) : (
+                )}
+                {logsTab === 'audit' && (
                   <>
                     <button className="button" onClick={loadAudit}>
                       Fetch Audit
@@ -1978,10 +2146,27 @@ export default function App() {
                     </button>
                   </>
                 )}
+                {logsTab === 'rotation' && (
+                  <>
+                    <button className="button" onClick={loadRotationStatus}>
+                      Refresh
+                    </button>
+                    {canRotate && (
+                      <>
+                        <button className="button" onClick={handleRotateRotation}>
+                          Rotate CA
+                        </button>
+                        <button className="button ghost" onClick={handleReloadRotation}>
+                          Reload CA files
+                        </button>
+                      </>
+                    )}
+                  </>
+                )}
               </div>
             </div>
 
-            {logsTab === 'device' ? (
+            {logsTab === 'device' && (
               <>
                 <div className="form inline">
                   <label>Device ID</label>
@@ -2044,7 +2229,8 @@ export default function App() {
                   </div>
                 )}
               </>
-            ) : (
+            )}
+            {logsTab === 'audit' && (
               <>
                 <div className="form inline">
                   <label>Action</label>
@@ -2156,6 +2342,82 @@ export default function App() {
                       </tbody>
                     </table>
                   </div>
+                )}
+              </>
+            )}
+            {logsTab === 'rotation' && (
+              <>
+                {rotationMessage && <div className="status">{rotationMessage}</div>}
+                {rotationError && <div className="error">{rotationError}</div>}
+                {rotationLoading ? (
+                  <div className="placeholder">Loading rotation status...</div>
+                ) : rotationStatus ? (
+                  <div className="rotation-grid">
+                    <div className="rotation-card">
+                      <div className="rotation-title">Active CA</div>
+                      <div className="rotation-row">
+                        <span>Path</span>
+                        <span className="mono">{rotationStatus.activeCa?.path || '—'}</span>
+                      </div>
+                      <div className="rotation-row">
+                        <span>Subject</span>
+                        <span>{rotationStatus.activeCa?.subject || '—'}</span>
+                      </div>
+                      <div className="rotation-row">
+                        <span>Fingerprint</span>
+                        <span className="mono">{rotationStatus.activeCa?.fingerprint || '—'}</span>
+                      </div>
+                      <div className="rotation-row">
+                        <span>Valid</span>
+                        <span>
+                          {rotationStatus.activeCa?.notBefore ? new Date(rotationStatus.activeCa.notBefore).toLocaleDateString() : '—'}
+                          {' → '}
+                          {rotationStatus.activeCa?.notAfter ? new Date(rotationStatus.activeCa.notAfter).toLocaleDateString() : '—'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="rotation-card">
+                      <div className="rotation-title">Client CA Bundle</div>
+                      <div className="rotation-row">
+                        <span>Path</span>
+                        <span className="mono">{rotationStatus.clientCa?.path || '—'}</span>
+                      </div>
+                      <div className="rotation-row">
+                        <span>Certs</span>
+                        <span>{rotationStatus.clientCa?.certCount ?? '—'}</span>
+                      </div>
+                      <div className="rotation-row">
+                        <span>Contains active</span>
+                        <span>{rotationStatus.clientCa?.containsActive ? 'Yes' : 'No'}</span>
+                      </div>
+                    </div>
+
+                    <div className="rotation-card">
+                      <div className="rotation-title">Device Coverage</div>
+                      <div className="rotation-row">
+                        <span>Total</span>
+                        <span>{rotationStatus.deviceCounts?.total ?? '—'}</span>
+                      </div>
+                      <div className="rotation-row">
+                        <span>Active CA</span>
+                        <span>{rotationStatus.deviceCounts?.active ?? '—'}</span>
+                      </div>
+                      <div className="rotation-row">
+                        <span>Needs reenroll</span>
+                        <span>{rotationStatus.deviceCounts?.needsReenroll ?? '—'}</span>
+                      </div>
+                      <div className="rotation-row">
+                        <span>Unknown</span>
+                        <span>{rotationStatus.deviceCounts?.unknown ?? '—'}</span>
+                      </div>
+                      <div className="rotation-note">
+                        Re-enroll updates existing devices and does not consume additional license slots.
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="placeholder">No rotation status yet.</div>
                 )}
               </>
             )}
@@ -2385,6 +2647,86 @@ export default function App() {
                     </button>
                   </div>
                 </div>
+              </div>
+
+              <div className="settings-section">
+                <div className="settings-title">Backups</div>
+                {!backupStatus.enabled ? (
+                  <div className="placeholder">Backup runner not configured.</div>
+                ) : (
+                  <>
+                    <div className="detail-grid">
+                      <div>
+                        <div className="detail-label">Backup status</div>
+                        <div className="detail-value">{backupStatus.state || 'idle'}</div>
+                      </div>
+                      <div>
+                        <div className="detail-label">Restore status</div>
+                        <div className="detail-value">{restoreStatus.state || 'idle'}</div>
+                      </div>
+                      <div>
+                        <div className="detail-label">Log</div>
+                        <div className="detail-value">{backupStatus.logPath || restoreStatus.logPath || '—'}</div>
+                      </div>
+                      <div className="full actions">
+                        <button className="button ghost" onClick={loadBackups}>
+                          Refresh backups
+                        </button>
+                        <button className="button" onClick={handleStartBackup} disabled={!isAdmin}>
+                          Create backup
+                        </button>
+                      </div>
+                    </div>
+                    <div className="form compact">
+                      <div className="field">
+                        <label>Restore backup</label>
+                        <select value={selectedBackupId} onChange={(e) => setSelectedBackupId(e.target.value)}>
+                          <option value="">Select backup</option>
+                          {backups.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.id}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="field actions">
+                        <button className="button ghost" onClick={handleRestore} disabled={!isAdmin || !maintenance.enabled}>
+                          Restore + wipe
+                        </button>
+                        {!maintenance.enabled && (
+                          <div className="status">Enable maintenance before restore.</div>
+                        )}
+                      </div>
+                    </div>
+                    {backupError && <div className="error">{backupError}</div>}
+                    {backupMessage && <div className="status">{backupMessage}</div>}
+                    <div className="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>ID</th>
+                            <th>Created</th>
+                            <th>Size</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {backups.map((item) => (
+                            <tr key={item.id}>
+                              <td>{item.id}</td>
+                              <td>{item.createdAt ? new Date(item.createdAt).toLocaleString() : '—'}</td>
+                              <td>{item.sizeBytes ? `${(item.sizeBytes / (1024 * 1024)).toFixed(1)} MB` : '—'}</td>
+                            </tr>
+                          ))}
+                          {backups.length === 0 && (
+                            <tr>
+                              <td colSpan={3}>No backups found.</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
               </div>
 
               <div className="settings-section">

@@ -21,7 +21,10 @@ RUN apk add --no-cache bash curl
 COPY --from=build /out/control-plane /app/control-plane
 COPY control-plane/migrations /app/migrations
 COPY scripts/apply-upgrade.sh /app/scripts/apply-upgrade.sh
+COPY scripts/backup-stack.sh /app/scripts/backup-stack.sh
+COPY scripts/restore-stack.sh /app/scripts/restore-stack.sh
 RUN chmod +x /app/scripts/apply-upgrade.sh
+RUN chmod +x /app/scripts/backup-stack.sh /app/scripts/restore-stack.sh
 
 EXPOSE 8080
 ENTRYPOINT ["/app/control-plane"]

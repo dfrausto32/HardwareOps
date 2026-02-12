@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -93,7 +95,7 @@ type Action struct {
 	TimeoutSec int             `json:"timeoutSec"`
 }
 
-func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustProxy bool, clientCertHeader string) http.HandlerFunc {
+func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustProxy bool, clientCertHeader string, activeCAPool func() *x509.CertPool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		device, err := deviceFromMTLS(r, st, trustProxy, clientCertHeader)
 		if err != nil {
@@ -113,6 +115,18 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 		req.DeviceID = device.DeviceID
 
 		now := time.Now().UTC()
+		var certNeedsReenroll bool
+		var certMetaUpdate []byte
+		if activeCAPool != nil {
+			pool := activeCAPool()
+			if pool != nil {
+				cert := peerCertFromRequest(r, trustProxy, clientCertHeader)
+				if cert != nil {
+					certNeedsReenroll = needsReenroll(cert, pool)
+					certMetaUpdate = updateCertMetaIfNeeded(device.MetadataJSON, !certNeedsReenroll, now)
+				}
+			}
+		}
 		prevState, _, _ := st.GetDeviceState(req.DeviceID)
 		prevComponents := decodeDeviceComponents(prevState.ComponentsJSON)
 		currentComponents := map[string]DeviceComponentState{}
@@ -164,10 +178,11 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 		}
 
 		if err := st.UpsertDevice(store.Device{
-			DeviceID:   req.DeviceID,
-			Status:     status,
-			LastSeen:   now,
-			LabelsJSON: req.Labels,
+			DeviceID:     req.DeviceID,
+			Status:       status,
+			LastSeen:     now,
+			LabelsJSON:   req.Labels,
+			MetadataJSON: certMetaUpdate,
 		}); err != nil {
 			logger.Printf("upsert device error: %v", err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
@@ -293,9 +308,18 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 			}
 		}
 
+		pending := []Action{}
+		if certNeedsReenroll {
+			pending = append(pending, Action{
+				ActionID:   newActionID(),
+				Type:       "device.reenroll",
+				Params:     auditJSON(map[string]any{"reason": "ca-rotation"}),
+				TimeoutSec: 0,
+			})
+		}
 		resp := DeviceCheckinResponse{
 			Desired:        desiredResp,
-			PendingActions: []Action{},
+			PendingActions: pending,
 			ServerTime:     now,
 		}
 
@@ -381,6 +405,22 @@ func desiredRespCheckinInterval(resp *DesiredState) int {
 func normalizeComponentKey(val string) string {
 	key := strings.TrimSpace(strings.ToLower(val))
 	return key
+}
+
+func needsReenroll(cert *x509.Certificate, pool *x509.CertPool) bool {
+	if cert == nil || pool == nil {
+		return false
+	}
+	_, err := cert.Verify(x509.VerifyOptions{
+		Roots:       pool,
+		CurrentTime: time.Now(),
+		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	})
+	return err != nil
+}
+
+func newActionID() string {
+	return fmt.Sprintf("action-%d", time.Now().UnixNano())
 }
 
 func mergeComponentCurrent(cur DeviceCurrentComponent, prev DeviceComponentState) DeviceComponentState {

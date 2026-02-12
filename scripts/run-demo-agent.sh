@@ -15,6 +15,7 @@ DEMO_COMPONENTS=${DEMO_COMPONENTS:-agent_bundle}
 NO_CACHE=${NO_CACHE:-0}
 DEMO_COUNT=${DEMO_COUNT:-1}
 DEMO_RESET=${DEMO_RESET:-0}
+CERTS_RW=${CERTS_RW:-1}
 ALLOW_UNSUPPORTED_APPLY=${ALLOW_UNSUPPORTED_APPLY:-1}
 SIGN_ARTIFACTS=${SIGN_ARTIFACTS:-1}
 REQUIRE_ARTIFACT_SIGNATURE=${REQUIRE_ARTIFACT_SIGNATURE:-$SIGN_ARTIFACTS}
@@ -213,6 +214,11 @@ PY
   chmod 0644 "$DEVICE_CERT_PATH" "$DEVICE_KEY_PATH" || true
   cp -f "$SIGNING_PUB" "$CERT_DIR/signing.pub"
 
+  cert_mount_mode="ro"
+  if [ "$CERTS_RW" = "1" ]; then
+    cert_mount_mode="rw"
+  fi
+
   docker run -d \
     --name "$NAME" \
     --network host \
@@ -233,7 +239,7 @@ PY
     -e DEMO_COMPONENTS="$DEMO_COMPONENTS" \
     -e ALLOW_UNSUPPORTED_APPLY="$ALLOW_UNSUPPORTED_APPLY" \
     -v "$DATA_DIR:/data" \
-    -v "$DEVICE_CERT_PATH:/certs/device.crt:ro" \
+    -v "$DEVICE_CERT_PATH:/certs/device.crt:${cert_mount_mode}" \
     -v "$DEVICE_KEY_PATH:/certs/device.key:ro" \
     -v "$CERT_DIR/dev-ca.crt:/certs/dev-ca.crt:ro" \
     -v "$CERT_DIR/signing.pub:/certs/signing.pub:ro" \

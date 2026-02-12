@@ -58,6 +58,17 @@ services:
       UPGRADE_UPDATES_DIR: ${UPGRADE_UPDATES_DIR:-/stack/updates}
       UPGRADE_RUNNER_MODE: ${UPGRADE_RUNNER_MODE:-docker}
       UPGRADE_RUNNER_IMAGE: ${UPGRADE_RUNNER_IMAGE:-}
+      BACKUP_CMD: ${BACKUP_CMD:-/app/scripts/backup-stack.sh}
+      RESTORE_CMD: ${RESTORE_CMD:-/app/scripts/restore-stack.sh}
+      BACKUP_DIR: ${BACKUP_DIR:-/stack/backups}
+      BACKUP_WORK_DIR: ${BACKUP_WORK_DIR:-/stack}
+      BACKUP_LOG_DIR: ${BACKUP_LOG_DIR:-/var/lib/hardwareops/logs}
+      BACKUP_RUNNER_MODE: ${BACKUP_RUNNER_MODE:-docker}
+      BACKUP_RUNNER_IMAGE: ${BACKUP_RUNNER_IMAGE:-}
+      BACKUP_POSTGRES_CONTAINER: ${BACKUP_POSTGRES_CONTAINER:-hardwareops-postgres-1}
+      BACKUP_MINIO_CONTAINER: ${BACKUP_MINIO_CONTAINER:-hardwareops-minio-1}
+      BACKUP_POSTGRES_USER: ${BACKUP_POSTGRES_USER:-hardwareops}
+      BACKUP_POSTGRES_DB: ${BACKUP_POSTGRES_DB:-hardwareops}
       STACK_DIR: ${STACK_DIR:-/stack}
     volumes:
       - ${CERTS_DIR:-./certs}:/certs:ro

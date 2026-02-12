@@ -104,8 +104,15 @@ type DesiredComponent struct {
 }
 
 type CheckinResponse struct {
-	Desired    *DesiredState `json:"desired"`
-	ServerTime time.Time     `json:"serverTime"`
+	Desired        *DesiredState `json:"desired"`
+	PendingActions []Action      `json:"pendingActions,omitempty"`
+	ServerTime     time.Time     `json:"serverTime"`
+}
+
+type Action struct {
+	ActionID string          `json:"actionId"`
+	Type     string          `json:"type"`
+	Params   json.RawMessage `json:"params,omitempty"`
 }
 
 type ArtifactResponse struct {
@@ -118,6 +125,38 @@ type ArtifactResponse struct {
 	Signature  string          `json:"signature"`
 	SizeBytes  int64           `json:"sizeBytes"`
 	Metadata   json.RawMessage `json:"metadata"`
+}
+
+type ReenrollResponse struct {
+	DeviceID  string `json:"deviceId"`
+	CertPEM   string `json:"certPem"`
+	CACertPEM string `json:"caCertPem"`
+}
+
+func (c *Client) Reenroll(csrPEM []byte) (ReenrollResponse, error) {
+	payload := map[string]string{"csr": string(csrPEM)}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return ReenrollResponse{}, err
+	}
+	url := fmt.Sprintf("%s/api/v1/devices/reenroll", c.baseURL)
+	resp, err := c.http.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return ReenrollResponse{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return ReenrollResponse{}, fmt.Errorf("reenroll failed: status=%d", resp.StatusCode)
+	}
+	var out ReenrollResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return ReenrollResponse{}, err
+	}
+	if out.CertPEM == "" {
+		return ReenrollResponse{}, fmt.Errorf("reenroll failed: empty cert")
+	}
+	return out, nil
 }
 
 type PresignResponse struct {
