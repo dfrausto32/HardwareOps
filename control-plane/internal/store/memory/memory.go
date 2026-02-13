@@ -22,6 +22,7 @@ type Store struct {
 	applyResults    map[string]store.ApplyResult
 	auditEvents     []store.AuditEvent
 	auditRetention  store.AuditRetention
+	certRotation    *store.CertRotationState
 	users           map[string]store.User
 	userEmailIndex  map[string]string
 	vouchers        map[string]store.AuthVoucher
@@ -40,6 +41,7 @@ func New() *Store {
 		applyResults:    map[string]store.ApplyResult{},
 		auditEvents:     []store.AuditEvent{},
 		auditRetention:  store.AuditRetention{Days: 90, UpdatedAt: time.Now().UTC()},
+		certRotation:    nil,
 		users:           map[string]store.User{},
 		userEmailIndex:  map[string]string{},
 		vouchers:        map[string]store.AuthVoucher{},
@@ -195,6 +197,30 @@ func (s *Store) CountDevices() (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.devices), nil
+}
+
+func (s *Store) CountDevicesByStatus(status string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for _, d := range s.devices {
+		if d.Status == status {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (s *Store) LatestDeviceSeen() (time.Time, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var latest time.Time
+	for _, d := range s.devices {
+		if d.LastSeen.After(latest) {
+			latest = d.LastSeen
+		}
+	}
+	return latest, nil
 }
 
 func (s *Store) DeleteDevice(deviceID string) error {
@@ -522,6 +548,16 @@ func (s *Store) DeleteArtifact(artifactID string) error {
 	return nil
 }
 
+func (s *Store) GetArtifactStats() (store.ArtifactStats, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stats := store.ArtifactStats{Count: len(s.artifacts)}
+	for _, a := range s.artifacts {
+		stats.SizeBytes += a.SizeBytes
+	}
+	return stats, nil
+}
+
 func (s *Store) CreateApplyResult(result store.ApplyResult) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -807,6 +843,23 @@ func (s *Store) SetAuditRetentionDays(days int) (store.AuditRetention, error) {
 	}
 	s.auditRetention = store.AuditRetention{Days: days, UpdatedAt: time.Now().UTC()}
 	return s.auditRetention, nil
+}
+
+func (s *Store) GetCertRotationState() (store.CertRotationState, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.certRotation == nil {
+		return store.CertRotationState{}, false, nil
+	}
+	return *s.certRotation, true, nil
+}
+
+func (s *Store) SetCertRotationState(state store.CertRotationState) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	copy := state
+	s.certRotation = &copy
+	return nil
 }
 
 func parseJSONMap(data []byte) map[string]interface{} {

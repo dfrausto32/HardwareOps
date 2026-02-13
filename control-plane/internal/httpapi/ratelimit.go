@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/hardwareops/control-plane/internal/metrics"
 )
 
 type RateLimiter struct {
@@ -15,6 +17,8 @@ type RateLimiter struct {
 	window     time.Duration
 	trustProxy bool
 	entries    map[string]*rateEntry
+	name       string
+	metrics    *metrics.Metrics
 }
 
 type rateEntry struct {
@@ -22,15 +26,20 @@ type rateEntry struct {
 	reset time.Time
 }
 
-func NewRateLimiter(limit int, window time.Duration, trustProxy bool) *RateLimiter {
+func NewRateLimiter(limit int, window time.Duration, trustProxy bool, name string, metricsCollector *metrics.Metrics) *RateLimiter {
 	if window <= 0 {
 		window = time.Minute
+	}
+	if name == "" {
+		name = "unknown"
 	}
 	return &RateLimiter{
 		limit:      limit,
 		window:     window,
 		trustProxy: trustProxy,
 		entries:    make(map[string]*rateEntry),
+		name:       name,
+		metrics:    metricsCollector,
 	}
 }
 
@@ -50,6 +59,9 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 				secs = 1
 			}
 			w.Header().Set("Retry-After", strconv.Itoa(secs))
+			if rl.metrics != nil {
+				rl.metrics.IncRateLimit(rl.name)
+			}
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}

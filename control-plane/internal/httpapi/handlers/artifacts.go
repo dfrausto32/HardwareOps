@@ -15,32 +15,33 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/hardwareops/control-plane/internal/metrics"
 	"github.com/hardwareops/control-plane/internal/store"
 )
 
 type CreateArtifactRequest struct {
-	Name      string `json:"name"`
-	Version   string `json:"version"`
-	Type      string `json:"type"`
-	ObjectKey string `json:"objectKey"`
-	SHA256    string `json:"sha256"`
-	Signature string `json:"signature"`
-	SignatureKeyID string `json:"signatureKeyId"`
-	SizeBytes int64  `json:"sizeBytes"`
-	Metadata  json.RawMessage `json:"metadata"`
+	Name           string          `json:"name"`
+	Version        string          `json:"version"`
+	Type           string          `json:"type"`
+	ObjectKey      string          `json:"objectKey"`
+	SHA256         string          `json:"sha256"`
+	Signature      string          `json:"signature"`
+	SignatureKeyID string          `json:"signatureKeyId"`
+	SizeBytes      int64           `json:"sizeBytes"`
+	Metadata       json.RawMessage `json:"metadata"`
 }
 
 type ArtifactResponse struct {
-	ArtifactID string    `json:"artifactId"`
-	Name       string    `json:"name"`
-	Version    string    `json:"version"`
-	Type       string    `json:"type"`
-	ObjectKey  string    `json:"objectKey"`
-	SHA256     string    `json:"sha256"`
-	Signature  string    `json:"signature,omitempty"`
-	SizeBytes  int64     `json:"sizeBytes"`
+	ArtifactID string          `json:"artifactId"`
+	Name       string          `json:"name"`
+	Version    string          `json:"version"`
+	Type       string          `json:"type"`
+	ObjectKey  string          `json:"objectKey"`
+	SHA256     string          `json:"sha256"`
+	Signature  string          `json:"signature,omitempty"`
+	SizeBytes  int64           `json:"sizeBytes"`
 	Metadata   json.RawMessage `json:"metadata,omitempty"`
-	CreatedAt  time.Time `json:"createdAt"`
+	CreatedAt  time.Time       `json:"createdAt"`
 }
 
 type ArtifactListResponse struct {
@@ -99,16 +100,16 @@ func CreateArtifact(logger *log.Logger, st store.Store, trustProxy bool) http.Ha
 		}
 
 		artifact := store.Artifact{
-			ArtifactID: uuid.NewString(),
-			Name:       req.Name,
-			Version:    req.Version,
-			Type:       atype,
-			ObjectKey:  req.ObjectKey,
-			SHA256:     req.SHA256,
-			Signature:  req.Signature,
-			SizeBytes:  req.SizeBytes,
+			ArtifactID:   uuid.NewString(),
+			Name:         req.Name,
+			Version:      req.Version,
+			Type:         atype,
+			ObjectKey:    req.ObjectKey,
+			SHA256:       req.SHA256,
+			Signature:    req.Signature,
+			SizeBytes:    req.SizeBytes,
 			MetadataJSON: meta,
-			CreatedAt:  time.Now().UTC(),
+			CreatedAt:    time.Now().UTC(),
 		}
 		if err := st.CreateArtifact(artifact); err != nil {
 			logger.Printf("create artifact error: %v", err)
@@ -145,13 +146,20 @@ func CreateArtifact(logger *log.Logger, st store.Store, trustProxy bool) http.Ha
 	}
 }
 
-func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool) http.HandlerFunc {
+func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		record := func(status string) {
+			if metricsCollector != nil {
+				metricsCollector.IncArtifactUpload(status)
+			}
+		}
 		if objStore == nil || bucket == "" {
+			record("error")
 			http.Error(w, "object store not configured", http.StatusInternalServerError)
 			return
 		}
 		if err := r.ParseMultipartForm(64 << 20); err != nil {
+			record("error")
 			http.Error(w, "invalid multipart", http.StatusBadRequest)
 			return
 		}
@@ -160,16 +168,19 @@ func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 		atypeRaw := r.FormValue("type")
 		metaRaw := r.FormValue("metadata")
 		if name == "" || version == "" {
+			record("error")
 			http.Error(w, "name and version required", http.StatusBadRequest)
 			return
 		}
 		atype, err := normalizeArtifactType(atypeRaw)
 		if err != nil {
+			record("error")
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		meta, err := parseMetadataString(metaRaw)
 		if err != nil {
+			record("error")
 			http.Error(w, "metadata must be valid json", http.StatusBadRequest)
 			return
 		}
@@ -182,6 +193,7 @@ func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 		}
 		file, header, err := r.FormFile("file")
 		if err != nil {
+			record("error")
 			http.Error(w, "file required", http.StatusBadRequest)
 			return
 		}
@@ -196,6 +208,7 @@ func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 
 		if err := objStore.EnsureBucket(r.Context(), bucket); err != nil {
 			logger.Printf("ensure bucket error: %v", err)
+			record("error")
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
@@ -210,29 +223,32 @@ func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 		size, err := objStore.PutObject(r.Context(), bucket, objectKey, tee, header.Size, contentType)
 		if err != nil {
 			logger.Printf("put object error: %v", err)
+			record("error")
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
 
 		sha := hex.EncodeToString(h.Sum(nil))
 		artifact := store.Artifact{
-			ArtifactID: artifactID,
-			Name:       name,
-			Version:    version,
-			Type:       atype,
-			ObjectKey:  objectKey,
-			SHA256:     sha,
-			Signature:  signature,
-			SizeBytes:  size,
+			ArtifactID:   artifactID,
+			Name:         name,
+			Version:      version,
+			Type:         atype,
+			ObjectKey:    objectKey,
+			SHA256:       sha,
+			Signature:    signature,
+			SizeBytes:    size,
 			MetadataJSON: meta,
-			CreatedAt:  time.Now().UTC(),
+			CreatedAt:    time.Now().UTC(),
 		}
 		if err := st.CreateArtifact(artifact); err != nil {
 			logger.Printf("create artifact error: %v", err)
 			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.upload", "artifact", artifactID), err)
+			record("error")
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+		record("success")
 
 		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.upload", "artifact", artifactID)
 		event.AfterJSON = auditJSON(map[string]any{
@@ -351,18 +367,26 @@ func GetArtifact(logger *log.Logger, st store.Store, trustProxy bool) http.Handl
 	}
 }
 
-func PresignArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, expires time.Duration, trustProxy bool) http.HandlerFunc {
+func PresignArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, expires time.Duration, trustProxy bool, metricsCollector *metrics.Metrics) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		record := func(status string) {
+			if metricsCollector != nil {
+				metricsCollector.IncArtifactPresign(status)
+			}
+		}
 		artifactID := chi.URLParam(r, "artifactId")
 		if artifactID == "" {
+			record("error")
 			http.Error(w, "artifactId required", http.StatusBadRequest)
 			return
 		}
 		if _, err := uuid.Parse(artifactID); err != nil {
+			record("error")
 			http.Error(w, "artifactId must be uuid", http.StatusBadRequest)
 			return
 		}
 		if objStore == nil || bucket == "" {
+			record("error")
 			http.Error(w, "object store not configured", http.StatusInternalServerError)
 			return
 		}
@@ -370,10 +394,12 @@ func PresignArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, b
 		artifact, ok, err := st.GetArtifact(artifactID)
 		if err != nil {
 			logger.Printf("get artifact error: %v", err)
+			record("error")
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
 		if !ok {
+			record("error")
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
@@ -386,9 +412,11 @@ func PresignArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, b
 		if err != nil {
 			logger.Printf("presign error: %v", err)
 			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("system"), "artifact.presign", "artifact", artifactID), err)
+			record("error")
 			http.Error(w, "presign error", http.StatusInternalServerError)
 			return
 		}
+		record("success")
 
 		event := buildAuditEvent(r, trustProxy, actorUser("system"), "artifact.presign", "artifact", artifactID)
 		event.MetadataJSON = auditJSON(map[string]any{"expiresAt": time.Now().UTC().Add(exp)})
@@ -452,12 +480,12 @@ func DeleteArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 // parseInt lives in devices.go
 
 var allowedArtifactTypes = map[string]struct{}{
-	"app_bundle":     {},
-	"config_bundle":  {},
-	"data_bundle":    {},
-	"firmware":       {},
+	"app_bundle":      {},
+	"config_bundle":   {},
+	"data_bundle":     {},
+	"firmware":        {},
 	"container_image": {},
-	"agent_bundle":   {},
+	"agent_bundle":    {},
 }
 
 func normalizeArtifactType(val string) (string, error) {

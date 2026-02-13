@@ -54,6 +54,11 @@ type Artifact struct {
 	CreatedAt    time.Time
 }
 
+type ArtifactStats struct {
+	Count     int
+	SizeBytes int64
+}
+
 type ApplyResult struct {
 	ApplyID          string
 	DeviceID         string
@@ -92,6 +97,15 @@ type AuditEvent struct {
 type AuditRetention struct {
 	Days      int
 	UpdatedAt time.Time
+}
+
+type CertRotationState struct {
+	ActiveFingerprint   string
+	PreviousFingerprint string
+	RotatedAt           time.Time
+	GracePeriodSeconds  int64
+	CleanedAt           time.Time
+	CleanedReason       string
 }
 
 type AuditEventFilter struct {
@@ -183,6 +197,8 @@ type Store interface {
 	GetDeviceState(deviceID string) (DeviceState, bool, error)
 	ListDevices(filter ListDevicesFilter) ([]Device, error)
 	CountDevices() (int, error)
+	CountDevicesByStatus(status string) (int, error)
+	LatestDeviceSeen() (time.Time, error)
 	DeleteDevice(deviceID string) error
 	DeleteStaleDevices(cutoff time.Time) (int, error)
 	UpdateDeviceStatuses(staleCutoff, offlineCutoff time.Time) (int, error)
@@ -201,6 +217,7 @@ type Store interface {
 	GetArtifact(artifactID string) (Artifact, bool, error)
 	ListArtifacts(name, version string, limit, offset int) ([]Artifact, error)
 	DeleteArtifact(artifactID string) error
+	GetArtifactStats() (ArtifactStats, error)
 	CreateApplyResult(result ApplyResult) error
 	CreateAuditEvent(event AuditEvent) error
 	ListAuditEvents(filter AuditEventFilter) ([]AuditEvent, error)
@@ -208,6 +225,8 @@ type Store interface {
 	EnsureAuditRetentionDays(days int) error
 	GetAuditRetentionDays() (AuditRetention, error)
 	SetAuditRetentionDays(days int) (AuditRetention, error)
+	GetCertRotationState() (CertRotationState, bool, error)
+	SetCertRotationState(state CertRotationState) error
 	CreateUser(user User) error
 	GetUser(userID string) (User, bool, error)
 	GetUserByEmail(email string) (User, bool, error)

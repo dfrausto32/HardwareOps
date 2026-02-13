@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hardwareops/control-plane/internal/backup"
+	"github.com/hardwareops/control-plane/internal/metrics"
 	"github.com/hardwareops/control-plane/internal/store"
 )
 
@@ -75,9 +76,12 @@ func ListBackups(dir string) http.HandlerFunc {
 	}
 }
 
-func StartBackup(logger *log.Logger, st store.Store, runner *backup.Runner, trustProxy bool) http.HandlerFunc {
+func StartBackup(logger *log.Logger, st store.Store, runner *backup.Runner, trustProxy bool, metricsCollector *metrics.Metrics) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if runner == nil || !runner.Enabled() {
+			if metricsCollector != nil {
+				metricsCollector.IncBackup("backup", "error")
+			}
 			http.Error(w, "backup runner not configured", http.StatusNotFound)
 			return
 		}
@@ -85,8 +89,14 @@ func StartBackup(logger *log.Logger, st store.Store, runner *backup.Runner, trus
 		status, err := runner.Start()
 		if err != nil {
 			writeAudit(logger, st, event, err)
+			if metricsCollector != nil {
+				metricsCollector.IncBackup("backup", "error")
+			}
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
+		}
+		if metricsCollector != nil {
+			metricsCollector.IncBackup("backup", "started")
 		}
 		event.AfterJSON = auditJSON(status)
 		writeAudit(logger, st, event, nil)
@@ -95,9 +105,12 @@ func StartBackup(logger *log.Logger, st store.Store, runner *backup.Runner, trus
 	}
 }
 
-func StartRestore(logger *log.Logger, st store.Store, runner *backup.Runner, maintenance MaintenanceStateView, backupDir string, trustProxy bool) http.HandlerFunc {
+func StartRestore(logger *log.Logger, st store.Store, runner *backup.Runner, maintenance MaintenanceStateView, backupDir string, trustProxy bool, metricsCollector *metrics.Metrics) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if runner == nil || !runner.Enabled() {
+			if metricsCollector != nil {
+				metricsCollector.IncBackup("restore", "error")
+			}
 			http.Error(w, "restore runner not configured", http.StatusNotFound)
 			return
 		}
@@ -135,8 +148,14 @@ func StartRestore(logger *log.Logger, st store.Store, runner *backup.Runner, mai
 		})
 		if err != nil {
 			writeAudit(logger, st, event, err)
+			if metricsCollector != nil {
+				metricsCollector.IncBackup("restore", "error")
+			}
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
+		}
+		if metricsCollector != nil {
+			metricsCollector.IncBackup("restore", "started")
 		}
 		event.AfterJSON = auditJSON(status)
 		writeAudit(logger, st, event, nil)

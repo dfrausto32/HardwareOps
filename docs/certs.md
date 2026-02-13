@@ -181,7 +181,21 @@ sudo OUT_DIR=/opt/hardwareops/certs DOMAIN=hardwareops.internal ./scripts/issue-
 Point the gateway to the new server cert/key, and update client trust stores as needed.
 
 ### 8) Cleanup (remove old CA)
-After all devices are active on the new CA and server TLS is rotated:
+After all devices are active on the new CA (or after the grace window), prune the old CA:
+
+**UI / API (hybrid cleanup)**
+```
+curl --cacert /opt/hardwareops/certs/ca.crt -X POST \\
+  https://hardwareops.internal/api/v1/cert-rotation/cleanup
+```
+
+**Manual fallback**
 ```
 cat /opt/hardwareops/certs/ca-active.crt > /opt/hardwareops/certs/ca-bundle.crt
 ```
+
+Grace window (default 7 days):
+```
+CERT_ROTATION_GRACE_PERIOD=168h
+```
+If the grace window expires, cleanup is allowed even if some devices are still on the old CA (they will need manual intervention).

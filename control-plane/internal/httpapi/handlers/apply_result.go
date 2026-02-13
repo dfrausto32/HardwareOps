@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/hardwareops/control-plane/internal/events"
+	"github.com/hardwareops/control-plane/internal/metrics"
 	"github.com/hardwareops/control-plane/internal/store"
 )
 
@@ -30,44 +31,67 @@ type ApplyResultResponse struct {
 	At       time.Time `json:"at"`
 }
 
-func PostApplyResult(logger *log.Logger, st store.Store, hub *events.Hub, trustProxy bool, clientCertHeader string) http.HandlerFunc {
+func PostApplyResult(logger *log.Logger, st store.Store, hub *events.Hub, trustProxy bool, clientCertHeader string, metricsCollector *metrics.Metrics) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		recordApply := func(status, component string) {
+			if metricsCollector != nil {
+				metricsCollector.IncApply(status, component)
+			}
+		}
+		recordPreApply := func(status, component string) {
+			if metricsCollector != nil {
+				metricsCollector.IncPreApply(status, component)
+			}
+		}
+
 		device, err := deviceFromMTLS(r, st, trustProxy, clientCertHeader)
 		if err != nil {
+			recordApply("error", "unknown")
 			http.Error(w, "client certificate required", http.StatusUnauthorized)
 			return
 		}
 
 		deviceID := chi.URLParam(r, "deviceId")
 		if deviceID == "" {
+			recordApply("error", "unknown")
 			http.Error(w, "deviceId required", http.StatusBadRequest)
 			return
 		}
 		if deviceID != device.DeviceID {
+			recordApply("error", normalizeComponentKey(""))
 			http.Error(w, "deviceId does not match client certificate", http.StatusUnauthorized)
 			return
 		}
 
 		var req ApplyResultRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			recordApply("error", "unknown")
 			http.Error(w, "invalid json", http.StatusBadRequest)
 			return
 		}
+		component := normalizeComponentKey(req.Component)
+		if component == "" {
+			component = "unknown"
+		}
 		if req.Status != "success" && req.Status != "error" {
+			recordApply("error", component)
 			http.Error(w, "status must be success or error", http.StatusBadRequest)
 			return
 		}
 		if req.PreApplyStatus != "" && req.PreApplyStatus != "success" && req.PreApplyStatus != "error" && req.PreApplyStatus != "skipped" {
+			recordApply("error", component)
 			http.Error(w, "preApplyStatus must be success, error, or skipped", http.StatusBadRequest)
 			return
 		}
 		if req.ArtifactID != "" {
 			if _, err := uuid.Parse(req.ArtifactID); err != nil {
+				recordApply("error", component)
 				http.Error(w, "artifactId must be uuid", http.StatusBadRequest)
 				return
 			}
 		}
 		if req.Status == "success" && req.AppliedVersion == "" {
+			recordApply("error", component)
 			http.Error(w, "appliedVersion required on success", http.StatusBadRequest)
 			return
 		}
@@ -101,8 +125,13 @@ func PostApplyResult(logger *log.Logger, st store.Store, hub *events.Hub, trustP
 		if err := st.CreateApplyResult(res); err != nil {
 			logger.Printf("create apply result error: %v", err)
 			writeAudit(logger, st, event, err)
+			recordApply("error", component)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
+		}
+		recordApply(res.Status, component)
+		if res.PreApplyStatus != "" {
+			recordPreApply(res.PreApplyStatus, component)
 		}
 		state := store.DeviceState{
 			DeviceID:            device.DeviceID,

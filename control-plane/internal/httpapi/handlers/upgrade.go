@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hardwareops/control-plane/internal/metrics"
 	"github.com/hardwareops/control-plane/internal/store"
 	"github.com/hardwareops/control-plane/internal/upgrade"
 )
@@ -29,9 +30,12 @@ func GetUpgradeStatus(runner *upgrade.Runner) http.HandlerFunc {
 	}
 }
 
-func ApplyUpgrade(logger *log.Logger, st store.Store, runner *upgrade.Runner, maintenance MaintenanceStateView, token string, trustProxy bool, updatesDir string) http.HandlerFunc {
+func ApplyUpgrade(logger *log.Logger, st store.Store, runner *upgrade.Runner, maintenance MaintenanceStateView, token string, trustProxy bool, updatesDir string, metricsCollector *metrics.Metrics) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if runner == nil || !runner.Enabled() {
+			if metricsCollector != nil {
+				metricsCollector.IncUpgrade("error")
+			}
 			http.Error(w, "upgrade runner not configured", http.StatusNotFound)
 			return
 		}
@@ -53,6 +57,9 @@ func ApplyUpgrade(logger *log.Logger, st store.Store, runner *upgrade.Runner, ma
 		}
 		preflight := BuildUpgradePreflight(runner, updatesDir)
 		if !preflight.OK {
+			if metricsCollector != nil {
+				metricsCollector.IncUpgrade("error")
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusPreconditionFailed)
 			_ = json.NewEncoder(w).Encode(preflight)
@@ -66,8 +73,14 @@ func ApplyUpgrade(logger *log.Logger, st store.Store, runner *upgrade.Runner, ma
 		status, err := runner.Start()
 		if err != nil {
 			writeAudit(logger, st, event, err)
+			if metricsCollector != nil {
+				metricsCollector.IncUpgrade("error")
+			}
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
+		}
+		if metricsCollector != nil {
+			metricsCollector.IncUpgrade("started")
 		}
 		event.AfterJSON = auditJSON(status)
 		writeAudit(logger, st, event, nil)

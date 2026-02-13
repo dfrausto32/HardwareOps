@@ -18,6 +18,7 @@ import (
 	"github.com/hardwareops/control-plane/internal/httpapi"
 	"github.com/hardwareops/control-plane/internal/license"
 	"github.com/hardwareops/control-plane/internal/logging"
+	"github.com/hardwareops/control-plane/internal/metrics"
 	"github.com/hardwareops/control-plane/internal/migrate"
 	"github.com/hardwareops/control-plane/internal/objectstore"
 	"github.com/hardwareops/control-plane/internal/store/postgres"
@@ -89,6 +90,10 @@ func main() {
 
 	hub := events.NewHub(128)
 	store := postgres.New(pool)
+	var metricsCollector *metrics.Metrics
+	if cfg.MetricsEnabled {
+		metricsCollector = metrics.New()
+	}
 	var licenseManager *license.Manager
 	if cfg.LicenseEnforce {
 		keyMode := strings.ToLower(strings.TrimSpace(cfg.LicenseKeyMode))
@@ -225,9 +230,53 @@ func main() {
 		Backup:             backupRunner,
 		Restore:            restoreRunner,
 		BackupDir:          cfg.BackupDir,
+		Metrics:            metricsCollector,
+		MetricsPath:        cfg.MetricsPath,
 		Auth:               authManager,
 		License:            licenseManager,
 		CertManager:        certManager,
+		CertRotationGrace:  cfg.CertRotationGracePeriod,
+	}
+
+	updateMetricsCounts := func() {
+		if metricsCollector == nil {
+			return
+		}
+		total, err := store.CountDevices()
+		if err != nil {
+			logger.Printf("metrics devices total error: %v", err)
+			return
+		}
+		counts := map[string]int{}
+		for _, status := range []string{"active", "stale", "offline", "degraded"} {
+			if count, err := store.CountDevicesByStatus(status); err == nil {
+				counts[status] = count
+			} else {
+				logger.Printf("metrics devices status=%s error: %v", status, err)
+			}
+		}
+		metricsCollector.SetDeviceStatusCounts(total, counts)
+		if pool != nil {
+			stats := pool.Stat()
+			metricsCollector.SetDBStats(int(stats.TotalConns()), int(stats.AcquiredConns()), stats.EmptyAcquireCount())
+		}
+		if stats, err := store.GetArtifactStats(); err == nil {
+			metricsCollector.SetStorageUsage(stats.Count, stats.SizeBytes)
+		} else if err != nil {
+			logger.Printf("metrics artifact stats error: %v", err)
+		}
+	}
+	updateMetricsCounts()
+	if metricsCollector != nil && cfg.MetricsRefreshInterval > 0 {
+		interval := cfg.MetricsRefreshInterval
+		go func() {
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				<-ticker.C
+				updateMetricsCounts()
+			}
+		}()
 	}
 
 	if err := store.EnsureAuditRetentionDays(cfg.AuditRetentionDays); err != nil {

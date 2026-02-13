@@ -61,6 +61,10 @@ type Config struct {
 	BackupPostgresUser            string
 	BackupPostgresDB              string
 	RestoreCmd                    string
+	MetricsEnabled                bool
+	MetricsPath                   string
+	MetricsRefreshInterval        time.Duration
+	CertRotationGracePeriod       time.Duration
 	DisableHTTP2                  bool
 	CORSAllowedOrigins            []string
 	AuditRetentionDays            int
@@ -148,6 +152,10 @@ func FromEnv() Config {
 		BackupPostgresUser:            getenvDefault("BACKUP_POSTGRES_USER", "hardwareops"),
 		BackupPostgresDB:              getenvDefault("BACKUP_POSTGRES_DB", "hardwareops"),
 		RestoreCmd:                    os.Getenv("RESTORE_CMD"),
+		MetricsEnabled:                parseBoolEnvDefault("METRICS_ENABLED", true),
+		MetricsPath:                   getenvDefault("METRICS_PATH", "/metrics"),
+		MetricsRefreshInterval:        parseDurationDefault(getenvDefault("METRICS_REFRESH_INTERVAL", "30s"), 30*time.Second),
+		CertRotationGracePeriod:       parseDurationDefault(getenvDefault("CERT_ROTATION_GRACE_PERIOD", "168h"), 168*time.Hour),
 		DisableHTTP2:                  os.Getenv("DISABLE_HTTP2") == "1",
 		CORSAllowedOrigins:            parseCSV(getenvDefault("CORS_ALLOWED_ORIGINS", "")),
 		AuditRetentionDays:            getenvInt("AUDIT_RETENTION_DAYS", 90),
@@ -229,4 +237,12 @@ func parseBoolEnv(key string) bool {
 	default:
 		return false
 	}
+}
+
+func parseBoolEnvDefault(key string, def bool) bool {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	return parseBoolEnv(key)
 }

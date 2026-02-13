@@ -22,7 +22,7 @@ func TestDeviceCheckin_Valid(t *testing.T) {
 	req, deviceID = attachMTLSDevice(t, mem, req, deviceID)
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "", nil).ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -58,7 +58,7 @@ func TestDeviceCheckin_MissingDeviceID(t *testing.T) {
 	req, _ = attachMTLSDevice(t, mem, req, "")
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "", nil).ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -74,7 +74,7 @@ func TestDeviceCheckin_InvalidDeviceID(t *testing.T) {
 	req, _ = attachMTLSDevice(t, mem, req, "")
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "", nil).ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", w.Code)

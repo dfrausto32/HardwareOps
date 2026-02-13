@@ -1,0 +1,80 @@
+{
+  "uid": "hwops-overview",
+  "title": "HardwareOps Overview",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-15m", "to": "now" },
+  "timezone": "browser",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Devices Total",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "hwops_devices_total" }],
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 5 }
+    },
+    {
+      "type": "stat",
+      "title": "Active Devices",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "hwops_devices_status_total{status=\"active\"}" }],
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 5 }
+    },
+    {
+      "type": "stat",
+      "title": "Degraded Devices",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "hwops_devices_status_total{status=\"degraded\"}" }],
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 5 }
+    },
+    {
+      "type": "stat",
+      "title": "Offline Devices",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "hwops_devices_status_total{status=\"offline\"}" }],
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 5 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Check-ins (success rate)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(rate(hwops_checkin_total{status=\"success\"}[1m]))" }],
+      "gridPos": { "x": 0, "y": 5, "w": 12, "h": 6 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Check-ins (error rate)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(rate(hwops_checkin_total{status=\"error\"}[1m]))" }],
+      "gridPos": { "x": 12, "y": 5, "w": 12, "h": 6 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Apply errors",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(rate(hwops_apply_total{status=\"error\"}[5m]))" }],
+      "gridPos": { "x": 0, "y": 11, "w": 12, "h": 6 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Rate limit hits",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(rate(hwops_rate_limit_total[5m]))" }],
+      "gridPos": { "x": 12, "y": 11, "w": 12, "h": 6 }
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  }
+}

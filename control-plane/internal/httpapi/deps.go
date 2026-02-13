@@ -10,6 +10,7 @@ import (
 	"github.com/hardwareops/control-plane/internal/certs"
 	"github.com/hardwareops/control-plane/internal/events"
 	"github.com/hardwareops/control-plane/internal/license"
+	"github.com/hardwareops/control-plane/internal/metrics"
 	"github.com/hardwareops/control-plane/internal/store"
 	"github.com/hardwareops/control-plane/internal/upgrade"
 )
@@ -52,7 +53,10 @@ type Dependencies struct {
 	Backup             *backup.Runner
 	Restore            *backup.Runner
 	BackupDir          string
+	Metrics            *metrics.Metrics
+	MetricsPath        string
 	Auth               *auth.Manager
 	License            *license.Manager
 	CertManager        *certs.Manager
+	CertRotationGrace  time.Duration
 }

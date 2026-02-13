@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "hardwareops-control-plane"
+    metrics_path: /metrics
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true
+    static_configs:
+      - targets: ["host.docker.internal:8080"]
+    # If auth is enabled, replace this token with an admin JWT.
+    # authorization:
+    #   type: Bearer
+    #   credentials: REPLACE_ME

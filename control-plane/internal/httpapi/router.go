@@ -17,6 +17,9 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 	if len(deps.CORSAllowedOrigins) > 0 {
 		r.Use(CORS(deps.CORSAllowedOrigins))
 	}
+	if deps.Metrics != nil {
+		r.Use(deps.Metrics.Middleware)
+	}
 	if deps.Maintenance != nil {
 		r.Use(MaintenanceMiddleware(deps.Maintenance))
 	}
@@ -25,10 +28,10 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 	}
 	r.Get("/healthz", handlers.Health())
 
-	enrollmentLimiter := NewRateLimiter(deps.RateLimits.EnrollmentTokenRPM, time.Minute, deps.TrustProxy)
-	deviceEnrollLimiter := NewRateLimiter(deps.RateLimits.EnrollRPM, time.Minute, deps.TrustProxy)
-	checkinLimiter := NewRateLimiter(deps.RateLimits.CheckinRPM, time.Minute, deps.TrustProxy)
-	applyLimiter := NewRateLimiter(deps.RateLimits.ApplyResultRPM, time.Minute, deps.TrustProxy)
+	enrollmentLimiter := NewRateLimiter(deps.RateLimits.EnrollmentTokenRPM, time.Minute, deps.TrustProxy, "enrollment_token", deps.Metrics)
+	deviceEnrollLimiter := NewRateLimiter(deps.RateLimits.EnrollRPM, time.Minute, deps.TrustProxy, "device_enroll", deps.Metrics)
+	checkinLimiter := NewRateLimiter(deps.RateLimits.CheckinRPM, time.Minute, deps.TrustProxy, "checkin", deps.Metrics)
+	applyLimiter := NewRateLimiter(deps.RateLimits.ApplyResultRPM, time.Minute, deps.TrustProxy, "apply_result", deps.Metrics)
 
 	requireRole := func(role string) func(http.Handler) http.Handler {
 		if deps.Auth == nil || !deps.Auth.Enabled() {
@@ -39,6 +42,10 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 	viewer := requireRole("viewer")
 	operator := requireRole("operator")
 	admin := requireRole("admin")
+
+	if deps.Metrics != nil && deps.MetricsPath != "" {
+		r.With(admin).Handle(deps.MetricsPath, deps.Metrics.Handler())
+	}
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/auth/status", handlers.AuthStatus(deps.Auth))
@@ -55,10 +62,10 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(operator).Delete("/groups/{groupId}", handlers.DeleteGroup(logger, deps.Store, deps.TrustProxy))
 		r.With(viewer).Get("/artifacts", handlers.ListArtifacts(logger, deps.Store, deps.TrustProxy))
 		r.With(operator).Post("/artifacts", handlers.CreateArtifact(logger, deps.Store, deps.TrustProxy))
-		r.With(operator).Post("/artifacts/upload", handlers.UploadArtifact(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy))
+		r.With(operator).Post("/artifacts/upload", handlers.UploadArtifact(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, deps.Metrics))
 		r.With(viewer).Get("/artifacts/{artifactId}", handlers.GetArtifact(logger, deps.Store, deps.TrustProxy))
 		r.With(operator).Delete("/artifacts/{artifactId}", handlers.DeleteArtifact(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy))
-		r.Post("/artifacts/{artifactId}/presign", handlers.PresignArtifact(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.PresignExpires, deps.TrustProxy))
+		r.Post("/artifacts/{artifactId}/presign", handlers.PresignArtifact(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.PresignExpires, deps.TrustProxy, deps.Metrics))
 
 		r.With(admin).Get("/audit", handlers.ListAuditEvents(logger, deps.Store, deps.TrustProxy))
 		r.With(admin).Get("/audit.csv", handlers.ExportAuditCSV(logger, deps.Store, deps.TrustProxy))
@@ -67,21 +74,22 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(admin).Get("/license", handlers.GetLicenseStatus(logger, deps.Store, deps.License))
 		r.With(viewer).Get("/cert-rotation", handlers.GetCertRotationStatus(logger, deps.Store, deps.CertManager))
 		r.With(admin).Post("/cert-rotation/reload", handlers.ReloadCertRotation(logger, deps.Store, deps.CertManager, deps.TrustProxy))
-		r.With(admin).Post("/cert-rotation/rotate", handlers.RotateCertRotation(logger, deps.Store, deps.CertManager, deps.TrustProxy))
+		r.With(admin).Post("/cert-rotation/rotate", handlers.RotateCertRotation(logger, deps.Store, deps.CertManager, deps.TrustProxy, deps.CertRotationGrace))
+		r.With(admin).Post("/cert-rotation/cleanup", handlers.CleanupCertRotation(logger, deps.Store, deps.CertManager, deps.TrustProxy))
 
 		r.With(viewer).Get("/devices", handlers.ListDevices(logger, deps.Store, deps.TrustProxy))
 		r.With(viewer).Get("/devices/{deviceId}", handlers.GetDevice(logger, deps.Store, deps.TrustProxy))
 		r.With(operator).Delete("/devices/{deviceId}", handlers.DeleteDevice(logger, deps.Store, deps.TrustProxy))
 		r.With(operator).Patch("/devices/{deviceId}", handlers.PatchDevice(logger, deps.Store, deps.TrustProxy))
-		r.With(applyLimiter.Middleware).Post("/devices/{deviceId}/apply-result", handlers.PostApplyResult(logger, deps.Store, deps.Events, deps.TrustProxy, deps.ClientCertHeader))
+		r.With(applyLimiter.Middleware).Post("/devices/{deviceId}/apply-result", handlers.PostApplyResult(logger, deps.Store, deps.Events, deps.TrustProxy, deps.ClientCertHeader, deps.Metrics))
 		var activeCAPool func() *x509.CertPool
 		if deps.CertManager != nil {
 			activeCAPool = deps.CertManager.ActivePool
 		}
-		r.With(checkinLimiter.Middleware).Post("/devices/checkin", handlers.DeviceCheckin(logger, deps.Store, deps.Events, deps.TrustProxy, deps.ClientCertHeader, activeCAPool))
+		r.With(checkinLimiter.Middleware).Post("/devices/checkin", handlers.DeviceCheckin(logger, deps.Store, deps.Events, deps.TrustProxy, deps.ClientCertHeader, activeCAPool, deps.Metrics))
 		r.With(checkinLimiter.Middleware).Post("/devices/reenroll", handlers.DeviceReenroll(logger, deps.Store, deps.Signer, deps.TrustProxy, deps.ClientCertHeader))
-		r.With(enrollmentLimiter.Middleware).With(operator).Post("/enrollments", handlers.CreateEnrollmentToken(logger, deps.Store, deps.License, deps.TrustProxy))
-		r.With(deviceEnrollLimiter.Middleware).Post("/devices/enroll", handlers.DeviceEnroll(logger, deps.Store, deps.License, deps.Signer, deps.TrustProxy))
+		r.With(enrollmentLimiter.Middleware).With(operator).Post("/enrollments", handlers.CreateEnrollmentToken(logger, deps.Store, deps.License, deps.TrustProxy, deps.Metrics))
+		r.With(deviceEnrollLimiter.Middleware).Post("/devices/enroll", handlers.DeviceEnroll(logger, deps.Store, deps.License, deps.Signer, deps.TrustProxy, deps.Metrics))
 		r.With(viewer).Get("/desired-state", handlers.ListDesiredState(logger, deps.Store, deps.TrustProxy))
 		r.With(operator).Put("/desired-state/groups/{groupId}", handlers.PutDesiredStateGroup(logger, deps.Store, deps.TrustProxy))
 		r.With(operator).Delete("/desired-state/groups/{groupId}", handlers.DeleteDesiredStateGroup(logger, deps.Store, deps.TrustProxy))
@@ -89,17 +97,18 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(operator).Delete("/desired-state/devices/{deviceId}", handlers.DeleteDesiredStateDevice(logger, deps.Store, deps.TrustProxy))
 		r.With(viewer).Get("/logs/{deviceId}", handlers.GetDeviceLogs(logger, deps.Store, deps.LogDir, deps.TrustProxy))
 		r.With(viewer).Get("/events", handlers.StreamEvents(logger, deps.Events))
+		r.With(viewer).Get("/health/summary", handlers.HealthSummaryHandler(logger, deps.Store))
 		r.With(viewer).Get("/maintenance", handlers.GetMaintenance(deps.Maintenance))
 		r.With(admin).Put("/maintenance", handlers.SetMaintenance(logger, deps.Store, deps.Maintenance, deps.MaintenanceToken, deps.TrustProxy))
 		r.With(admin).Get("/maintenance/backups", handlers.ListBackups(deps.BackupDir))
 		r.With(admin).Get("/maintenance/backup", handlers.GetBackupStatus(deps.Backup))
-		r.With(admin).Post("/maintenance/backup", handlers.StartBackup(logger, deps.Store, deps.Backup, deps.TrustProxy))
+		r.With(admin).Post("/maintenance/backup", handlers.StartBackup(logger, deps.Store, deps.Backup, deps.TrustProxy, deps.Metrics))
 		r.With(admin).Get("/maintenance/restore", handlers.GetRestoreStatus(deps.Restore))
-		r.With(admin).Post("/maintenance/restore", handlers.StartRestore(logger, deps.Store, deps.Restore, deps.Maintenance, deps.BackupDir, deps.TrustProxy))
+		r.With(admin).Post("/maintenance/restore", handlers.StartRestore(logger, deps.Store, deps.Restore, deps.Maintenance, deps.BackupDir, deps.TrustProxy, deps.Metrics))
 		r.With(viewer).Get("/maintenance/upgrade/available", handlers.GetUpgradeAvailable(deps.UpgradeUpdatesDir))
 		r.With(viewer).Get("/maintenance/upgrade/preflight", handlers.GetUpgradePreflight(deps.Upgrade, deps.UpgradeUpdatesDir))
 		r.With(viewer).Get("/maintenance/upgrade", handlers.GetUpgradeStatus(deps.Upgrade))
-		r.With(admin).Post("/maintenance/upgrade", handlers.ApplyUpgrade(logger, deps.Store, deps.Upgrade, deps.Maintenance, deps.MaintenanceToken, deps.TrustProxy, deps.UpgradeUpdatesDir))
+		r.With(admin).Post("/maintenance/upgrade", handlers.ApplyUpgrade(logger, deps.Store, deps.Upgrade, deps.Maintenance, deps.MaintenanceToken, deps.TrustProxy, deps.UpgradeUpdatesDir, deps.Metrics))
 	})
 
 	return r

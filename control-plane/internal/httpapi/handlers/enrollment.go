@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hardwareops/control-plane/internal/license"
+	"github.com/hardwareops/control-plane/internal/metrics"
 	"github.com/hardwareops/control-plane/internal/store"
 )
 
@@ -47,20 +48,28 @@ const (
 	maxCSRCommonName = 128
 )
 
-func CreateEnrollmentToken(logger *log.Logger, st store.Store, lic *license.Manager, trustProxy bool) http.HandlerFunc {
+func CreateEnrollmentToken(logger *log.Logger, st store.Store, lic *license.Manager, trustProxy bool, metricsCollector *metrics.Metrics) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		record := func(status, reason string) {
+			if metricsCollector != nil {
+				metricsCollector.IncEnrollmentToken(status, reason)
+			}
+		}
 		if err := enforceLicense(st, lic); err != nil {
 			status := http.StatusForbidden
 			if errors.Is(err, errLicenseLimitExceeded) {
 				status = http.StatusForbidden
+				record("error", "license_limit")
 				http.Error(w, "device limit reached", status)
 				return
 			}
 			if errors.Is(err, errLicenseInvalid) {
+				record("error", "license_invalid")
 				http.Error(w, "license invalid", status)
 				return
 			}
 			logger.Printf("license enforcement error: %v", err)
+			record("error", "license_error")
 			http.Error(w, "license enforcement error", http.StatusInternalServerError)
 			return
 		}
@@ -68,6 +77,7 @@ func CreateEnrollmentToken(logger *log.Logger, st store.Store, lic *license.Mana
 		if r.Body != nil {
 			dec := json.NewDecoder(r.Body)
 			if err := dec.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+				record("error", "bad_request")
 				http.Error(w, "invalid json", http.StatusBadRequest)
 				return
 			}
@@ -76,12 +86,14 @@ func CreateEnrollmentToken(logger *log.Logger, st store.Store, lic *license.Mana
 		expires := time.Now().UTC().Add(24 * time.Hour)
 		if req.ExpiresInSec > 0 {
 			if req.ExpiresInSec > int64(maxEnrollmentTTL.Seconds()) {
+				record("error", "expires_too_large")
 				http.Error(w, "expiresInSec too large", http.StatusBadRequest)
 				return
 			}
 			expires = time.Now().UTC().Add(time.Duration(req.ExpiresInSec) * time.Second)
 		}
 		if req.ExpiresInSec < 0 {
+			record("error", "expires_negative")
 			http.Error(w, "expiresInSec must be positive", http.StatusBadRequest)
 			return
 		}
@@ -89,6 +101,7 @@ func CreateEnrollmentToken(logger *log.Logger, st store.Store, lic *license.Mana
 		token, tokenHash, err := generateToken()
 		if err != nil {
 			logger.Printf("generate token error: %v", err)
+			record("error", "token_error")
 			http.Error(w, "token error", http.StatusInternalServerError)
 			return
 		}
@@ -96,6 +109,7 @@ func CreateEnrollmentToken(logger *log.Logger, st store.Store, lic *license.Mana
 		if err := st.CreateEnrollmentToken(tokenHash, expires); err != nil {
 			logger.Printf("store token error: %v", err)
 			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("token"), "enrollment_token.create", "enrollment_token", ""), err)
+			record("error", "storage_error")
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
@@ -107,48 +121,62 @@ func CreateEnrollmentToken(logger *log.Logger, st store.Store, lic *license.Mana
 		resp := CreateEnrollmentTokenResponse{Token: token, ExpiresAt: expires}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
+		record("success", "ok")
 	}
 }
 
 func DeviceEnroll(logger *log.Logger, st store.Store, lic *license.Manager, signer interface {
 	SignDeviceCert(csrPEM []byte, deviceID string, validity time.Duration) ([]byte, string, error)
 	CACertPEM() []byte
-}, trustProxy bool) http.HandlerFunc {
+}, trustProxy bool, metricsCollector *metrics.Metrics) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		record := func(status, reason string) {
+			if metricsCollector != nil {
+				metricsCollector.IncEnroll(status, reason)
+			}
+		}
 		if err := enforceLicense(st, lic); err != nil {
 			status := http.StatusForbidden
 			if errors.Is(err, errLicenseLimitExceeded) {
+				record("error", "license_limit")
 				http.Error(w, "device limit reached", status)
 				return
 			}
 			if errors.Is(err, errLicenseInvalid) {
+				record("error", "license_invalid")
 				http.Error(w, "license invalid", status)
 				return
 			}
 			logger.Printf("license enforcement error: %v", err)
+			record("error", "license_error")
 			http.Error(w, "license enforcement error", http.StatusInternalServerError)
 			return
 		}
 		if signer == nil {
+			record("error", "signer_missing")
 			http.Error(w, "signer not configured", http.StatusInternalServerError)
 			return
 		}
 
 		var req DeviceEnrollRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			record("error", "bad_request")
 			http.Error(w, "invalid json", http.StatusBadRequest)
 			return
 		}
 		if req.Token == "" || req.CSR == "" {
+			record("error", "bad_request")
 			http.Error(w, "token and csr required", http.StatusBadRequest)
 			return
 		}
 		if len(req.CSR) > maxCSRSize {
+			record("error", "csr_too_large")
 			http.Error(w, "csr too large", http.StatusBadRequest)
 			return
 		}
 		if err := validateCSR([]byte(req.CSR)); err != nil {
 			logger.Printf("csr validation error: %v", err)
+			record("error", "csr_invalid")
 			http.Error(w, "csr invalid", http.StatusBadRequest)
 			return
 		}
@@ -157,10 +185,12 @@ func DeviceEnroll(logger *log.Logger, st store.Store, lic *license.Manager, sign
 		ok, err := st.ConsumeEnrollmentToken(hash)
 		if err != nil {
 			logger.Printf("consume token error: %v", err)
+			record("error", "storage_error")
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
 		if !ok {
+			record("error", "token_invalid")
 			http.Error(w, "invalid or expired token", http.StatusUnauthorized)
 			return
 		}
@@ -169,6 +199,7 @@ func DeviceEnroll(logger *log.Logger, st store.Store, lic *license.Manager, sign
 		certPEM, fingerprint, err := signer.SignDeviceCert([]byte(req.CSR), deviceID, 365*24*time.Hour)
 		if err != nil {
 			logger.Printf("sign csr error: %v", err)
+			record("error", "sign_error")
 			http.Error(w, "csr invalid", http.StatusBadRequest)
 			return
 		}
@@ -189,6 +220,7 @@ func DeviceEnroll(logger *log.Logger, st store.Store, lic *license.Manager, sign
 			MetadataJSON:    meta,
 		}); err != nil {
 			logger.Printf("create device error: %v", err)
+			record("error", "storage_error")
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
@@ -205,6 +237,7 @@ func DeviceEnroll(logger *log.Logger, st store.Store, lic *license.Manager, sign
 		writeAudit(logger, st, event, nil)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
+		record("success", "ok")
 	}
 }
 

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
@@ -214,6 +215,28 @@ func (s *Store) CountDevices() (int, error) {
 		return 0, err
 	}
 	return count, nil
+}
+
+func (s *Store) CountDevicesByStatus(status string) (int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var count int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM devices WHERE status = $1`, status).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (s *Store) LatestDeviceSeen() (time.Time, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var latest time.Time
+	if err := s.pool.QueryRow(ctx, `SELECT COALESCE(MAX(last_seen), '0001-01-01'::timestamptz) FROM devices`).Scan(&latest); err != nil {
+		return time.Time{}, err
+	}
+	return latest, nil
 }
 
 func (s *Store) DeleteDevice(deviceID string) error {
@@ -697,6 +720,19 @@ func (s *Store) DeleteArtifact(artifactID string) error {
 	return tx.Commit(ctx)
 }
 
+func (s *Store) GetArtifactStats() (store.ArtifactStats, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var stats store.ArtifactStats
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*), COALESCE(SUM(size_bytes), 0)
+		FROM artifacts
+	`).Scan(&stats.Count, &stats.SizeBytes); err != nil {
+		return store.ArtifactStats{}, err
+	}
+	return stats, nil
+}
+
 func (s *Store) CreateApplyResult(result store.ApplyResult) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -853,6 +889,52 @@ func (s *Store) SetAuditRetentionDays(days int) (store.AuditRetention, error) {
 		return store.AuditRetention{}, err
 	}
 	return s.GetAuditRetentionDays()
+}
+
+func (s *Store) GetCertRotationState() (store.CertRotationState, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var st store.CertRotationState
+	var cleanedAt sql.NullTime
+	var cleanedReason sql.NullString
+	err := s.pool.QueryRow(ctx, `
+		SELECT active_fingerprint, COALESCE(previous_fingerprint, ''), rotated_at, grace_period_seconds,
+		       cleaned_at, cleaned_reason
+		FROM cert_rotation_state
+		WHERE id = 1
+	`).Scan(&st.ActiveFingerprint, &st.PreviousFingerprint, &st.RotatedAt, &st.GracePeriodSeconds, &cleanedAt, &cleanedReason)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.CertRotationState{}, false, nil
+	}
+	if err != nil {
+		return store.CertRotationState{}, false, err
+	}
+	if cleanedAt.Valid {
+		st.CleanedAt = cleanedAt.Time
+	}
+	if cleanedReason.Valid {
+		st.CleanedReason = cleanedReason.String
+	}
+	return st, true, nil
+}
+
+func (s *Store) SetCertRotationState(state store.CertRotationState) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO cert_rotation_state (
+			id, active_fingerprint, previous_fingerprint, rotated_at, grace_period_seconds, cleaned_at, cleaned_reason
+		) VALUES (1, $1, $2, $3, $4, $5, $6)
+		ON CONFLICT (id) DO UPDATE SET
+			active_fingerprint = EXCLUDED.active_fingerprint,
+			previous_fingerprint = EXCLUDED.previous_fingerprint,
+			rotated_at = EXCLUDED.rotated_at,
+			grace_period_seconds = EXCLUDED.grace_period_seconds,
+			cleaned_at = EXCLUDED.cleaned_at,
+			cleaned_reason = EXCLUDED.cleaned_reason
+	`, state.ActiveFingerprint, nullIfEmpty(state.PreviousFingerprint), state.RotatedAt, state.GracePeriodSeconds,
+		nullIfZeroTime(state.CleanedAt), nullIfEmpty(state.CleanedReason))
+	return err
 }
 
 func (s *Store) CreateUser(user store.User) error {

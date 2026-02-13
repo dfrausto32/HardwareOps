@@ -28,6 +28,7 @@ type CertRotationStatus struct {
 	ActiveCA     CAInfo               `json:"activeCa"`
 	ClientCA     CAInfo               `json:"clientCa"`
 	DeviceCounts RotationDeviceCounts `json:"deviceCounts"`
+	Cleanup      CleanupStatus        `json:"cleanup"`
 	UpdatedAt    time.Time            `json:"updatedAt"`
 	Errors       []string             `json:"errors,omitempty"`
 }
@@ -47,6 +48,19 @@ type RotationDeviceCounts struct {
 	Active        int `json:"active"`
 	NeedsReenroll int `json:"needsReenroll"`
 	Unknown       int `json:"unknown"`
+}
+
+type CleanupStatus struct {
+	Eligible            bool      `json:"eligible"`
+	Reason              string    `json:"reason,omitempty"`
+	ActiveFingerprint   string    `json:"activeFingerprint,omitempty"`
+	PreviousFingerprint string    `json:"previousFingerprint,omitempty"`
+	RotatedAt           time.Time `json:"rotatedAt,omitempty"`
+	GracePeriodSeconds  int64     `json:"gracePeriodSec,omitempty"`
+	GraceDeadline       time.Time `json:"graceDeadline,omitempty"`
+	GraceRemainingSec   int64     `json:"graceRemainingSec,omitempty"`
+	CleanedAt           time.Time `json:"cleanedAt,omitempty"`
+	CleanedReason       string    `json:"cleanedReason,omitempty"`
 }
 
 func GetCertRotationStatus(logger *log.Logger, st store.Store, mgr *certs.Manager) http.HandlerFunc {
@@ -76,7 +90,7 @@ func ReloadCertRotation(logger *log.Logger, st store.Store, mgr *certs.Manager, 
 	}
 }
 
-func RotateCertRotation(logger *log.Logger, st store.Store, mgr *certs.Manager, trustProxy bool) http.HandlerFunc {
+func RotateCertRotation(logger *log.Logger, st store.Store, mgr *certs.Manager, trustProxy bool, gracePeriod time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if mgr == nil {
 			http.Error(w, "cert manager not configured", http.StatusServiceUnavailable)
@@ -100,10 +114,17 @@ func RotateCertRotation(logger *log.Logger, st store.Store, mgr *certs.Manager, 
 			return
 		}
 
+		oldFingerprint := state.ActiveFingerprint
 		newCertPEM, newKeyPEM, err := generateRotationCA(state.ActiveCert)
 		if err != nil {
 			logger.Printf("cert rotate generate error: %v", err)
 			http.Error(w, fmt.Sprintf("generate CA failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		newFingerprint, _, err := caFingerprintFromPEM(newCertPEM)
+		if err != nil {
+			logger.Printf("cert rotate fingerprint error: %v", err)
+			http.Error(w, fmt.Sprintf("fingerprint CA failed: %v", err), http.StatusInternalServerError)
 			return
 		}
 
@@ -136,7 +157,103 @@ func RotateCertRotation(logger *log.Logger, st store.Store, mgr *certs.Manager, 
 			return
 		}
 
+		if st != nil {
+			graceSeconds := int64(gracePeriod.Seconds())
+			if graceSeconds < 0 {
+				graceSeconds = 0
+			}
+			if err := st.SetCertRotationState(store.CertRotationState{
+				ActiveFingerprint:   newFingerprint,
+				PreviousFingerprint: oldFingerprint,
+				RotatedAt:           time.Now().UTC(),
+				GracePeriodSeconds:  graceSeconds,
+			}); err != nil {
+				logger.Printf("cert rotate state error: %v", err)
+			}
+		}
+
 		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "certs.rotate", "certs", "")
+		writeAudit(logger, st, event, nil)
+
+		status := buildRotationStatus(logger, st, mgr)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(status)
+	}
+}
+
+func CleanupCertRotation(logger *log.Logger, st store.Store, mgr *certs.Manager, trustProxy bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if mgr == nil {
+			http.Error(w, "cert manager not configured", http.StatusServiceUnavailable)
+			return
+		}
+		state := mgr.State()
+		if state.ClientCAPath == "" {
+			http.Error(w, "CA_BUNDLE_PATH not set", http.StatusBadRequest)
+			return
+		}
+		if state.ActiveCertPath == "" || state.ActiveCertPEM == nil {
+			http.Error(w, "active CA cert not loaded", http.StatusBadRequest)
+			return
+		}
+		if samePath(state.ActiveCertPath, state.ClientCAPath) {
+			http.Error(w, "CA_BUNDLE_PATH must be different from ACTIVE_CA_CERT_PATH", http.StatusBadRequest)
+			return
+		}
+		if st == nil {
+			http.Error(w, "store not configured", http.StatusServiceUnavailable)
+			return
+		}
+		rotationState, ok, err := st.GetCertRotationState()
+		if err != nil {
+			logger.Printf("cert cleanup state error: %v", err)
+			http.Error(w, "rotation state error", http.StatusInternalServerError)
+			return
+		}
+		if !ok || rotationState.PreviousFingerprint == "" {
+			http.Error(w, "rotation state not found", http.StatusBadRequest)
+			return
+		}
+		counts, err := countRotationDevices(st)
+		if err != nil {
+			logger.Printf("cert cleanup count error: %v", err)
+			http.Error(w, "device count error", http.StatusInternalServerError)
+			return
+		}
+
+		cleanup := evaluateCleanup(rotationState, counts, state.ActiveFingerprint)
+		if !cleanup.Eligible {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(CertRotationStatus{
+				ActiveCA:     CAInfo{Path: state.ActiveCertPath},
+				ClientCA:     CAInfo{Path: state.ClientCAPath, CertCount: len(state.ClientCerts), ContainsActive: state.ClientContainsActive},
+				DeviceCounts: counts,
+				Cleanup:      cleanup,
+				UpdatedAt:    time.Now().UTC(),
+			})
+			return
+		}
+
+		if err := writeFileSecure(state.ClientCAPath, state.ActiveCertPEM, 0644); err != nil {
+			logger.Printf("cert cleanup write error: %v", err)
+			http.Error(w, fmt.Sprintf("write CA bundle failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if _, err := mgr.Reload(); err != nil {
+			logger.Printf("cert cleanup reload error: %v", err)
+			http.Error(w, fmt.Sprintf("reload failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		rotationState.CleanedAt = time.Now().UTC()
+		rotationState.CleanedReason = cleanup.Reason
+		rotationState.ActiveFingerprint = state.ActiveFingerprint
+		if err := st.SetCertRotationState(rotationState); err != nil {
+			logger.Printf("cert cleanup state update error: %v", err)
+		}
+
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "certs.cleanup", "certs", "")
 		writeAudit(logger, st, event, nil)
 
 		status := buildRotationStatus(logger, st, mgr)
@@ -187,11 +304,65 @@ func buildRotationStatus(logger *log.Logger, st store.Store, mgr *certs.Manager)
 		errs = append(errs, "device count error")
 	}
 	status.DeviceCounts = counts
+	if st != nil {
+		if rotationState, ok, err := st.GetCertRotationState(); err != nil {
+			logger.Printf("rotation state fetch error: %v", err)
+			errs = append(errs, "rotation state error")
+		} else if ok {
+			status.Cleanup = evaluateCleanup(rotationState, counts, state.ActiveFingerprint)
+		} else {
+			status.Cleanup = CleanupStatus{Reason: "no-rotation"}
+		}
+	}
 
 	if len(errs) > 0 {
 		status.Errors = errs
 	}
 	return status
+}
+
+func evaluateCleanup(rotation store.CertRotationState, counts RotationDeviceCounts, activeFingerprint string) CleanupStatus {
+	now := time.Now().UTC()
+	out := CleanupStatus{
+		ActiveFingerprint:   rotation.ActiveFingerprint,
+		PreviousFingerprint: rotation.PreviousFingerprint,
+		RotatedAt:           rotation.RotatedAt,
+		GracePeriodSeconds:  rotation.GracePeriodSeconds,
+		CleanedAt:           rotation.CleanedAt,
+		CleanedReason:       rotation.CleanedReason,
+	}
+	if rotation.PreviousFingerprint == "" || rotation.RotatedAt.IsZero() {
+		out.Reason = "no-rotation"
+		return out
+	}
+	if rotation.ActiveFingerprint != "" && activeFingerprint != "" && rotation.ActiveFingerprint != activeFingerprint {
+		out.Reason = "active-mismatch"
+		return out
+	}
+	if !rotation.CleanedAt.IsZero() {
+		out.Reason = "cleaned"
+		return out
+	}
+	grace := time.Duration(rotation.GracePeriodSeconds) * time.Second
+	if grace > 0 {
+		out.GraceDeadline = rotation.RotatedAt.Add(grace)
+		if now.Before(out.GraceDeadline) {
+			out.GraceRemainingSec = int64(out.GraceDeadline.Sub(now).Seconds())
+		}
+	}
+	coverageComplete := counts.Total == 0 || counts.Active == counts.Total
+	if coverageComplete {
+		out.Eligible = true
+		out.Reason = "coverage"
+		return out
+	}
+	if grace > 0 && now.After(rotation.RotatedAt.Add(grace)) {
+		out.Eligible = true
+		out.Reason = "grace"
+		return out
+	}
+	out.Reason = "waiting"
+	return out
 }
 
 func fingerprintCert(cert *x509.Certificate) string {

@@ -42,7 +42,7 @@ func TestCreateEnrollmentToken(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/enrollments", bytes.NewReader([]byte(`{"expiresInSec":3600}`)))
 	w := httptest.NewRecorder()
 
-	CreateEnrollmentToken(logger, mem, nil, false).ServeHTTP(w, req)
+	CreateEnrollmentToken(logger, mem, nil, false, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -71,7 +71,7 @@ func TestDeviceEnroll_Valid(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/enroll", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
-	DeviceEnroll(logger, mem, nil, signer, false).ServeHTTP(w, req)
+	DeviceEnroll(logger, mem, nil, signer, false, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -99,7 +99,7 @@ func TestDeviceEnroll_InvalidToken(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/enroll", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
-	DeviceEnroll(logger, mem, nil, signer, false).ServeHTTP(w, req)
+	DeviceEnroll(logger, mem, nil, signer, false, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", w.Code)
@@ -119,7 +119,7 @@ func TestDeviceEnroll_InvalidCSR(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/enroll", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
-	DeviceEnroll(logger, mem, nil, signer, false).ServeHTTP(w, req)
+	DeviceEnroll(logger, mem, nil, signer, false, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
@@ -136,7 +136,7 @@ func TestDeviceEnroll_SignerMissing(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/enroll", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
-	DeviceEnroll(logger, mem, nil, nil, false).ServeHTTP(w, req)
+	DeviceEnroll(logger, mem, nil, nil, false, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d", w.Code)
@@ -150,7 +150,7 @@ func TestCreateEnrollmentToken_InvalidJSON(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/enrollments", bytes.NewReader([]byte(`{bad-json`)))
 	w := httptest.NewRecorder()
 
-	CreateEnrollmentToken(logger, mem, nil, false).ServeHTTP(w, req)
+	CreateEnrollmentToken(logger, mem, nil, false, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
@@ -164,7 +164,7 @@ func TestCreateEnrollmentToken_TooLarge(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/enrollments", bytes.NewReader([]byte(`{"expiresInSec":999999999}`)))
 	w := httptest.NewRecorder()
 
-	CreateEnrollmentToken(logger, mem, nil, false).ServeHTTP(w, req)
+	CreateEnrollmentToken(logger, mem, nil, false, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
@@ -205,7 +205,7 @@ func TestDeviceEnroll_RejectsEmptyCN(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/enroll", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
-	DeviceEnroll(logger, mem, nil, signer, false).ServeHTTP(w, req)
+	DeviceEnroll(logger, mem, nil, signer, false, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
@@ -227,7 +227,7 @@ func TestDeviceEnroll_RejectsWildcardSAN(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/enroll", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
-	DeviceEnroll(logger, mem, nil, signer, false).ServeHTTP(w, req)
+	DeviceEnroll(logger, mem, nil, signer, false, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)

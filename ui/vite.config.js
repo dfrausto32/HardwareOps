@@ -30,6 +30,11 @@ export default defineConfig(({ mode }) => {
               changeOrigin: true,
               secure: false,
             },
+            '/metrics': {
+              target: apiBase,
+              changeOrigin: true,
+              secure: false,
+            },
           }
         : undefined,
     },

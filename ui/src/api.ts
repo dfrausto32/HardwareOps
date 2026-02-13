@@ -261,6 +261,12 @@ export async function rotateRotation() {
   })
 }
 
+export async function cleanupRotation() {
+  return requestJson('/api/v1/cert-rotation/cleanup', {
+    method: 'POST',
+  })
+}
+
 export async function listBackups() {
   return requestJson('/api/v1/maintenance/backups')
 }
@@ -284,6 +290,14 @@ export async function startRestore(id: string) {
     method: 'POST',
     body: JSON.stringify({ id, wipe: true }),
   })
+}
+
+export async function getHealthSummary() {
+  return requestJson('/api/v1/health/summary')
+}
+
+export async function getMetricsText() {
+  return requestText('/metrics')
 }
 
 export async function login(email: string, password: string) {

@@ -27,13 +27,16 @@ import {
   startBackup,
   getRestoreStatus,
   startRestore,
+  getHealthSummary,
   getRotationStatus,
   reloadRotation,
   rotateRotation,
+  cleanupRotation,
   listAuditEvents,
   downloadAuditCSV,
   getAuditRetention,
   setAuditRetention,
+  getMetricsText,
   login as apiLogin,
   getMe,
   getAuthStatus,
@@ -47,7 +50,9 @@ import {
 
 const nav = [
   { id: 'dashboard', label: 'Dashboard', icon: 'icon-dashboard' },
+  { id: 'metrics', label: 'Metrics', icon: 'icon-metrics' },
   { id: 'logs', label: 'Logs', icon: 'icon-logs' },
+  { id: 'security', label: 'Security', icon: 'icon-security' },
   { id: 'settings', label: 'Settings', icon: 'icon-settings' },
 ]
 
@@ -59,6 +64,160 @@ const componentTypes = [
   { id: 'container_image', label: 'Container Image' },
   { id: 'agent_bundle', label: 'Agent Bundle' },
 ]
+
+const rangeOptions = [
+  { id: '15m', label: '15m', ms: 15 * 60 * 1000 },
+  { id: '1h', label: '1h', ms: 60 * 60 * 1000 },
+  { id: '6h', label: '6h', ms: 6 * 60 * 60 * 1000 },
+  { id: '24h', label: '24h', ms: 24 * 60 * 60 * 1000 },
+]
+
+const rangeMsById = rangeOptions.reduce((acc, item) => {
+  acc[item.id] = item.ms
+  return acc
+}, {})
+
+const chartColors = {
+  total: '#8aa5ff',
+  active: '#3bd487',
+  degraded: '#f1c76f',
+  stale: '#9aa3ad',
+  offline: '#f27272',
+  success: '#3bd487',
+  error: '#f27272',
+  warning: '#f1c76f',
+  info: '#8aa5ff',
+}
+
+function formatChartValue(value, integerOnly) {
+  if (value === null || value === undefined || Number.isNaN(value)) return '—'
+  if (integerOnly) return Math.round(value).toLocaleString()
+  return Number(value).toLocaleString()
+}
+
+function TimeSeriesChart({ series = [], rangeMs = rangeMsById['1h'], height = 180, integerOnly = false }) {
+  const now = Date.now()
+  const startTs = now - rangeMs
+  const width = 1000
+  const padding = 10
+
+  const normalizedSeries = series.map((entry) => ({
+    ...entry,
+    points: (entry.points || []).filter((point) => point.ts >= startTs),
+  }))
+  const allPoints = normalizedSeries.flatMap((entry) => entry.points || [])
+  if (allPoints.length === 0) {
+    return <div className="placeholder">No data yet.</div>
+  }
+  const values = allPoints.map((point) => Number(point.value || 0))
+  let minY = Math.min(...values)
+  let maxY = Math.max(...values)
+  if (!Number.isFinite(minY) || !Number.isFinite(maxY)) {
+    minY = 0
+    maxY = 1
+  }
+  minY = Math.min(0, minY)
+  if (integerOnly) {
+    minY = Math.floor(minY)
+    maxY = Math.ceil(maxY)
+  }
+  if (minY === maxY) {
+    maxY = minY + 1
+  }
+  const tickCount = 4
+  let tickStep = (maxY - minY) / tickCount
+  if (integerOnly) {
+    tickStep = Math.max(1, Math.ceil(tickStep))
+    maxY = minY + tickStep * tickCount
+  }
+  const ticks = Array.from({ length: tickCount + 1 }, (_, idx) => maxY - idx * tickStep)
+
+  const xFor = (ts) => {
+    const ratio = Math.min(Math.max((ts - startTs) / rangeMs, 0), 1)
+    return padding + ratio * (width - padding * 2)
+  }
+  const yFor = (value) => {
+    const ratio = (Number(value || 0) - minY) / (maxY - minY)
+    return height - padding - ratio * (height - padding * 2)
+  }
+
+  return (
+    <div className="chart">
+      <div className="chart-body">
+        <div className="chart-y" style={{ gridTemplateRows: `repeat(${ticks.length}, 1fr)` }}>
+          {ticks.map((tick) => (
+            <span key={tick}>{formatChartValue(tick, integerOnly)}</span>
+          ))}
+        </div>
+        <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
+          <rect className="chart-bg" x="0" y="0" width={width} height={height} />
+          {ticks.map((tick) => {
+            const y = yFor(tick)
+            return (
+              <line
+                key={`grid-${tick}`}
+                className="chart-grid"
+                x1={padding}
+                x2={width - padding}
+                y1={y}
+                y2={y}
+              />
+            )
+          })}
+          {normalizedSeries.map((entry) => (
+            <g key={entry.id}>
+              <polyline
+                className="chart-line"
+                stroke={entry.color || '#999'}
+                points={(entry.points || [])
+                  .map((point) => `${xFor(point.ts)},${yFor(point.value)}`)
+                  .join(' ')}
+              />
+              {entry.points && entry.points.length > 0 && (() => {
+                const lastPoint = entry.points[entry.points.length - 1]
+                const x = xFor(lastPoint.ts)
+                const y = yFor(lastPoint.value)
+                const labelText = formatChartValue(lastPoint.value, integerOnly)
+                const anchor = x > width - 80 ? 'end' : 'start'
+                const xLabel = anchor === 'end' ? x - 6 : x + 6
+                return (
+                  <text
+                    className="chart-last-label"
+                    x={xLabel}
+                    y={y}
+                    textAnchor={anchor}
+                    alignmentBaseline="middle"
+                    fill={entry.color || '#fff'}
+                  >
+                    {labelText}
+                  </text>
+                )
+              })()}
+            </g>
+          ))}
+        </svg>
+      </div>
+      <div className="chart-footer">
+        <span>{new Date(startTs).toLocaleTimeString()}</span>
+        <span>Now</span>
+      </div>
+    </div>
+  )
+}
+
+function ChartLegend({ series }) {
+  if (!series || series.length === 0) return null
+  return (
+    <div className="chart-legend">
+      {series.map((entry) => (
+        <div key={entry.id} className="legend-item">
+          <span className="legend-dot" style={{ background: entry.color }} />
+          {entry.label}
+        </div>
+      ))}
+    </div>
+  )
+}
 
 function newComponentRow(overrides = {}) {
   return {
@@ -187,6 +346,86 @@ function formatTime(value) {
   const dt = new Date(value)
   if (Number.isNaN(dt.getTime())) return String(value)
   return dt.toLocaleString()
+}
+
+function formatNumber(value) {
+  if (value === null || value === undefined || Number.isNaN(value)) return '—'
+  return Number(value).toLocaleString()
+}
+
+function formatBytes(value) {
+  if (value === null || value === undefined || Number.isNaN(value)) return '—'
+  const size = Number(value)
+  if (size < 1024) return `${size} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let idx = -1
+  let current = size
+  while (current >= 1024 && idx < units.length - 1) {
+    current /= 1024
+    idx += 1
+  }
+  return `${current.toFixed(current >= 10 ? 0 : 1)} ${units[idx]}`
+}
+
+function formatDurationSeconds(seconds) {
+  if (!seconds || seconds <= 0) return '—'
+  let remaining = Math.floor(seconds)
+  const days = Math.floor(remaining / 86400)
+  remaining -= days * 86400
+  const hours = Math.floor(remaining / 3600)
+  remaining -= hours * 3600
+  const minutes = Math.floor(remaining / 60)
+  const parts = []
+  if (days) parts.push(`${days}d`)
+  if (hours) parts.push(`${hours}h`)
+  if (!days && minutes) parts.push(`${minutes}m`)
+  return parts.join(' ') || '—'
+}
+
+function parsePrometheusMetrics(text) {
+  const values = {}
+  const labeled = {}
+  if (!text) return { values, labeled }
+  const lines = text.split(/\r?\n/)
+  for (const line of lines) {
+    if (!line || line.startsWith('#')) continue
+    const match = line.match(/^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{[^}]*\})?\s+([-+eE0-9.]+)$/)
+    if (!match) continue
+    const name = match[1]
+    const labelSet = match[2]
+    const value = Number(match[3])
+    if (Number.isNaN(value)) continue
+    if (!labelSet) {
+      values[name] = value
+      continue
+    }
+    const labels = {}
+    const body = labelSet.slice(1, -1)
+    const labelRe = /([a-zA-Z_][a-zA-Z0-9_]*)="([^"]*)"/g
+    let labelMatch
+    while ((labelMatch = labelRe.exec(body))) {
+      labels[labelMatch[1]] = labelMatch[2]
+    }
+    if (!labeled[name]) labeled[name] = []
+    labeled[name].push({ labels, value })
+  }
+  return { values, labeled }
+}
+
+function sumLabeled(metrics, name) {
+  const items = metrics.labeled?.[name] || []
+  return items.reduce((acc, item) => acc + Number(item.value || 0), 0)
+}
+
+function groupLabeledMetrics(metrics, name, labelKey, mapLabel) {
+  const items = metrics.labeled?.[name] || []
+  const out = {}
+  items.forEach((item) => {
+    const raw = item.labels?.[labelKey] || 'unknown'
+    const key = mapLabel ? mapLabel(raw) : raw
+    out[key] = (out[key] || 0) + Number(item.value || 0)
+  })
+  return out
 }
 
 export default function App() {
@@ -361,6 +600,29 @@ export default function App() {
   const [logTo, setLogTo] = useState('')
   const [logLoading, setLogLoading] = useState(false)
 
+  const [healthSummary, setHealthSummary] = useState(null)
+  const [healthSummaryError, setHealthSummaryError] = useState('')
+  const [healthHistory, setHealthHistory] = useState([])
+  const [healthRange, setHealthRange] = useState(() => {
+    return localStorage.getItem('hwops-range-dashboard') || '1h'
+  })
+  const [metricsSnapshot, setMetricsSnapshot] = useState({
+    dbOpenConns: null,
+    dbInUse: null,
+    dbWaitCount: null,
+    s3ObjectsTotal: null,
+    s3BytesTotal: null,
+    devicesTotal: null,
+    httpLatencyAvg: null,
+    devicesStatus: {},
+    updatedAt: '',
+  })
+  const [metricsHistory, setMetricsHistory] = useState([])
+  const [metricsRange, setMetricsRange] = useState(() => {
+    return localStorage.getItem('hwops-range-metrics') || '1h'
+  })
+  const [metricsError, setMetricsError] = useState('')
+
   const [auditRows, setAuditRows] = useState([])
   const [auditLoading, setAuditLoading] = useState(false)
   const [auditError, setAuditError] = useState('')
@@ -376,7 +638,7 @@ export default function App() {
   const [auditRetention, setAuditRetentionState] = useState({ days: 90, updatedAt: '' })
   const [auditRetentionDays, setAuditRetentionDays] = useState('90')
   const [auditRetentionStatus, setAuditRetentionStatus] = useState('')
-  const [logsTab, setLogsTab] = useState('device')
+  const [logsTab, setLogsTab] = useState('events')
   const [rotationStatus, setRotationStatus] = useState(null)
   const [rotationLoading, setRotationLoading] = useState(false)
   const [rotationError, setRotationError] = useState('')
@@ -558,6 +820,14 @@ export default function App() {
   }, [drawerWidth])
 
   useEffect(() => {
+    localStorage.setItem('hwops-range-dashboard', healthRange)
+  }, [healthRange])
+
+  useEffect(() => {
+    localStorage.setItem('hwops-range-metrics', metricsRange)
+  }, [metricsRange])
+
+  useEffect(() => {
     selectedDeviceIdRef.current = selectedDeviceId
   }, [selectedDeviceId])
 
@@ -577,6 +847,7 @@ export default function App() {
     loadUpgrade()
     loadUpgradeAvailable()
     loadUpgradePreflight()
+    loadHealthSummary()
     loadBackups()
     loadBackupStatus()
     loadRestoreStatus()
@@ -672,10 +943,36 @@ export default function App() {
     return () => clearInterval(timer)
   }, [restoreStatus.running])
 
+  const isAdmin = useMemo(() => {
+    if (!authStatus.enabled) return true
+    return (authUser?.roles || []).includes('admin')
+  }, [authStatus.enabled, authUser])
+  const canRotate = useMemo(() => {
+    return !authStatus.enabled || isAdmin
+  }, [authStatus.enabled, isAdmin])
+
   useEffect(() => {
-    if (view !== 'logs' || logsTab !== 'rotation') return
+    if (view !== 'dashboard') return undefined
+    loadHealthSummary()
+    const timer = setInterval(() => {
+      loadHealthSummary()
+    }, 15000)
+    return () => clearInterval(timer)
+  }, [view])
+
+  useEffect(() => {
+    if (view !== 'metrics') return undefined
+    loadMetrics()
+    const timer = setInterval(() => {
+      loadMetrics()
+    }, 15000)
+    return () => clearInterval(timer)
+  }, [view, authStatus.enabled, isAdmin])
+
+  useEffect(() => {
+    if (view !== 'security') return
     loadRotationStatus()
-  }, [view, logsTab])
+  }, [view])
 
   useEffect(() => {
     if (!deviceDrawerOpen) return
@@ -788,28 +1085,27 @@ export default function App() {
   }, [wsUrl])
 
   const dashboard = useMemo(() => {
-    const total = devices.length
-    const active = devices.filter((d) => d.status === 'active').length
-    const lastSeen = devices
-      .map((d) => (d.lastSeen ? new Date(d.lastSeen) : null))
-      .filter(Boolean)
-      .sort((a, b) => b - a)[0]
+    const summary = healthSummary?.devices
+    const total = summary?.total ?? devices.length
+    const active = summary?.active ?? devices.filter((d) => d.status === 'active').length
+    const stale = summary?.stale ?? devices.filter((d) => d.status === 'stale').length
+    const offline = summary?.offline ?? devices.filter((d) => d.status === 'offline').length
+    const degraded = summary?.degraded ?? devices.filter((d) => d.status === 'degraded').length
+    const lastSeen = summary?.lastSeen
+      ? new Date(summary.lastSeen)
+      : devices
+        .map((d) => (d.lastSeen ? new Date(d.lastSeen) : null))
+        .filter(Boolean)
+        .sort((a, b) => b - a)[0]
     const lastSeenLabel = lastSeen ? lastSeen.toISOString() : '—'
-    return { total, active, lastSeenLabel }
-  }, [devices, deviceDetail])
+    return { total, active, stale, offline, degraded, lastSeenLabel }
+  }, [healthSummary, devices, deviceDetail])
 
   const preApplyBadgeClass = useMemo(() => {
     const raw = (deviceDetail?.current?.lastPreApplyStatus || '').toLowerCase()
     if (!raw || raw === '—') return 'unknown'
     return raw
   }, [deviceDetail])
-
-  const isAdmin = useMemo(() => {
-    return (authUser?.roles || []).includes('admin')
-  }, [authUser])
-  const canRotate = useMemo(() => {
-    return !authStatus.enabled || isAdmin
-  }, [authStatus.enabled, isAdmin])
 
   const notifications = useMemo(() => {
     const items = []
@@ -1354,6 +1650,24 @@ export default function App() {
     }
   }
 
+  async function handleCleanupRotation() {
+    if (!canRotate) return
+    const confirmed = window.confirm(
+      'Prune the old CA from the bundle? Devices still on the old CA will stop checking in once removed.',
+    )
+    if (!confirmed) return
+    setRotationMessage('Cleaning up CA bundle...')
+    setRotationError('')
+    try {
+      const res = await cleanupRotation()
+      setRotationStatus(res)
+      setRotationMessage('Old CA removed from bundle')
+    } catch (err) {
+      setRotationMessage('')
+      setRotationError(err.message || String(err))
+    }
+  }
+
   async function loadAuditRetention() {
     try {
       const res = await getAuditRetention()
@@ -1420,6 +1734,116 @@ export default function App() {
     } catch (err) {
       setUpgradePreflightStatus('')
       setUpgradePreflightError(err.message || String(err))
+    }
+  }
+
+  async function loadHealthSummary() {
+    setHealthSummaryError('')
+    try {
+      const res = await getHealthSummary()
+      setHealthSummary(res)
+      const summary = res?.devices || {}
+      const total = summary.total ?? devices.length
+      const active = summary.active ?? devices.filter((d) => d.status === 'active').length
+      const stale = summary.stale ?? devices.filter((d) => d.status === 'stale').length
+      const offline = summary.offline ?? devices.filter((d) => d.status === 'offline').length
+      const degraded = summary.degraded ?? devices.filter((d) => d.status === 'degraded').length
+      const entry = {
+        ts: Date.now(),
+        total,
+        active,
+        stale,
+        offline,
+        degraded,
+      }
+      setHealthHistory((prev) => {
+        const now = entry.ts
+        const maxAge = rangeMsById['24h'] || 24 * 60 * 60 * 1000
+        const trimmed = [...prev, entry].filter((point) => now - point.ts <= maxAge)
+        if (trimmed.length > 2000) {
+          return trimmed.slice(trimmed.length - 2000)
+        }
+        return trimmed
+      })
+    } catch (err) {
+      setHealthSummaryError(err.message || String(err))
+    }
+  }
+
+  async function loadMetrics() {
+    if (authStatus.enabled && !isAdmin) return
+    setMetricsError('')
+    try {
+      const text = await getMetricsText()
+      const parsed = parsePrometheusMetrics(text)
+      const devicesStatus = groupLabeledMetrics(parsed, 'hwops_devices_status_total', 'status')
+      const checkinStatus = groupLabeledMetrics(parsed, 'hwops_checkin_total', 'status')
+      const enrollStatus = groupLabeledMetrics(parsed, 'hwops_enroll_total', 'status')
+      const enrollTokenStatus = groupLabeledMetrics(parsed, 'hwops_enrollment_token_total', 'status')
+      const applyStatus = groupLabeledMetrics(parsed, 'hwops_apply_total', 'status')
+      const preApplyStatus = groupLabeledMetrics(parsed, 'hwops_preapply_total', 'status')
+      const uploadStatus = groupLabeledMetrics(parsed, 'hwops_artifact_upload_total', 'status')
+      const presignStatus = groupLabeledMetrics(parsed, 'hwops_artifact_presign_total', 'status')
+      const rateLimitByEndpoint = groupLabeledMetrics(parsed, 'hwops_rate_limit_total', 'endpoint')
+      const upgradeStatus = groupLabeledMetrics(parsed, 'hwops_upgrade_total', 'status')
+      const backupStatus = groupLabeledMetrics(parsed, 'hwops_backup_total', 'operation', (label) => label || 'backup')
+      const pendingByType = groupLabeledMetrics(parsed, 'hwops_pending_actions_total', 'type')
+      const httpByStatus = groupLabeledMetrics(parsed, 'hwops_http_requests_total', 'status', (label) => {
+        if (!label) return 'other'
+        if (label.startsWith('2')) return '2xx'
+        if (label.startsWith('3')) return '3xx'
+        if (label.startsWith('4')) return '4xx'
+        if (label.startsWith('5')) return '5xx'
+        return 'other'
+      })
+      const httpLatencySum = sumLabeled(parsed, 'hwops_http_request_duration_seconds_sum')
+      const httpLatencyCount = sumLabeled(parsed, 'hwops_http_request_duration_seconds_count')
+      const httpLatencyAvg = httpLatencyCount > 0 ? (httpLatencySum / httpLatencyCount) * 1000 : null
+
+      const snapshot = {
+        ts: Date.now(),
+        values: {
+          dbOpenConns: parsed.values.hwops_db_open_conns ?? null,
+          dbInUse: parsed.values.hwops_db_in_use ?? null,
+          dbWaitCount: parsed.values.hwops_db_wait_count ?? null,
+          s3ObjectsTotal: parsed.values.hwops_s3_objects_total ?? null,
+          s3BytesTotal: parsed.values.hwops_s3_bytes_total ?? null,
+          devicesTotal: parsed.values.hwops_devices_total ?? null,
+          httpLatencyAvg,
+        },
+        labels: {
+          devicesStatus,
+          checkinStatus,
+          enrollStatus,
+          enrollTokenStatus,
+          applyStatus,
+          preApplyStatus,
+          uploadStatus,
+          presignStatus,
+          rateLimitByEndpoint,
+          upgradeStatus,
+          backupStatus,
+          pendingByType,
+          httpByStatus,
+        },
+      }
+
+      setMetricsSnapshot({
+        ...snapshot.values,
+        devicesStatus,
+        updatedAt: new Date().toISOString(),
+      })
+      setMetricsHistory((prev) => {
+        const now = snapshot.ts
+        const maxAge = rangeMsById['24h'] || 24 * 60 * 60 * 1000
+        const trimmed = [...prev, snapshot].filter((point) => now - point.ts <= maxAge)
+        if (trimmed.length > 2000) {
+          return trimmed.slice(trimmed.length - 2000)
+        }
+        return trimmed
+      })
+    } catch (err) {
+      setMetricsError(err.message || String(err))
     }
   }
 
@@ -1638,6 +2062,93 @@ export default function App() {
     return sorted
   }, [logRows, logFilter, logFrom, logTo, logSort])
   const liveEvents = eventsFeed.slice(0, 25)
+  const healthRangeMs = rangeMsById[healthRange] || rangeMsById['1h']
+  const metricsRangeMs = rangeMsById[metricsRange] || rangeMsById['1h']
+  const healthSeries = useMemo(() => {
+    const now = Date.now()
+    const cutoff = now - healthRangeMs
+    const points = healthHistory.filter((item) => item.ts >= cutoff)
+    return [
+      { id: 'total', label: 'Total', color: chartColors.total, points: points.map((p) => ({ ts: p.ts, value: p.total })) },
+      { id: 'active', label: 'Active', color: chartColors.active, points: points.map((p) => ({ ts: p.ts, value: p.active })) },
+      { id: 'degraded', label: 'Degraded', color: chartColors.degraded, points: points.map((p) => ({ ts: p.ts, value: p.degraded })) },
+      { id: 'stale', label: 'Stale', color: chartColors.stale, points: points.map((p) => ({ ts: p.ts, value: p.stale })) },
+      { id: 'offline', label: 'Offline', color: chartColors.offline, points: points.map((p) => ({ ts: p.ts, value: p.offline })) },
+    ]
+  }, [healthHistory, healthRangeMs])
+  const dashboardSeries = useMemo(() => {
+    return healthSeries.filter((entry) => entry.id === 'active')
+  }, [healthSeries])
+
+  const metricsLatest = metricsHistory[metricsHistory.length - 1]
+  const metricsSeries = useMemo(() => {
+    const history = metricsHistory
+    if (history.length === 0) return {}
+    const seriesFromKey = (key, label, color) => ({
+      id: key,
+      label,
+      color,
+      points: history.map((item) => ({ ts: item.ts, value: item.values?.[key] ?? 0 })),
+    })
+    const seriesFromLabels = (bucketKey, labels, colorMap = {}) =>
+      labels.map((label) => ({
+        id: `${bucketKey}-${label}`,
+        label,
+        color: colorMap[label] || chartColors[label] || '#8aa5ff',
+        points: history.map((item) => ({ ts: item.ts, value: item.labels?.[bucketKey]?.[label] ?? 0 })),
+      }))
+
+    const rateLimitEntries = Object.entries(metricsLatest?.labels?.rateLimitByEndpoint || {})
+    const rateLimitLabels = rateLimitEntries
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([label]) => label)
+    const pendingLabels = Object.keys(metricsLatest?.labels?.pendingByType || {})
+    const dynamicPalette = ['#8aa5ff', '#3bd487', '#f1c76f', '#f27272', '#9aa3ad']
+    const rateLimitColors = rateLimitLabels.reduce((acc, label, idx) => {
+      acc[label] = dynamicPalette[idx % dynamicPalette.length]
+      return acc
+    }, {})
+    const pendingColors = pendingLabels.reduce((acc, label, idx) => {
+      acc[label] = dynamicPalette[idx % dynamicPalette.length]
+      return acc
+    }, {})
+
+    return {
+      dbPool: [
+        seriesFromKey('dbOpenConns', 'Open', '#8aa5ff'),
+        seriesFromKey('dbInUse', 'In Use', '#3bd487'),
+        seriesFromKey('dbWaitCount', 'Wait', '#f1c76f'),
+      ],
+      storageBytes: [seriesFromKey('s3BytesTotal', 'Bytes', '#8aa5ff')],
+      storageObjects: [seriesFromKey('s3ObjectsTotal', 'Objects', '#3bd487')],
+      devicesTotal: [seriesFromKey('devicesTotal', 'Devices', chartColors.total)],
+      devicesStatus: seriesFromLabels('devicesStatus', ['active', 'degraded', 'stale', 'offline'], chartColors),
+      checkins: seriesFromLabels('checkinStatus', ['success', 'error'], chartColors),
+      enrollments: seriesFromLabels('enrollStatus', ['success', 'error'], chartColors),
+      enrollTokens: seriesFromLabels('enrollTokenStatus', ['success', 'error'], chartColors),
+      apply: seriesFromLabels('applyStatus', ['success', 'error'], chartColors),
+      preApply: seriesFromLabels('preApplyStatus', ['success', 'error'], chartColors),
+      uploads: seriesFromLabels('uploadStatus', ['success', 'error'], chartColors),
+      presign: seriesFromLabels('presignStatus', ['success', 'error'], chartColors),
+      upgrades: seriesFromLabels('upgradeStatus', ['success', 'error'], chartColors),
+      backups: seriesFromLabels('backupStatus', ['backup', 'restore'], {
+        backup: '#8aa5ff',
+        restore: '#f1c76f',
+      }),
+      pending: seriesFromLabels('pendingByType', pendingLabels, pendingColors),
+      rateLimit: seriesFromLabels('rateLimitByEndpoint', rateLimitLabels, rateLimitColors),
+      httpStatus: seriesFromLabels('httpByStatus', ['2xx', '3xx', '4xx', '5xx', 'other'], {
+        '2xx': '#3bd487',
+        '3xx': '#8aa5ff',
+        '4xx': '#f1c76f',
+        '5xx': '#f27272',
+        other: '#9aa3ad',
+      }),
+      httpLatency: [seriesFromKey('httpLatencyAvg', 'Avg ms', '#f1c76f')],
+    }
+  }, [metricsHistory, metricsLatest])
+
   const filteredDevices = useMemo(() => {
     if (deviceStatusFilter === 'all') return devices
     return devices.filter((d) => (d.status || '').toLowerCase() === deviceStatusFilter)
@@ -1775,8 +2286,20 @@ export default function App() {
             <section id="dashboard" className="card">
               <div className="section-header">
                 <h2>Dashboard</h2>
-                <div className="events-meta">
-                  <span className={`pill ${eventsStatus}`}>{eventsStatus}</span>
+                <div className="inline-row">
+                  <div className="range-toggle">
+                    {rangeOptions.map((opt) => (
+                      <button
+                        key={opt.id}
+                        className={`chip ${healthRange === opt.id ? 'active' : ''}`}
+                        onClick={() => setHealthRange(opt.id)}
+                        type="button"
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                  <button className="button ghost" onClick={loadHealthSummary}>Refresh</button>
                 </div>
               </div>
               {notifications.length > 0 && (
@@ -1788,6 +2311,7 @@ export default function App() {
                   ))}
                 </div>
               )}
+              {healthSummaryError && <div className="error">{healthSummaryError}</div>}
               <div className="grid">
                 <div className="metric">
                   <div className="metric-label">Devices</div>
@@ -1798,30 +2322,28 @@ export default function App() {
                   <div className="metric-value">{dashboard.active}</div>
                 </div>
                 <div className="metric">
+                  <div className="metric-label">Degraded</div>
+                  <div className="metric-value">{dashboard.degraded}</div>
+                </div>
+                <div className="metric">
+                  <div className="metric-label">Stale</div>
+                  <div className="metric-value">{dashboard.stale}</div>
+                </div>
+                <div className="metric">
+                  <div className="metric-label">Offline</div>
+                  <div className="metric-value">{dashboard.offline}</div>
+                </div>
+                <div className="metric">
                   <div className="metric-label">Last Check-in</div>
                   <div className="metric-value small">{dashboard.lastSeenLabel}</div>
                 </div>
               </div>
-              <div className="events">
-                <h3>Live Events</h3>
-                {eventsError && <div className="error">{eventsError}</div>}
-                <div className="events-feed scroll">
-                  {liveEvents.length === 0 ? (
-                    <div className="placeholder">No events yet.</div>
-                  ) : (
-                    liveEvents.map((evt, idx) => (
-                      <div key={`${evt.at}-${idx}`} className="event-item">
-                        <div className="event-head">
-                          <span className="event-type">{evt.type}</span>
-                          <span className="event-time">{evt.at}</span>
-                        </div>
-                        <div className="event-meta">
-                          Device: {evt.deviceId || '—'}
-                        </div>
-                      </div>
-                    ))
-                  )}
+              <div className="chart-card">
+                <div className="chart-header">
+                  <h3>Active Devices Over Time</h3>
+                  <ChartLegend series={dashboardSeries} />
                 </div>
+                <TimeSeriesChart series={dashboardSeries} rangeMs={healthRangeMs} integerOnly />
               </div>
 
             </section>
@@ -2094,10 +2616,208 @@ export default function App() {
           </>
         )}
 
+        {view === 'metrics' && (
+          <section id="metrics" className="card metrics-page">
+            <div className="section-header">
+              <h2>System Metrics</h2>
+              <div className="inline-row">
+                <div className="range-toggle">
+                  {rangeOptions.map((opt) => (
+                    <button
+                      key={opt.id}
+                      className={`chip ${metricsRange === opt.id ? 'active' : ''}`}
+                      onClick={() => setMetricsRange(opt.id)}
+                      type="button"
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                <button className="button ghost" onClick={loadMetrics}>Refresh</button>
+              </div>
+            </div>
+            {metricsError && <div className="error">{metricsError}</div>}
+            <div className="grid metrics-summary">
+              <div className="metric">
+                <div className="metric-label">DB Open</div>
+                <div className="metric-value">{formatNumber(metricsSnapshot.dbOpenConns)}</div>
+              </div>
+              <div className="metric">
+                <div className="metric-label">DB In Use</div>
+                <div className="metric-value">{formatNumber(metricsSnapshot.dbInUse)}</div>
+              </div>
+              <div className="metric">
+                <div className="metric-label">DB Wait</div>
+                <div className="metric-value">{formatNumber(metricsSnapshot.dbWaitCount)}</div>
+              </div>
+              <div className="metric">
+                <div className="metric-label">Objects</div>
+                <div className="metric-value">{formatNumber(metricsSnapshot.s3ObjectsTotal)}</div>
+              </div>
+              <div className="metric">
+                <div className="metric-label">Storage</div>
+                <div className="metric-value">{formatBytes(metricsSnapshot.s3BytesTotal)}</div>
+              </div>
+              <div className="metric">
+                <div className="metric-label">Updated</div>
+                <div className="metric-value small">{formatTime(metricsSnapshot.updatedAt)}</div>
+              </div>
+            </div>
+
+            {metricsHistory.length === 0 && !metricsError && (
+              <div className="placeholder">Metrics will appear after the first sample.</div>
+            )}
+
+            <div className="metrics-grid">
+              <div className="metrics-card">
+                <div className="metrics-card-header">
+                  <h3>DB Pool</h3>
+                </div>
+                <ChartLegend series={metricsSeries.dbPool} />
+                <TimeSeriesChart series={metricsSeries.dbPool} rangeMs={metricsRangeMs} integerOnly />
+              </div>
+
+              <div className="metrics-card">
+                <div className="metrics-card-header">
+                  <h3>Storage (Bytes)</h3>
+                </div>
+                <ChartLegend series={metricsSeries.storageBytes} />
+                <TimeSeriesChart series={metricsSeries.storageBytes} rangeMs={metricsRangeMs} integerOnly />
+              </div>
+
+              <div className="metrics-card">
+                <div className="metrics-card-header">
+                  <h3>Storage (Objects)</h3>
+                </div>
+                <ChartLegend series={metricsSeries.storageObjects} />
+                <TimeSeriesChart series={metricsSeries.storageObjects} rangeMs={metricsRangeMs} integerOnly />
+              </div>
+
+              <div className="metrics-card">
+                <div className="metrics-card-header">
+                  <h3>Device Status</h3>
+                </div>
+                <ChartLegend series={metricsSeries.devicesStatus} />
+                <TimeSeriesChart series={metricsSeries.devicesStatus} rangeMs={metricsRangeMs} integerOnly />
+              </div>
+
+              <div className="metrics-card">
+                <div className="metrics-card-header">
+                  <h3>Check-ins</h3>
+                </div>
+                <ChartLegend series={metricsSeries.checkins} />
+                <TimeSeriesChart series={metricsSeries.checkins} rangeMs={metricsRangeMs} integerOnly />
+              </div>
+
+              <div className="metrics-card">
+                <div className="metrics-card-header">
+                  <h3>Enrollments</h3>
+                </div>
+                <ChartLegend series={metricsSeries.enrollments} />
+                <TimeSeriesChart series={metricsSeries.enrollments} rangeMs={metricsRangeMs} integerOnly />
+              </div>
+
+              <div className="metrics-card">
+                <div className="metrics-card-header">
+                  <h3>Enrollment Tokens</h3>
+                </div>
+                <ChartLegend series={metricsSeries.enrollTokens} />
+                <TimeSeriesChart series={metricsSeries.enrollTokens} rangeMs={metricsRangeMs} integerOnly />
+              </div>
+
+              <div className="metrics-card">
+                <div className="metrics-card-header">
+                  <h3>Apply Results</h3>
+                </div>
+                <ChartLegend series={metricsSeries.apply} />
+                <TimeSeriesChart series={metricsSeries.apply} rangeMs={metricsRangeMs} integerOnly />
+              </div>
+
+              <div className="metrics-card">
+                <div className="metrics-card-header">
+                  <h3>Pre-apply Results</h3>
+                </div>
+                <ChartLegend series={metricsSeries.preApply} />
+                <TimeSeriesChart series={metricsSeries.preApply} rangeMs={metricsRangeMs} integerOnly />
+              </div>
+
+              <div className="metrics-card">
+                <div className="metrics-card-header">
+                  <h3>Artifact Uploads</h3>
+                </div>
+                <ChartLegend series={metricsSeries.uploads} />
+                <TimeSeriesChart series={metricsSeries.uploads} rangeMs={metricsRangeMs} integerOnly />
+              </div>
+
+              <div className="metrics-card">
+                <div className="metrics-card-header">
+                  <h3>Artifact Presign</h3>
+                </div>
+                <ChartLegend series={metricsSeries.presign} />
+                <TimeSeriesChart series={metricsSeries.presign} rangeMs={metricsRangeMs} integerOnly />
+              </div>
+
+              <div className="metrics-card">
+                <div className="metrics-card-header">
+                  <h3>Rate Limit Hits</h3>
+                </div>
+                <ChartLegend series={metricsSeries.rateLimit} />
+                <TimeSeriesChart series={metricsSeries.rateLimit} rangeMs={metricsRangeMs} integerOnly />
+              </div>
+
+              <div className="metrics-card">
+                <div className="metrics-card-header">
+                  <h3>Pending Actions</h3>
+                </div>
+                <ChartLegend series={metricsSeries.pending} />
+                <TimeSeriesChart series={metricsSeries.pending} rangeMs={metricsRangeMs} integerOnly />
+              </div>
+
+              <div className="metrics-card">
+                <div className="metrics-card-header">
+                  <h3>Upgrades</h3>
+                </div>
+                <ChartLegend series={metricsSeries.upgrades} />
+                <TimeSeriesChart series={metricsSeries.upgrades} rangeMs={metricsRangeMs} integerOnly />
+              </div>
+
+              <div className="metrics-card">
+                <div className="metrics-card-header">
+                  <h3>Backups</h3>
+                </div>
+                <ChartLegend series={metricsSeries.backups} />
+                <TimeSeriesChart series={metricsSeries.backups} rangeMs={metricsRangeMs} integerOnly />
+              </div>
+
+              <div className="metrics-card">
+                <div className="metrics-card-header">
+                  <h3>HTTP Requests</h3>
+                </div>
+                <ChartLegend series={metricsSeries.httpStatus} />
+                <TimeSeriesChart series={metricsSeries.httpStatus} rangeMs={metricsRangeMs} integerOnly />
+              </div>
+
+              <div className="metrics-card">
+                <div className="metrics-card-header">
+                  <h3>HTTP Latency (avg ms)</h3>
+                </div>
+                <ChartLegend series={metricsSeries.httpLatency} />
+                <TimeSeriesChart series={metricsSeries.httpLatency} rangeMs={metricsRangeMs} />
+              </div>
+            </div>
+          </section>
+        )}
+
         {view === 'logs' && (
           <section id="logs" className="card logs-card">
             <div className="section-header logs-header">
               <div className="tab-bar">
+                <button
+                  className={`tab ${logsTab === 'events' ? 'active' : ''}`}
+                  onClick={() => setLogsTab('events')}
+                >
+                  Live Events
+                </button>
                 <button
                   className={`tab ${logsTab === 'device' ? 'active' : ''}`}
                   onClick={() => setLogsTab('device')}
@@ -2110,14 +2830,16 @@ export default function App() {
                 >
                   Audit Log
                 </button>
-                <button
-                  className={`tab ${logsTab === 'rotation' ? 'active' : ''}`}
-                  onClick={() => setLogsTab('rotation')}
-                >
-                  CA Rotation
-                </button>
               </div>
               <div className="logs-actions">
+                {logsTab === 'events' && (
+                  <>
+                    <span className={`pill ${eventsStatus}`}>{eventsStatus}</span>
+                    <button className="button ghost" onClick={() => setEventsFeed([])}>
+                      Clear
+                    </button>
+                  </>
+                )}
                 {logsTab === 'device' && (
                   <>
                     <select value={logFilter} onChange={(e) => setLogFilter(e.target.value)}>
@@ -2146,25 +2868,31 @@ export default function App() {
                     </button>
                   </>
                 )}
-                {logsTab === 'rotation' && (
-                  <>
-                    <button className="button" onClick={loadRotationStatus}>
-                      Refresh
-                    </button>
-                    {canRotate && (
-                      <>
-                        <button className="button" onClick={handleRotateRotation}>
-                          Rotate CA
-                        </button>
-                        <button className="button ghost" onClick={handleReloadRotation}>
-                          Reload CA files
-                        </button>
-                      </>
-                    )}
-                  </>
-                )}
               </div>
             </div>
+
+            {logsTab === 'events' && (
+              <div className="events">
+                {eventsError && <div className="error">{eventsError}</div>}
+                <div className="events-feed scroll">
+                  {liveEvents.length === 0 ? (
+                    <div className="placeholder">No events yet.</div>
+                  ) : (
+                    liveEvents.map((evt, idx) => (
+                      <div key={`${evt.at}-${idx}`} className="event-item">
+                        <div className="event-head">
+                          <span className="event-type">{evt.type}</span>
+                          <span className="event-time">{evt.at}</span>
+                        </div>
+                        <div className="event-meta">
+                          Device: {evt.deviceId || '—'}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
 
             {logsTab === 'device' && (
               <>
@@ -2345,93 +3073,18 @@ export default function App() {
                 )}
               </>
             )}
-            {logsTab === 'rotation' && (
-              <>
-                {rotationMessage && <div className="status">{rotationMessage}</div>}
-                {rotationError && <div className="error">{rotationError}</div>}
-                {rotationLoading ? (
-                  <div className="placeholder">Loading rotation status...</div>
-                ) : rotationStatus ? (
-                  <div className="rotation-grid">
-                    <div className="rotation-card">
-                      <div className="rotation-title">Active CA</div>
-                      <div className="rotation-row">
-                        <span>Path</span>
-                        <span className="mono">{rotationStatus.activeCa?.path || '—'}</span>
-                      </div>
-                      <div className="rotation-row">
-                        <span>Subject</span>
-                        <span>{rotationStatus.activeCa?.subject || '—'}</span>
-                      </div>
-                      <div className="rotation-row">
-                        <span>Fingerprint</span>
-                        <span className="mono">{rotationStatus.activeCa?.fingerprint || '—'}</span>
-                      </div>
-                      <div className="rotation-row">
-                        <span>Valid</span>
-                        <span>
-                          {rotationStatus.activeCa?.notBefore ? new Date(rotationStatus.activeCa.notBefore).toLocaleDateString() : '—'}
-                          {' → '}
-                          {rotationStatus.activeCa?.notAfter ? new Date(rotationStatus.activeCa.notAfter).toLocaleDateString() : '—'}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="rotation-card">
-                      <div className="rotation-title">Client CA Bundle</div>
-                      <div className="rotation-row">
-                        <span>Path</span>
-                        <span className="mono">{rotationStatus.clientCa?.path || '—'}</span>
-                      </div>
-                      <div className="rotation-row">
-                        <span>Certs</span>
-                        <span>{rotationStatus.clientCa?.certCount ?? '—'}</span>
-                      </div>
-                      <div className="rotation-row">
-                        <span>Contains active</span>
-                        <span>{rotationStatus.clientCa?.containsActive ? 'Yes' : 'No'}</span>
-                      </div>
-                    </div>
-
-                    <div className="rotation-card">
-                      <div className="rotation-title">Device Coverage</div>
-                      <div className="rotation-row">
-                        <span>Total</span>
-                        <span>{rotationStatus.deviceCounts?.total ?? '—'}</span>
-                      </div>
-                      <div className="rotation-row">
-                        <span>Active CA</span>
-                        <span>{rotationStatus.deviceCounts?.active ?? '—'}</span>
-                      </div>
-                      <div className="rotation-row">
-                        <span>Needs reenroll</span>
-                        <span>{rotationStatus.deviceCounts?.needsReenroll ?? '—'}</span>
-                      </div>
-                      <div className="rotation-row">
-                        <span>Unknown</span>
-                        <span>{rotationStatus.deviceCounts?.unknown ?? '—'}</span>
-                      </div>
-                      <div className="rotation-note">
-                        Re-enroll updates existing devices and does not consume additional license slots.
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="placeholder">No rotation status yet.</div>
-                )}
-              </>
-            )}
           </section>
         )}
 
-        {view === 'settings' && (
-          <section id="settings" className="card settings-card">
+        {view === 'security' && (
+          <section id="security" className="card settings-card">
             <div className="section-header settings-header">
-              <h2>Settings</h2>
+              <h2>Security</h2>
               <div className="settings-toolbar">
-                <button className="button ghost" onClick={loadMaintenance}>Refresh maintenance</button>
-                <button className="button ghost" onClick={loadUpgrade}>Refresh upgrade</button>
-                <button className="button ghost" onClick={loadUpgradeAvailable}>Refresh updates</button>
+                <button className="button ghost" onClick={loadRotationStatus}>Refresh rotation</button>
+                {authStatus.enabled && authToken && isAdmin && (
+                  <button className="button ghost" onClick={loadUsers}>Refresh users</button>
+                )}
               </div>
             </div>
 
@@ -2626,6 +3279,165 @@ export default function App() {
                 )}
               </div>
 
+              <div className="settings-section">
+                <div className="settings-title">CA Rotation</div>
+                <div className="inline-row">
+                  <button className="button ghost" onClick={loadRotationStatus}>
+                    Refresh
+                  </button>
+                  {canRotate && (
+                    <>
+                      <button className="button" onClick={handleRotateRotation}>
+                        Rotate CA
+                      </button>
+                      <button className="button ghost" onClick={handleReloadRotation}>
+                        Reload CA files
+                      </button>
+                      <button
+                        className="button ghost"
+                        onClick={handleCleanupRotation}
+                        disabled={!rotationStatus?.cleanup?.eligible}
+                      >
+                        Cleanup old CA
+                      </button>
+                    </>
+                  )}
+                </div>
+                {rotationMessage && <div className="status">{rotationMessage}</div>}
+                {rotationError && <div className="error">{rotationError}</div>}
+                {rotationLoading ? (
+                  <div className="placeholder">Loading rotation status...</div>
+                ) : rotationStatus ? (
+                  <div className="rotation-grid">
+                    <div className="rotation-card">
+                      <div className="rotation-title">Active CA</div>
+                      <div className="rotation-row">
+                        <span>Path</span>
+                        <span className="mono">{rotationStatus.activeCa?.path || '—'}</span>
+                      </div>
+                      <div className="rotation-row">
+                        <span>Subject</span>
+                        <span>{rotationStatus.activeCa?.subject || '—'}</span>
+                      </div>
+                      <div className="rotation-row">
+                        <span>Fingerprint</span>
+                        <span className="mono">{rotationStatus.activeCa?.fingerprint || '—'}</span>
+                      </div>
+                      <div className="rotation-row">
+                        <span>Valid</span>
+                        <span>
+                          {rotationStatus.activeCa?.notBefore ? new Date(rotationStatus.activeCa.notBefore).toLocaleDateString() : '—'}
+                          {' → '}
+                          {rotationStatus.activeCa?.notAfter ? new Date(rotationStatus.activeCa.notAfter).toLocaleDateString() : '—'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="rotation-card">
+                      <div className="rotation-title">Client CA Bundle</div>
+                      <div className="rotation-row">
+                        <span>Path</span>
+                        <span className="mono">{rotationStatus.clientCa?.path || '—'}</span>
+                      </div>
+                      <div className="rotation-row">
+                        <span>Certs</span>
+                        <span>{rotationStatus.clientCa?.certCount ?? '—'}</span>
+                      </div>
+                      <div className="rotation-row">
+                        <span>Contains active</span>
+                        <span>{rotationStatus.clientCa?.containsActive ? 'Yes' : 'No'}</span>
+                      </div>
+                    </div>
+
+                    <div className="rotation-card">
+                      <div className="rotation-title">Device Coverage</div>
+                      <div className="rotation-row">
+                        <span>Total</span>
+                        <span>{rotationStatus.deviceCounts?.total ?? '—'}</span>
+                      </div>
+                      <div className="rotation-row">
+                        <span>Active CA</span>
+                        <span>{rotationStatus.deviceCounts?.active ?? '—'}</span>
+                      </div>
+                      <div className="rotation-row">
+                        <span>Needs reenroll</span>
+                        <span>{rotationStatus.deviceCounts?.needsReenroll ?? '—'}</span>
+                      </div>
+                      <div className="rotation-row">
+                        <span>Unknown</span>
+                        <span>{rotationStatus.deviceCounts?.unknown ?? '—'}</span>
+                      </div>
+                      <div className="rotation-note">
+                        Re-enroll updates existing devices and does not consume additional license slots.
+                      </div>
+                    </div>
+
+                    <div className="rotation-card">
+                      <div className="rotation-title">Cleanup Status</div>
+                      <div className="rotation-row">
+                        <span>Eligible</span>
+                        <span>{rotationStatus.cleanup?.eligible ? 'Yes' : 'No'}</span>
+                      </div>
+                      <div className="rotation-row">
+                        <span>Reason</span>
+                        <span>{rotationStatus.cleanup?.reason || '—'}</span>
+                      </div>
+                      <div className="rotation-row">
+                        <span>Rotated</span>
+                        <span>
+                          {rotationStatus.cleanup?.rotatedAt
+                            ? new Date(rotationStatus.cleanup.rotatedAt).toLocaleString()
+                            : '—'}
+                        </span>
+                      </div>
+                      <div className="rotation-row">
+                        <span>Grace remaining</span>
+                        <span>{formatDurationSeconds(rotationStatus.cleanup?.graceRemainingSec || 0)}</span>
+                      </div>
+                      <div className="rotation-row">
+                        <span>Grace deadline</span>
+                        <span>
+                          {rotationStatus.cleanup?.graceDeadline
+                            ? new Date(rotationStatus.cleanup.graceDeadline).toLocaleString()
+                            : '—'}
+                        </span>
+                      </div>
+                      <div className="rotation-row">
+                        <span>Cleaned</span>
+                        <span>
+                          {rotationStatus.cleanup?.cleanedAt
+                            ? new Date(rotationStatus.cleanup.cleanedAt).toLocaleString()
+                            : '—'}
+                        </span>
+                      </div>
+                      {rotationStatus.cleanup?.previousFingerprint && (
+                        <div className="rotation-row">
+                          <span>Old CA</span>
+                          <span className="mono">{rotationStatus.cleanup.previousFingerprint}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="placeholder">No rotation status yet.</div>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {view === 'settings' && (
+          <section id="settings" className="card settings-card">
+            <div className="section-header settings-header">
+              <h2>Settings</h2>
+              <div className="settings-toolbar">
+                <button className="button ghost" onClick={loadMaintenance}>Refresh maintenance</button>
+                <button className="button ghost" onClick={loadUpgrade}>Refresh upgrade</button>
+                <button className="button ghost" onClick={loadUpgradeAvailable}>Refresh updates</button>
+              </div>
+            </div>
+
+            <div className="settings-stack">
               <div className="settings-section">
                 <div className="settings-title">Maintenance</div>
                 <div className="detail-grid">

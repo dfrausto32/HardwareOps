@@ -49,7 +49,7 @@ func TestUploadArtifact(t *testing.T) {
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	w := httptest.NewRecorder()
 
-	UploadArtifact(logger, mem, obj, "artifacts", false).ServeHTTP(w, req)
+	UploadArtifact(logger, mem, obj, "artifacts", false, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -75,7 +75,7 @@ func TestPresignArtifact(t *testing.T) {
 	req = withURLParam(req, "artifactId", artifactID)
 	w := httptest.NewRecorder()
 
-	PresignArtifact(logger, mem, depsStore, "artifacts", time.Minute, false).ServeHTTP(w, req)
+	PresignArtifact(logger, mem, depsStore, "artifacts", time.Minute, false, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)

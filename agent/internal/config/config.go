@@ -40,7 +40,7 @@ func FromEnv() Config {
 	if root == "" {
 		root = "./agent-data"
 	}
-	interval := 30 * time.Second
+	interval := 5 * time.Second
 	if raw := os.Getenv("CHECKIN_INTERVAL"); raw != "" {
 		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
 			interval = d

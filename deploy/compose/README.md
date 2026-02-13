@@ -45,3 +45,9 @@ On-prem stack (NGINX + UI + control-plane):
 cp .env.onprem.example .env.onprem
 docker compose -f docker-compose.onprem.yml --env-file .env.onprem up -d
 ```
+
+Metrics stack (Prometheus + Grafana):
+```
+docker compose -f docker-compose.metrics.yml up -d
+```
+Grafana is pre-provisioned with a HardwareOps dashboard on `http://localhost:3000` (admin/admin).

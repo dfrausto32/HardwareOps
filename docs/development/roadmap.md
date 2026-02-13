@@ -22,6 +22,8 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - ✅ Multi‑artifact device management (componented desired state + per‑component apply status).
 - ✅ Certificate rotation (CA bundle + active signer + UI rotate/reload + auto re‑enroll).
 - ✅ Backup + restore runbooks + UI workflows (Postgres + MinIO).
+- ✅ Metrics & health (Prometheus `/metrics` + health summary + UI charts).
+- ✅ Certificate rotation cleanup (hybrid grace/coverage + UI button).
 
 ---
 
@@ -138,12 +140,12 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Notes:** Includes retention configuration + CSV export.
 
 #### Metrics & health
-- **Status:** ⬜ Planned
-- **Scope:** Prometheus endpoints; core dashboards.
+- **Status:** 🟢 Complete
+- **Scope:** Prometheus endpoints; core dashboards; UI graphs for system metrics.
 - **Dependencies:** Metrics library + exporters.
 - **Risks:** Missing or noisy signals.
 - **Acceptance:** Operators can see fleet/apply health at a glance.
-- **Notes:** 
+- **Notes:** `/metrics` endpoint + health summary API + UI metrics page + dashboard activity graph shipped.
 
 #### Event retention
 - **Status:** ⬜ Planned
@@ -154,12 +156,12 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Notes:** 
 
 #### Certificate rotation cleanup (hybrid)
-- **Status:** ⬜ Planned
+- **Status:** 🟢 Complete
 - **Scope:** Remove old CA from bundle once coverage reaches 100% or after max grace period (whichever comes first); warn if devices still on old CA.
 - **Dependencies:** Rotation status counts; scheduled task; UI warning/banners.
 - **Risks:** Offline devices stranded after grace expiry.
 - **Acceptance:** Old CA pruned safely; operators warned with clear counts and timestamps.
-- **Notes:** Hybrid approach added; not required for Phase A.
+- **Notes:** Cleanup endpoint + UI control + grace window in place (see `docs/certs.md`).
 
 #### Artifact lifecycle management
 - **Status:** ⬜ Planned

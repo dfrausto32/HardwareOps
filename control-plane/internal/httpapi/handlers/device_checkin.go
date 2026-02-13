@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hardwareops/control-plane/internal/events"
+	"github.com/hardwareops/control-plane/internal/metrics"
 	"github.com/hardwareops/control-plane/internal/store"
 )
 
@@ -95,20 +96,28 @@ type Action struct {
 	TimeoutSec int             `json:"timeoutSec"`
 }
 
-func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustProxy bool, clientCertHeader string, activeCAPool func() *x509.CertPool) http.HandlerFunc {
+func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustProxy bool, clientCertHeader string, activeCAPool func() *x509.CertPool, metricsCollector *metrics.Metrics) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		recordCheckin := func(status, reason string) {
+			if metricsCollector != nil {
+				metricsCollector.IncCheckin(status, reason)
+			}
+		}
 		device, err := deviceFromMTLS(r, st, trustProxy, clientCertHeader)
 		if err != nil {
+			recordCheckin("error", "unauthorized")
 			http.Error(w, "client certificate required", http.StatusUnauthorized)
 			return
 		}
 
 		var req DeviceCheckinRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			recordCheckin("error", "bad_request")
 			http.Error(w, "invalid json", http.StatusBadRequest)
 			return
 		}
 		if req.DeviceID != "" && req.DeviceID != device.DeviceID {
+			recordCheckin("error", "unauthorized")
 			http.Error(w, "deviceId does not match client certificate", http.StatusUnauthorized)
 			return
 		}
@@ -185,6 +194,7 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 			MetadataJSON: certMetaUpdate,
 		}); err != nil {
 			logger.Printf("upsert device error: %v", err)
+			recordCheckin("error", "storage_error")
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
@@ -205,6 +215,7 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 			LastPreApplyAt:      lastPreApplyAt,
 		}); err != nil {
 			logger.Printf("upsert device_state error: %v", err)
+			recordCheckin("error", "storage_error")
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
@@ -214,6 +225,7 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 		desired, hasDesired, err := st.GetDesiredStateDevice(req.DeviceID)
 		if err != nil {
 			logger.Printf("get desired_state_device error: %v", err)
+			recordCheckin("error", "storage_error")
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
@@ -250,6 +262,7 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 			})
 			if desired, hasDesired, err = st.GetDesiredStateDevice(req.DeviceID); err != nil {
 				logger.Printf("get desired_state_device error: %v", err)
+				recordCheckin("error", "storage_error")
 				http.Error(w, "storage error", http.StatusInternalServerError)
 				return
 			}
@@ -258,6 +271,7 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 		groupDesired, hasGroup, err := st.GetDesiredStateGroupForDevice(req.DeviceID)
 		if err != nil {
 			logger.Printf("get desired_state_group error: %v", err)
+			recordCheckin("error", "storage_error")
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
@@ -317,6 +331,11 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 				TimeoutSec: 0,
 			})
 		}
+		if metricsCollector != nil {
+			for _, action := range pending {
+				metricsCollector.IncPendingAction(action.Type)
+			}
+		}
 		resp := DeviceCheckinResponse{
 			Desired:        desiredResp,
 			PendingActions: pending,
@@ -343,6 +362,7 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
+		recordCheckin("success", "ok")
 	}
 }
 
