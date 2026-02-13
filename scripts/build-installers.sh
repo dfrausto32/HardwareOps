@@ -324,9 +324,26 @@ services:
       S3_REGION: \${S3_REGION:-us-east-1}
       CA_CERT_PATH: /certs/ca.crt
       CA_KEY_PATH: /certs/ca.key
+      CA_BUNDLE_PATH: \${CA_BUNDLE_PATH:-/certs/ca-bundle.crt}
+      ACTIVE_CA_CERT_PATH: \${ACTIVE_CA_CERT_PATH:-/certs/ca-active.crt}
+      ACTIVE_CA_KEY_PATH: \${ACTIVE_CA_KEY_PATH:-/certs/ca-active.key}
+      CERT_ROTATION_GRACE_PERIOD: \${CERT_ROTATION_GRACE_PERIOD:-168h}
       TRUST_PROXY: "1"
       CLIENT_CERT_HEADER: X-Client-Cert
       CORS_ALLOWED_ORIGINS: \${CORS_ALLOWED_ORIGINS:-https://hardwareops.internal}
+      METRICS_ENABLED: \${METRICS_ENABLED:-1}
+      METRICS_PATH: \${METRICS_PATH:-/metrics}
+      METRICS_REFRESH_INTERVAL: \${METRICS_REFRESH_INTERVAL:-30s}
+      AUDIT_RETENTION_DAYS: \${AUDIT_RETENTION_DAYS:-90}
+      AUDIT_RETENTION_CLEANUP_INTERVAL: \${AUDIT_RETENTION_CLEANUP_INTERVAL:-1h}
+      AUTH_MODE: \${AUTH_MODE:-disabled}
+      AUTH_JWT_SECRET: \${AUTH_JWT_SECRET:-change-me}
+      AUTH_TOKEN_TTL: \${AUTH_TOKEN_TTL:-12h}
+      AUTH_ISSUER: \${AUTH_ISSUER:-hardwareops}
+      AUTH_BOOTSTRAP_EMAIL: \${AUTH_BOOTSTRAP_EMAIL:-admin@example.com}
+      AUTH_BOOTSTRAP_PASSWORD: \${AUTH_BOOTSTRAP_PASSWORD:-change-me}
+      AUTH_OIDC_ISSUER: \${AUTH_OIDC_ISSUER:-}
+      AUTH_OIDC_CLIENT_ID: \${AUTH_OIDC_CLIENT_ID:-}
       LICENSE_ENFORCE: \${LICENSE_ENFORCE:-0}
       LICENSE_PATH: \${LICENSE_PATH:-}
       LICENSE_PUBLIC_KEY: \${LICENSE_PUBLIC_KEY:-}
@@ -335,8 +352,8 @@ services:
       LICENSE_CACHE_TTL: \${LICENSE_CACHE_TTL:-30s}
       LOG_DIR: /var/lib/hardwareops/logs
       DISABLE_HTTP2: "1"
-      MAINTENANCE_MODE: \${MAINTENANCE_MODE:-1}
-      MAINTENANCE_MESSAGE: \${MAINTENANCE_MESSAGE:-Maintenance mode enabled}
+      MAINTENANCE_MODE: \${MAINTENANCE_MODE:-0}
+      MAINTENANCE_MESSAGE: \${MAINTENANCE_MESSAGE:-}
       MAINTENANCE_TOKEN: \${MAINTENANCE_TOKEN:-change-me}
       UPGRADE_APPLY_CMD: \${UPGRADE_APPLY_CMD:-/app/scripts/apply-upgrade.sh}
       UPGRADE_WORK_DIR: \${UPGRADE_WORK_DIR:-/stack}
@@ -344,6 +361,17 @@ services:
       UPGRADE_UPDATES_DIR: \${UPGRADE_UPDATES_DIR:-/stack/updates}
       UPGRADE_RUNNER_MODE: \${UPGRADE_RUNNER_MODE:-docker}
       UPGRADE_RUNNER_IMAGE: \${UPGRADE_RUNNER_IMAGE:-${cp_tag}}
+      BACKUP_CMD: \${BACKUP_CMD:-/app/scripts/backup-stack.sh}
+      RESTORE_CMD: \${RESTORE_CMD:-/app/scripts/restore-stack.sh}
+      BACKUP_DIR: \${BACKUP_DIR:-/stack/backups}
+      BACKUP_WORK_DIR: \${BACKUP_WORK_DIR:-/stack}
+      BACKUP_LOG_DIR: \${BACKUP_LOG_DIR:-/var/lib/hardwareops/logs}
+      BACKUP_RUNNER_MODE: \${BACKUP_RUNNER_MODE:-docker}
+      BACKUP_RUNNER_IMAGE: \${BACKUP_RUNNER_IMAGE:-}
+      BACKUP_POSTGRES_CONTAINER: \${BACKUP_POSTGRES_CONTAINER:-hardwareops-postgres-1}
+      BACKUP_MINIO_CONTAINER: \${BACKUP_MINIO_CONTAINER:-hardwareops-minio-1}
+      BACKUP_POSTGRES_USER: \${BACKUP_POSTGRES_USER:-hardwareops}
+      BACKUP_POSTGRES_DB: \${BACKUP_POSTGRES_DB:-hardwareops}
       STACK_DIR: \${STACK_DIR:-/stack}
     volumes:
       - \${CERTS_DIR:-/opt/hardwareops/certs}:/certs:ro

@@ -30,6 +30,7 @@ This directory contains the guides referenced throughout the repo. Use this inde
 ## Development (Roadmap)
 - `development/roadmap.md` — Phased roadmap for on‑prem, AWS, RBAC, and artifact ingest.
 - `development/deployment-options.md` — On‑prem vs AWS deployment shapes and recommendations.
+- `development/aws-cloud-setup-plan.md` — Phased AWS rollout plan (quick demo path + managed customer cloud path).
 - `development/artifact-ingest.md` — Manual, CI push, and repo pull ingest modes.
 - `development/auth-secrets-v1.md` — V1 local users + JWT + secrets posture.
 - `development/artifact-signing.md` — Current Ed25519 flow and Cosign/Sigstore migration path.

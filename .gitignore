@@ -12,6 +12,8 @@ dist/
 # Env
 .env
 .env.*
+!.env.example
+!.env.onprem.example
 
 # IDE
 .idea/
@@ -24,14 +26,16 @@ dist/
 logs/
 
 # Dev certs/keys
-/dev-ca.*
-/dev-server.*
+/dev-ca*
+/dev-server*
 *.key
+*.key.bak
 *.pem
 *.p12
 *.pfx
 *.srl
 *.csr
+*.crt.bak
 
 # Local tooling
 _npx/

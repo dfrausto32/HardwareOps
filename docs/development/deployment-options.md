@@ -3,6 +3,9 @@
 This doc outlines **supported deployment shapes** and the recommended path forward.
 Assumption: single‑tenant per customer deployment (multi‑tenant can be added later).
 
+Detailed rollout steps and sequencing are documented in:
+`docs/development/aws-cloud-setup-plan.md`
+
 ## Recommendation (now)
 - **On‑prem** as the default production target.
 - **AWS ECS Fargate** as the cloud target (lowest ops, fastest to ship).
