@@ -110,6 +110,8 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(artifactPublisher).Post("/artifacts/pull", handlers.PullArtifact(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.ArtifactPullHosts, deps.ArtifactPullMaxBytes, deps.ArtifactPullTimeout, deps.ArtifactPullCreds, deps.TrustProxy, deps.Metrics))
 		r.With(artifactPublisher).Post("/artifacts/presign-upload", handlers.PresignArtifactUpload(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.PresignExpires, deps.TrustProxy, deps.Metrics))
 		r.With(artifactPublisher).Post("/artifacts/complete", handlers.CompleteArtifactUpload(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, deps.Metrics))
+		r.With(admin).Get("/artifacts/pull-credentials", handlers.GetPullCredentialStatus(logger, deps.ArtifactPullCredsManager))
+		r.With(admin).Post("/artifacts/pull-credentials/reload", handlers.ReloadPullCredentials(logger, deps.Store, deps.ArtifactPullCredsManager, deps.TrustProxy))
 		r.With(viewer).Get("/artifacts/{artifactId}", handlers.GetArtifact(logger, deps.Store, deps.TrustProxy))
 		r.With(operator).Post("/artifacts/{artifactId}/deprecate", handlers.DeprecateArtifact(logger, deps.Store, deps.TrustProxy))
 		r.With(operator).Post("/artifacts/{artifactId}/restore", handlers.RestoreArtifact(logger, deps.Store, deps.TrustProxy))

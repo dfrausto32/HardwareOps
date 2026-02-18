@@ -212,16 +212,16 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Notes:** Groups page supports row-by-row multi-select (including shift-range), modal multi-edit for selected groups, modal multi-group desired-state apply, delete-selected, and an advanced CSV workflow with preview/apply + rollback CSV. Batch API is available at `POST /api/v1/groups/batch`.
 
 #### CI integrations
-- **Status:** 🟡 In progress
+- **Status:** 🟢 Complete
 - **Scope:** Presigned uploads + repo/blob pulls (HTTP/Artifactory) with signed artifact ingestion.
 - **Dependencies:** Secrets management; ingest modes.
 - **Risks:** Credential leakage.
 - **Acceptance:** CI can publish artifacts without long‑lived creds.
-- **Notes:** Presigned CI push path implemented (`/artifacts/presign-upload` + `/artifacts/complete`) with scoped expiring service tokens (`artifact.publish`) and `scripts/ci-upload-artifact.sh`. Pull ingest API implemented (`/artifacts/pull`) with checksum validation + host/size/timeout guardrails plus CI helper `scripts/ci-pull-artifact.sh`. Adapter framework and backward-compatible source shape are in place (`sourceUrl` or `source.kind` + `source.uri`; current kinds=`http`,`artifactory`). Credential resolver abstraction is in place (`source.credentialRef`) with static map (`ARTIFACT_PULL_CREDENTIALS_FILE`/`ARTIFACT_PULL_CREDENTIALS_JSON`) plus AWS Secrets Manager-backed loading (`ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID`). Artifactory adapter shipped with local docker smoke scripts (`scripts/setup-artifactory-demo.sh`, `scripts/test-artifactory-adapter.sh`) and signed artifact demo flow. Test coverage/runbook added (`scripts/test-artifact-ingest.sh`, `artifact-ingest-test-plan.md`). CI provider scaffold templates added for GitHub Actions/GitLab/Jenkins (`../../deploy/ci/README.md`). Remaining Phase B work: operational rotation/reload workflow for pull credentials; Vault resolver backend is deferred to Phase C.
+- **Notes:** Presigned CI push path implemented (`/artifacts/presign-upload` + `/artifacts/complete`) with scoped expiring service tokens (`artifact.publish`) and `scripts/ci-upload-artifact.sh`. Pull ingest API implemented (`/artifacts/pull`) with checksum validation + host/size/timeout guardrails plus CI helper `scripts/ci-pull-artifact.sh`. Adapter framework and backward-compatible source shape are in place (`sourceUrl` or `source.kind` + `source.uri`; current kinds=`http`,`artifactory`). Credential resolver abstraction is in place (`source.credentialRef`) with static map (`ARTIFACT_PULL_CREDENTIALS_FILE`/`ARTIFACT_PULL_CREDENTIALS_JSON`) plus AWS Secrets Manager-backed loading (`ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID`). Pull resolver operational workflow is implemented with admin status/reload endpoints (`GET/POST /api/v1/artifacts/pull-credentials*`) and helper script (`scripts/reload-pull-credentials.sh`). Artifactory adapter shipped with local docker smoke scripts (`scripts/setup-artifactory-demo.sh`, `scripts/test-artifactory-adapter.sh`) and signed artifact demo flow. Test coverage/runbook added (`scripts/test-artifact-ingest.sh`, `artifact-ingest-test-plan.md`). CI provider scaffold templates added for GitHub Actions/GitLab/Jenkins (`../../deploy/ci/README.md`). Vault resolver backend is deferred to Phase C.
 
 ### Recommended Next Sequence (Current)
-1. **CI integrations (finish Phase B):** Add CI provider templates (GitHub/GitLab/Jenkins) + operational credential-rotation runbook.
-2. **Release channels:** Add stable/canary promotion and staged rollout targeting.
+1. **Release channels:** Add stable/canary promotion and staged rollout targeting.
+2. **License anti-cheat hardening:** Complete remaining guardrails and decommission/reclaim workflow validation.
 3. **Phase B closeout:** Run end-to-end validation + docs cleanup for CI/release workflow handoff.
 
 ---

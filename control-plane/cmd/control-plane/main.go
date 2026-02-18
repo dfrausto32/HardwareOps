@@ -222,33 +222,23 @@ func main() {
 	if artifactLifecycleManager != nil {
 		artifactLifecycleManager.Start(context.Background())
 	}
-	pullCredentialResolver := artifactingest.CredentialResolver(artifactingest.NoopCredentialResolver{})
-	var credentialSets []map[string]map[string]string
-	if cfg.ArtifactPullCredentialsFile != "" || strings.TrimSpace(cfg.ArtifactPullCredentialsJSON) != "" {
-		creds, err := artifactingest.LoadStaticCredentials(cfg.ArtifactPullCredentialsFile, cfg.ArtifactPullCredentialsJSON)
-		if err != nil {
-			logger.Fatalf("artifact pull credentials (static): %v", err)
-		}
-		if len(creds) > 0 {
-			credentialSets = append(credentialSets, creds)
-		}
+	pullCredentialManager, err := artifactingest.NewPullCredentialManager(
+		cfg.ArtifactPullCredentialsFile,
+		cfg.ArtifactPullCredentialsJSON,
+		cfg.ArtifactPullCredentialsAWSSecretID,
+		cfg.ArtifactPullCredentialsAWSRegion,
+	)
+	if err != nil {
+		logger.Fatalf("artifact pull credentials init: %v", err)
 	}
-	if strings.TrimSpace(cfg.ArtifactPullCredentialsAWSSecretID) != "" {
-		creds, err := artifactingest.LoadStaticCredentialsFromAWSSecretManager(
-			context.Background(),
-			cfg.ArtifactPullCredentialsAWSSecretID,
-			cfg.ArtifactPullCredentialsAWSRegion,
+	pullCredentialStatus := pullCredentialManager.Status()
+	if pullCredentialStatus.Configured {
+		logger.Printf(
+			"artifact pull credentials loaded refs=%d staticRefs=%d awsRefs=%d",
+			pullCredentialStatus.CredentialRefCount,
+			pullCredentialStatus.StaticCredentialRefs,
+			pullCredentialStatus.AWSCredentialRefs,
 		)
-		if err != nil {
-			logger.Fatalf("artifact pull credentials (aws secrets manager): %v", err)
-		}
-		if len(creds) > 0 {
-			credentialSets = append(credentialSets, creds)
-		}
-	}
-	mergedCreds := artifactingest.MergeStaticCredentialSets(credentialSets...)
-	if len(mergedCreds) > 0 {
-		pullCredentialResolver = artifactingest.NewStaticCredentialResolver(mergedCreds)
 	}
 	deps := httpapi.Dependencies{
 		Store:             store,
@@ -286,7 +276,8 @@ func main() {
 		ArtifactPullHosts:              cfg.ArtifactPullAllowedHosts,
 		ArtifactPullMaxBytes:           cfg.ArtifactPullMaxBytes,
 		ArtifactPullTimeout:            cfg.ArtifactPullTimeout,
-		ArtifactPullCreds:              pullCredentialResolver,
+		ArtifactPullCreds:              pullCredentialManager,
+		ArtifactPullCredsManager:       pullCredentialManager,
 		DeviceIdentityMode:             cfg.DeviceIdentityMode,
 		DeviceIdentityRequireOnEnroll:  cfg.DeviceIdentityRequireOnEnroll,
 		DeviceIdentityRequireOnCheckin: cfg.DeviceIdentityRequireOnCheckin,

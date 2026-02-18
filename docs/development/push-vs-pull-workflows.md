@@ -72,6 +72,9 @@ For pull workflow:
 - Set `ARTIFACT_PULL_ALLOWED_HOSTS`.
 - Keep `ARTIFACT_PULL_MAX_BYTES` tight to expected artifact size.
 - Use short `ARTIFACT_PULL_TIMEOUT`.
+- After rotating pull credentials, run:
+  - `POST /api/v1/artifacts/pull-credentials/reload`
+  - or `scripts/reload-pull-credentials.sh`
 
 ## Operational Recommendation
 - Use **Push** as the production default for steady-state releases.

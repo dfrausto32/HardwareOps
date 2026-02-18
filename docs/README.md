@@ -52,5 +52,6 @@ Rule of thumb:
 - `../scripts/aws-demo-image.sh` - build/push demo-agent image to ECR.
 - `../scripts/aws-demo-seed.sh` - seed signed demo artifacts in AWS stack.
 - `../scripts/test-artifact-ingest.sh` - push/pull ingest smoke test.
+- `../scripts/reload-pull-credentials.sh` - reload pull credential resolver from configured sources without restarting control-plane.
 - `../scripts/setup-artifactory-demo.sh` - local Artifactory setup for pull adapter tests.
 - `../scripts/test-artifactory-adapter.sh` - end-to-end Artifactory pull adapter test.

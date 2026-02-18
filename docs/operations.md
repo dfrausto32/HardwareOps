@@ -86,7 +86,45 @@ After rotation is complete:
 
 ---
 
-## 4) Security checks (periodic)
+## 4) Pull credential rotation/reload
+
+Use this when rotating repository credentials used by pull ingest (`source.credentialRef`).
+
+### 4.1 Rotate at source
+
+- Static file/json mode: update `ARTIFACT_PULL_CREDENTIALS_FILE` content (or `ARTIFACT_PULL_CREDENTIALS_JSON` value).
+- AWS mode: update the Secrets Manager secret value referenced by `ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID`.
+
+### 4.2 Reload in control-plane (no restart)
+
+```bash
+curl --cacert /opt/hardwareops/certs/ca.crt \
+  -H "Authorization: Bearer <admin-jwt>" \
+  -X POST https://hardwareops.internal/api/v1/artifacts/pull-credentials/reload
+```
+
+Check status:
+
+```bash
+curl --cacert /opt/hardwareops/certs/ca.crt \
+  -H "Authorization: Bearer <admin-jwt>" \
+  https://hardwareops.internal/api/v1/artifacts/pull-credentials
+```
+
+### 4.3 Helper script
+
+```bash
+AUTH_EMAIL=admin@example.com AUTH_PASSWORD='change-me' \
+BASE_URL=https://localhost:8080 \
+./scripts/reload-pull-credentials.sh
+```
+
+Audit action emitted:
+- `artifact.pull_credentials.reload`
+
+---
+
+## 5) Security checks (periodic)
 
 - Confirm auth is enabled and bootstrap secrets rotated.
 - Confirm `TRUST_PROXY_CIDRS` is restricted (not `0.0.0.0/0`).
@@ -95,7 +133,7 @@ After rotation is complete:
 
 ---
 
-## 5) Metrics and health checks
+## 6) Metrics and health checks
 
 Use:
 - `/metrics` (Prometheus)

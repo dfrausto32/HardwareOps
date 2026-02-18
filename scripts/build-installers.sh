@@ -191,6 +191,7 @@ build_control_plane() {
   cp -a "$BASE_DIR/scripts/bootstrap-ca.sh" "$stage/scripts/"
   cp -a "$BASE_DIR/scripts/issue-server-cert.sh" "$stage/scripts/"
   cp -a "$BASE_DIR/scripts/setup-control-plane.sh" "$stage/scripts/"
+  cp -a "$BASE_DIR/scripts/reload-pull-credentials.sh" "$stage/scripts/"
   write_control_plane_readme "$stage" "$goos" "$goarch"
 
   local out
@@ -287,6 +288,7 @@ build_stack_bundle() {
   cp -a "$BASE_DIR/scripts/setup-control-plane.sh" "$stage/scripts/"
   cp -a "$BASE_DIR/scripts/bootstrap-ca.sh" "$stage/scripts/"
   cp -a "$BASE_DIR/scripts/issue-server-cert.sh" "$stage/scripts/"
+  cp -a "$BASE_DIR/scripts/reload-pull-credentials.sh" "$stage/scripts/"
   cp -a "$BASE_DIR/scripts/apply-upgrade.sh" "$stage/scripts/"
   cp -a "$BASE_DIR/scripts/stack-installer.sh" "$stage/hardwareops-installer.sh"
   cp -a "$BASE_DIR/deploy/desktop/hardwareops-installer.desktop" "$stage/desktop/"

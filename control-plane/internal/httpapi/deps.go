@@ -71,6 +71,7 @@ type Dependencies struct {
 	ArtifactPullMaxBytes           int64
 	ArtifactPullTimeout            time.Duration
 	ArtifactPullCreds              artifactingest.CredentialResolver
+	ArtifactPullCredsManager       *artifactingest.PullCredentialManager
 	DeviceIdentityMode             string
 	DeviceIdentityRequireOnEnroll  bool
 	DeviceIdentityRequireOnCheckin bool

@@ -117,6 +117,11 @@ Resolver behavior:
 - If the same `credentialRef` exists in multiple sources, later-loaded sources override earlier values.
 - Current load order: static first, AWS secret second (AWS wins on collisions).
 
+Operational reload workflow (admin, no control-plane restart):
+- `GET /api/v1/artifacts/pull-credentials` (current resolver status)
+- `POST /api/v1/artifacts/pull-credentials/reload` (reload from configured sources)
+- Helper script: `scripts/reload-pull-credentials.sh`
+
 Static credential JSON format:
 ```json
 {

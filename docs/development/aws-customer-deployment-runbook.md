@@ -135,6 +135,9 @@ artifact_pull_credentials_aws_secret_id = "arn:aws:secretsmanager:us-east-1:1111
 Notes:
 - ARN is preferred; name also works.
 - Stack wiring now injects resolver env vars into control-plane and grants ECS task role `secretsmanager:GetSecretValue`/`DescribeSecret` scoped to that secret.
+- After updating secret values, reload resolver config without restarting control-plane:
+  - `POST /api/v1/artifacts/pull-credentials/reload`
+  - `GET /api/v1/artifacts/pull-credentials` to verify loaded refs
 
 ## 4) Create Per-Customer Device CA Assets
 

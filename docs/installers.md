@@ -45,6 +45,7 @@ dist/installers/<version>/
 - `scripts/setup-control-plane.sh`
 - `scripts/bootstrap-ca.sh`
 - `scripts/issue-server-cert.sh`
+- `scripts/reload-pull-credentials.sh`
 - `README.txt`
 
 ### Stack bundle (control‑plane + UI)
@@ -58,6 +59,7 @@ dist/installers/<version>/
 - `scripts/setup-control-plane.sh`
 - `scripts/bootstrap-ca.sh`
 - `scripts/issue-server-cert.sh`
+- `scripts/reload-pull-credentials.sh`
 - `scripts/install-docker-ubuntu.sh`
 - `scripts/run-coredns.sh`
 - `scripts/set-dns.sh`
