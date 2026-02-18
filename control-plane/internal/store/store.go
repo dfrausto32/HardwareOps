@@ -54,17 +54,25 @@ type Artifact struct {
 	Name         string
 	Version      string
 	Type         string
+	Status       string
 	ObjectKey    string
 	SHA256       string
 	Signature    string
 	SizeBytes    int64
 	MetadataJSON []byte
 	CreatedAt    time.Time
+	DeprecatedAt time.Time
+	DeleteAfter  time.Time
 }
 
 type ArtifactStats struct {
 	Count     int
 	SizeBytes int64
+}
+
+type ArtifactLifecyclePolicy struct {
+	DeprecatedDeleteAfterDays int
+	UpdatedAt                 time.Time
 }
 
 type ApplyResult struct {
@@ -103,6 +111,28 @@ type AuditEvent struct {
 }
 
 type AuditRetention struct {
+	Days      int
+	UpdatedAt time.Time
+}
+
+type RuntimeEvent struct {
+	EventID     string
+	OccurredAt  time.Time
+	Type        string
+	DeviceID    string
+	PayloadJSON []byte
+}
+
+type RuntimeEventFilter struct {
+	Type     string
+	DeviceID string
+	Since    time.Time
+	Until    time.Time
+	Limit    int
+	Offset   int
+}
+
+type RuntimeEventRetention struct {
 	Days      int
 	UpdatedAt time.Time
 }
@@ -165,6 +195,19 @@ type AuthVoucher struct {
 	Revoked   bool
 }
 
+type ServiceToken struct {
+	TokenID    string
+	Name       string
+	TokenHash  string
+	ScopesJSON []byte
+	ExpiresAt  time.Time
+	CreatedAt  time.Time
+	CreatedBy  string
+	LastUsedAt time.Time
+	RevokedAt  time.Time
+	RevokedBy  string
+}
+
 type DesiredStateGroup struct {
 	GroupID          string
 	ArtifactID       string
@@ -203,6 +246,7 @@ type Store interface {
 	CreateDevice(device Device) error
 	GetDevice(deviceID string) (Device, bool, error)
 	GetDeviceByFingerprint(fingerprint string) (Device, bool, error)
+	GetDeviceByHardwareID(hardwareID string) (Device, bool, error)
 	GetDeviceState(deviceID string) (DeviceState, bool, error)
 	ListDevices(filter ListDevicesFilter) ([]Device, error)
 	CountDevices() (int, error)
@@ -225,9 +269,21 @@ type Store interface {
 	CreateArtifact(artifact Artifact) error
 	GetArtifact(artifactID string) (Artifact, bool, error)
 	ListArtifacts(name, version string, limit, offset int) ([]Artifact, error)
+	DeprecateArtifact(artifactID string, deprecatedAt, deleteAfter time.Time) error
+	RestoreArtifact(artifactID string) error
+	ListArtifactsForPrune(cutoff time.Time, limit int) ([]Artifact, error)
+	CountArtifactReferences(artifactID string) (int, error)
+	GetArtifactLifecyclePolicy() (ArtifactLifecyclePolicy, error)
+	SetArtifactLifecyclePolicy(days int) (ArtifactLifecyclePolicy, error)
 	DeleteArtifact(artifactID string) error
 	GetArtifactStats() (ArtifactStats, error)
 	CreateApplyResult(result ApplyResult) error
+	CreateRuntimeEvent(event RuntimeEvent) error
+	ListRuntimeEvents(filter RuntimeEventFilter) ([]RuntimeEvent, error)
+	DeleteRuntimeEventsBefore(cutoff time.Time) (int, error)
+	EnsureRuntimeEventRetentionDays(days int) error
+	GetRuntimeEventRetentionDays() (RuntimeEventRetention, error)
+	SetRuntimeEventRetentionDays(days int) (RuntimeEventRetention, error)
 	CreateAuditEvent(event AuditEvent) error
 	ListAuditEvents(filter AuditEventFilter) ([]AuditEvent, error)
 	DeleteAuditEventsBefore(cutoff time.Time) (int, error)
@@ -245,4 +301,9 @@ type Store interface {
 	CreateAuthVoucher(voucher AuthVoucher) error
 	GetAuthVoucherByTokenHash(tokenHash string) (AuthVoucher, bool, error)
 	MarkAuthVoucherUsed(voucherID, usedBy string, at time.Time) (bool, error)
+	CreateServiceToken(token ServiceToken) error
+	GetServiceTokenByTokenHash(tokenHash string) (ServiceToken, bool, error)
+	ListServiceTokens(limit, offset int) ([]ServiceToken, error)
+	SetServiceTokenLastUsed(tokenID string, at time.Time) error
+	RevokeServiceToken(tokenID, revokedBy string, at time.Time) (bool, error)
 }

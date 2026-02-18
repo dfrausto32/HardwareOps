@@ -16,6 +16,7 @@ METADATA_JSON=${METADATA_JSON:-}
 SIGNING_KEY=${SIGNING_KEY:-}
 SIGNING_KEY_ID=${SIGNING_KEY_ID:-}
 SIGNATURE_OUT=${SIGNATURE_OUT:-}
+AUTH_TOKEN=${AUTH_TOKEN:-}
 
 if [ -z "$ARTIFACT_NAME" ] || [ -z "$ARTIFACT_VERSION" ] || [ -z "$INPUT_DIR" ]; then
   cat <<USAGE
@@ -100,4 +101,9 @@ if [ -n "$METADATA_JSON" ]; then
   form_args+=(-F "metadata=$METADATA_JSON")
 fi
 
-curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/artifacts/upload" "${form_args[@]}"
+auth_args=()
+if [ -n "$AUTH_TOKEN" ]; then
+  auth_args=(-H "Authorization: Bearer $AUTH_TOKEN")
+fi
+
+curl -sS --fail "${curl_opts[@]}" "${auth_args[@]}" -X POST "$BASE_URL/api/v1/artifacts/upload" "${form_args[@]}"

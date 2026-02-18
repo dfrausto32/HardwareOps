@@ -3,6 +3,7 @@ set -euo pipefail
 
 OUT_DIR=${OUT_DIR:-/opt/hardwareops/certs}
 DOMAIN=${DOMAIN:-hardwareops.internal}
+AGENT_DOMAIN=${AGENT_DOMAIN:-agent.${DOMAIN}}
 SERVER_DAYS=${SERVER_DAYS:-825}
 
 CA_CERT="$OUT_DIR/ca.crt"
@@ -42,6 +43,11 @@ subjectAltName = @alt_names
 [alt_names]
 DNS.1 = ${DOMAIN}
 EOF
+if [ -n "${AGENT_DOMAIN}" ] && [ "${AGENT_DOMAIN}" != "${DOMAIN}" ]; then
+  cat >> "$tmp_cfg" <<EOF
+DNS.2 = ${AGENT_DOMAIN}
+EOF
+fi
 
 rm -f "$SERVER_KEY" "$SERVER_CERT" "$SERVER_CSR"
 

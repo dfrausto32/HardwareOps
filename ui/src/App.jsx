@@ -5,11 +5,18 @@ import {
   listGroups,
   putGroup,
   deleteGroup,
+  batchGroups,
   patchDevice,
   clearDesiredStateDevice,
   getDesiredState,
   listArtifacts,
   uploadArtifact,
+  deprecateArtifact,
+  restoreArtifact,
+  getArtifactLifecyclePolicy,
+  getArtifactLifecycleStatus,
+  setArtifactLifecyclePolicy,
+  pruneArtifacts,
   setDesiredStateDevice,
   setDesiredStateGroup,
   clearDesiredStateGroup,
@@ -36,10 +43,15 @@ import {
   downloadAuditCSV,
   getAuditRetention,
   setAuditRetention,
+  listRuntimeEvents,
+  getEventRetention,
+  setEventRetention,
   getMetricsText,
   login as apiLogin,
   getMe,
   getAuthStatus,
+  getBootstrapStatus,
+  downloadBootstrapCA,
   registerWithVoucher,
   createVoucher,
   listUsers,
@@ -237,6 +249,12 @@ function normalizeArtifactType(val) {
   return String(val).trim().toLowerCase()
 }
 
+function normalizeArtifactStatus(val) {
+  const normalized = String(val || '').trim().toLowerCase()
+  if (!normalized) return 'active'
+  return normalized
+}
+
 function filterArtifactGroupsByType(groups, type) {
   const target = normalizeArtifactType(type)
   if (!target) return groups
@@ -332,6 +350,190 @@ function formatSelector(selector) {
   const entries = Object.entries(selector || {})
   if (entries.length === 0) return '—'
   return entries.map(([key, value]) => `${key}=${value}`).join(', ')
+}
+
+function normalizeSelector(selector) {
+  const normalized = {}
+  const obj = normalizeObject(selector)
+  Object.entries(obj).forEach(([key, value]) => {
+    const k = String(key || '').trim()
+    if (!k) return
+    normalized[k] = String(value ?? '')
+  })
+  return normalized
+}
+
+function stableSelectorString(selector) {
+  const sorted = Object.entries(selector || {}).sort(([a], [b]) => a.localeCompare(b))
+  return JSON.stringify(Object.fromEntries(sorted))
+}
+
+function isUUID(value) {
+  const input = String(value || '').trim()
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input)
+}
+
+function csvEscape(value) {
+  const input = String(value ?? '')
+  if (!/[",\n]/.test(input)) return input
+  return `"${input.replace(/"/g, '""')}"`
+}
+
+function buildBulkGroupsRollbackCsv(rows) {
+  const header = ['action', 'groupId', 'name', 'selector_json']
+  const lines = [header.join(',')]
+  rows.forEach((row) => {
+    const selectorJson = row.action === 'upsert' ? JSON.stringify(row.selector || {}) : ''
+    lines.push([
+      csvEscape(row.action || ''),
+      csvEscape(row.groupId || ''),
+      csvEscape(row.name || ''),
+      csvEscape(selectorJson),
+    ].join(','))
+  })
+  return `${lines.join('\n')}\n`
+}
+
+function parseBulkGroupsCsv(csvText, existingGroups) {
+  const parsed = parseCSV(csvText || '')
+  const headers = (parsed.header || []).map((h) => String(h || '').trim())
+  const headersLower = headers.map((h) => h.toLowerCase())
+  const getIdx = (candidates) => {
+    for (const candidate of candidates) {
+      const idx = headersLower.indexOf(candidate)
+      if (idx >= 0) return idx
+    }
+    return -1
+  }
+  const actionIdx = getIdx(['action'])
+  const groupIDIdx = getIdx(['groupid', 'group_id', 'id'])
+  const nameIdx = getIdx(['name'])
+  const regionIdx = getIdx(['region'])
+  const roleIdx = getIdx(['role'])
+  const siteIdx = getIdx(['site'])
+  const selectorIdx = getIdx(['selector', 'selector_json'])
+  const dynamicSelectorColumns = headers
+    .map((header, idx) => ({ header, idx, lower: headersLower[idx] }))
+    .filter((entry) => entry.lower.startsWith('selector.'))
+  const existingByID = new Map(
+    (existingGroups || []).map((group) => [
+      group.groupId,
+      { name: group.name || '', selector: normalizeSelector(group.selector) },
+    ]),
+  )
+
+  const errors = []
+  const rows = []
+  let rowCounter = 0
+
+  ;(parsed.rows || []).forEach((lineRow, lineIdx) => {
+    const line = lineIdx + 2
+    const cells = lineRow.map((cell) => String(cell || ''))
+    const cellAt = (idx) => (idx >= 0 && idx < cells.length ? cells[idx].trim() : '')
+    const hasAny = cells.some((cell) => String(cell || '').trim() !== '')
+    if (!hasAny) return
+
+    const action = (cellAt(actionIdx) || 'upsert').toLowerCase()
+    const baseGroupID = cellAt(groupIDIdx)
+    const name = cellAt(nameIdx)
+    let groupId = baseGroupID
+    const selector = {}
+    let rowError = ''
+
+    if (action !== 'upsert' && action !== 'delete') {
+      rowError = `line ${line}: action must be upsert or delete`
+    }
+
+    if (action === 'delete') {
+      if (!groupId) {
+        rowError = `line ${line}: groupId is required for delete`
+      }
+    } else if (!groupId) {
+      groupId = crypto.randomUUID()
+    }
+
+    if (!rowError && groupId && !isUUID(groupId)) {
+      rowError = `line ${line}: groupId must be a UUID`
+    }
+
+    if (!rowError && action === 'upsert') {
+      const selectorJson = cellAt(selectorIdx)
+      if (selectorJson) {
+        try {
+          const parsedSelector = JSON.parse(selectorJson)
+          if (!parsedSelector || typeof parsedSelector !== 'object' || Array.isArray(parsedSelector)) {
+            rowError = `line ${line}: selector_json must be a JSON object`
+          } else {
+            Object.entries(parsedSelector).forEach(([key, value]) => {
+              selector[String(key)] = String(value ?? '')
+            })
+          }
+        } catch {
+          rowError = `line ${line}: selector_json is invalid JSON`
+        }
+      }
+      if (!rowError) {
+        const region = cellAt(regionIdx)
+        const role = cellAt(roleIdx)
+        const site = cellAt(siteIdx)
+        if (region) selector.region = region
+        if (role) selector.role = role
+        if (site) selector.site = site
+        dynamicSelectorColumns.forEach(({ header, idx }) => {
+          const value = cellAt(idx)
+          if (!value) return
+          const key = header.slice(header.indexOf('.') + 1).trim()
+          if (!key) return
+          selector[key] = value
+        })
+      }
+    }
+
+    const existing = existingByID.get(groupId)
+    let outcome = 'error'
+    if (!rowError) {
+      if (action === 'delete') {
+        outcome = existing ? 'delete' : 'skip-not-found'
+      } else if (!existing) {
+        outcome = 'create'
+      } else {
+        const beforeName = existing.name || ''
+        const beforeSelector = stableSelectorString(existing.selector || {})
+        const afterSelector = stableSelectorString(selector)
+        outcome = beforeName === name && beforeSelector === afterSelector ? 'no-change' : 'update'
+      }
+    } else {
+      errors.push(rowError)
+    }
+
+    rowCounter += 1
+    rows.push({
+      rowId: `bulk-group-row-${rowCounter}`,
+      line,
+      action,
+      groupId,
+      name,
+      selector,
+      outcome,
+      error: rowError,
+      applyStatus: '',
+      applyError: '',
+    })
+  })
+
+  const summary = {
+    totalRows: rows.length,
+    errorRows: rows.filter((row) => row.error).length,
+    createRows: rows.filter((row) => row.outcome === 'create').length,
+    updateRows: rows.filter((row) => row.outcome === 'update').length,
+    deleteRows: rows.filter((row) => row.outcome === 'delete').length,
+    noChangeRows: rows.filter((row) => row.outcome === 'no-change').length,
+    skipNotFoundRows: rows.filter((row) => row.outcome === 'skip-not-found').length,
+  }
+  summary.applyRows = summary.createRows + summary.updateRows + summary.deleteRows
+  summary.validRows = rows.length - summary.errorRows
+
+  return { rows, errors, summary, headers }
 }
 
 function toIsoIfValid(value) {
@@ -430,7 +632,9 @@ function groupLabeledMetrics(metrics, name, labelKey, mapLabel) {
 
 export default function App() {
   const apiBaseUrl = useMemo(() => {
-    return import.meta.env.VITE_API_BASE_URL || 'https://localhost:8080'
+    if (import.meta.env.VITE_API_BASE_URL) return import.meta.env.VITE_API_BASE_URL
+    if (typeof window !== 'undefined' && window.location?.origin) return window.location.origin
+    return 'https://localhost:8080'
   }, [])
   const [authToken, setAuthToken] = useState(() => getAuthToken())
   const simulateProd = import.meta.env.VITE_SIMULATE_PROD === '1'
@@ -458,6 +662,15 @@ export default function App() {
   const [authError, setAuthError] = useState('')
   const [loginForm, setLoginForm] = useState({ email: '', password: '' })
   const [loginStatus, setLoginStatus] = useState('')
+  const [bootstrapState, setBootstrapState] = useState({
+    enabled: false,
+    authEnabled: false,
+    tokenRequired: false,
+    tokenHeader: '',
+    caDownloadUrl: '',
+  })
+  const [bootstrapToken, setBootstrapToken] = useState('')
+  const [bootstrapStatusMessage, setBootstrapStatusMessage] = useState('')
   const [authView, setAuthView] = useState('login')
   const [authStatus, setAuthStatus] = useState({ enabled: false, mode: 'disabled', loaded: false })
   const [registerForm, setRegisterForm] = useState({
@@ -508,6 +721,30 @@ export default function App() {
       }
     }
     loadAuthStatus()
+  }, [])
+
+  useEffect(() => {
+    async function loadBootstrapStatus() {
+      try {
+        const res = await getBootstrapStatus()
+        setBootstrapState({
+          enabled: Boolean(res?.enabled),
+          authEnabled: Boolean(res?.authEnabled),
+          tokenRequired: Boolean(res?.tokenRequired),
+          tokenHeader: String(res?.tokenHeader || ''),
+          caDownloadUrl: String(res?.caDownloadUrl || ''),
+        })
+      } catch {
+        setBootstrapState({
+          enabled: false,
+          authEnabled: false,
+          tokenRequired: false,
+          tokenHeader: '',
+          caDownloadUrl: '',
+        })
+      }
+    }
+    loadBootstrapStatus()
   }, [])
 
   useEffect(() => {
@@ -573,10 +810,50 @@ export default function App() {
     checkinIntervalSec: '',
     components: [newComponentRow()],
   })
+  const [selectedGroupIds, setSelectedGroupIds] = useState([])
+  const [groupBatchStatus, setGroupBatchStatus] = useState('')
+  const [groupBatchError, setGroupBatchError] = useState('')
+  const [groupMultiEditOpen, setGroupMultiEditOpen] = useState(false)
+  const [groupMultiEditForm, setGroupMultiEditForm] = useState({
+    region: '',
+    role: '',
+    site: '',
+    custom: [{ key: '', value: '' }],
+  })
+  const [groupMultiEditStatus, setGroupMultiEditStatus] = useState('')
+  const [groupMultiEditError, setGroupMultiEditError] = useState('')
+  const [groupMultiDesiredOpen, setGroupMultiDesiredOpen] = useState(false)
+  const [groupMultiDesiredForm, setGroupMultiDesiredForm] = useState({
+    checkinIntervalSec: '',
+    components: [newComponentRow()],
+  })
+  const [groupMultiDesiredStatus, setGroupMultiDesiredStatus] = useState('')
+  const [groupMultiDesiredError, setGroupMultiDesiredError] = useState('')
+  const [groupBulkOpen, setGroupBulkOpen] = useState(false)
+  const [groupBulkCsv, setGroupBulkCsv] = useState('')
+  const [groupBulkPreview, setGroupBulkPreview] = useState(null)
+  const [groupBulkError, setGroupBulkError] = useState('')
+  const [groupBulkStatus, setGroupBulkStatus] = useState('')
+  const [groupBulkRollbackCsv, setGroupBulkRollbackCsv] = useState('')
+  const [groupBulkApplying, setGroupBulkApplying] = useState(false)
 
   const [artifacts, setArtifacts] = useState([])
   const [artifactsError, setArtifactsError] = useState('')
   const [artifactsStatus, setArtifactsStatus] = useState('')
+  const [artifactLifecyclePolicy, setArtifactLifecyclePolicy] = useState({
+    deprecatedDeleteAfterDays: 30,
+    updatedAt: '',
+  })
+  const [artifactLifecyclePolicyInput, setArtifactLifecyclePolicyInput] = useState('30')
+  const [artifactLifecycleStatus, setArtifactLifecycleStatus] = useState({
+    enabled: false,
+    running: false,
+    intervalSeconds: 0,
+    batchLimit: 200,
+    alertReferenceThreshold: 10,
+    lastRun: null,
+    alerts: [],
+  })
 
   const [desiredState, setDesiredState] = useState({ groups: [], devices: [] })
   const [desiredError, setDesiredError] = useState('')
@@ -647,6 +924,17 @@ export default function App() {
   const [eventsFeed, setEventsFeed] = useState([])
   const [eventsStatus, setEventsStatus] = useState('disconnected')
   const [eventsError, setEventsError] = useState('')
+  const [eventRows, setEventRows] = useState([])
+  const [eventLoading, setEventLoading] = useState(false)
+  const [eventQueryError, setEventQueryError] = useState('')
+  const [eventType, setEventType] = useState('')
+  const [eventDeviceId, setEventDeviceId] = useState('')
+  const [eventFrom, setEventFrom] = useState('')
+  const [eventTo, setEventTo] = useState('')
+  const [eventLimit, setEventLimit] = useState('200')
+  const [eventRetention, setEventRetentionState] = useState({ days: 30, updatedAt: '' })
+  const [eventRetentionDays, setEventRetentionDays] = useState('30')
+  const [eventRetentionStatus, setEventRetentionStatus] = useState('')
   const [maintenance, setMaintenanceState] = useState({ enabled: false, message: '', updatedAt: '' })
   const [maintenanceError, setMaintenanceError] = useState('')
   const [maintenanceStatus, setMaintenanceStatus] = useState('')
@@ -671,6 +959,7 @@ export default function App() {
   const lastEventAtRef = useRef(0)
   const eventsHeartbeatRef = useRef(null)
   const drawerResizingRef = useRef(false)
+  const groupSelectionAnchorRef = useRef(-1)
 
   const [theme, setTheme] = useState(() => {
     return localStorage.getItem('hwops-theme') || 'dark'
@@ -679,6 +968,14 @@ export default function App() {
   const canToggleMaintenance = Boolean(maintenanceToken)
   const preflightOk = Boolean(upgradePreflight.ok)
   const upgradeReady = Boolean(preflightOk && upgradeAvailable.available)
+
+  useEffect(() => {
+    const groupIDs = new Set(groups.map((group) => group.groupId))
+    setSelectedGroupIds((prev) => prev.filter((id) => groupIDs.has(id)))
+    if (selectedGroupId && !groupIDs.has(selectedGroupId)) {
+      setSelectedGroupId('')
+    }
+  }, [groups, selectedGroupId])
 
   function buildComponentRows(desiredComponents, legacy, current, fallbackKey = '') {
     const rows = []
@@ -805,6 +1102,29 @@ export default function App() {
     }))
   }
 
+  function updateGroupMultiDesiredComponent(index, patch) {
+    setGroupMultiDesiredForm((prev) => {
+      const next = [...(prev.components || [])]
+      if (!next[index]) return prev
+      next[index] = { ...next[index], ...patch }
+      return { ...prev, components: next }
+    })
+  }
+
+  function addGroupMultiDesiredComponent() {
+    setGroupMultiDesiredForm((prev) => ({
+      ...prev,
+      components: [...(prev.components || []), newComponentRow()],
+    }))
+  }
+
+  function removeGroupMultiDesiredComponent(index) {
+    setGroupMultiDesiredForm((prev) => ({
+      ...prev,
+      components: (prev.components || []).filter((_, idx) => idx !== index),
+    }))
+  }
+
   function openArtifactPicker(scope, index) {
     setArtifactPickerTarget({ scope, index })
     setArtifactModalOpen(true)
@@ -842,6 +1162,8 @@ export default function App() {
     loadDevices()
     loadGroups()
     loadArtifacts()
+    loadArtifactLifecyclePolicy()
+    loadArtifactLifecycleStatus()
     loadDesired()
     loadMaintenance()
     loadUpgrade()
@@ -947,6 +1269,15 @@ export default function App() {
     if (!authStatus.enabled) return true
     return (authUser?.roles || []).includes('admin')
   }, [authStatus.enabled, authUser])
+  const canManageArtifacts = useMemo(() => {
+    if (!authStatus.enabled) return true
+    const roles = authUser?.roles || []
+    return roles.includes('operator') || roles.includes('admin')
+  }, [authStatus.enabled, authUser])
+  const canManageArtifactLifecycle = useMemo(() => {
+    if (!authStatus.enabled) return true
+    return (authUser?.roles || []).includes('admin')
+  }, [authStatus.enabled, authUser])
   const canRotate = useMemo(() => {
     return !authStatus.enabled || isAdmin
   }, [authStatus.enabled, isAdmin])
@@ -973,6 +1304,14 @@ export default function App() {
     if (view !== 'security') return
     loadRotationStatus()
   }, [view])
+
+  useEffect(() => {
+    if (view !== 'logs' || logsTab !== 'events') return
+    loadEventsHistory()
+    if (!authStatus.enabled || isAdmin) {
+      loadEventRetention()
+    }
+  }, [view, logsTab, authStatus.enabled, isAdmin])
 
   useEffect(() => {
     if (!deviceDrawerOpen) return
@@ -1114,6 +1453,7 @@ export default function App() {
     if (artifactsError) items.push({ type: 'error', text: artifactsError })
     if (desiredError) items.push({ type: 'error', text: desiredError })
     if (eventsError) items.push({ type: 'error', text: eventsError })
+    if (eventQueryError) items.push({ type: 'error', text: eventQueryError })
     if (maintenanceError) items.push({ type: 'error', text: maintenanceError })
     if (upgradeError) items.push({ type: 'error', text: upgradeError })
     if (upgradeAvailableError) items.push({ type: 'error', text: upgradeAvailableError })
@@ -1125,7 +1465,7 @@ export default function App() {
     if (maintenanceStatus) items.push({ type: 'info', text: maintenanceStatus })
     if (upgradeStatus) items.push({ type: 'info', text: upgradeStatus })
     return items.slice(0, 4)
-  }, [devicesError, groupsError, artifactsError, desiredError, eventsError, maintenanceError, upgradeError, upgradeAvailableError, uploadStatus, devicesStatus, groupsStatus, artifactsStatus, desiredStatus, maintenanceStatus, upgradeStatus])
+  }, [devicesError, groupsError, artifactsError, desiredError, eventsError, eventQueryError, maintenanceError, upgradeError, upgradeAvailableError, uploadStatus, devicesStatus, groupsStatus, artifactsStatus, desiredStatus, maintenanceStatus, upgradeStatus])
 
   async function doLogin() {
     setLoginStatus('Signing in...')
@@ -1169,6 +1509,24 @@ export default function App() {
     } catch (err) {
       setRegisterStatus('')
       setAuthError(err.message || String(err))
+    }
+  }
+
+  async function doDownloadBootstrapCA() {
+    setBootstrapStatusMessage('Downloading CA certificate...')
+    try {
+      const blob = await downloadBootstrapCA(bootstrapToken.trim() || undefined)
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'hardwareops-ca.crt'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      window.URL.revokeObjectURL(url)
+      setBootstrapStatusMessage('Downloaded hardwareops-ca.crt')
+    } catch (err) {
+      setBootstrapStatusMessage(err.message || String(err))
     }
   }
 
@@ -1313,6 +1671,35 @@ export default function App() {
       .catch((err) => setArtifactsError(err.message || String(err)))
   }
 
+  function loadArtifactLifecyclePolicy() {
+    getArtifactLifecyclePolicy()
+      .then((res) => {
+        const days = Number(res?.deprecatedDeleteAfterDays || 30)
+        setArtifactLifecyclePolicy({
+          deprecatedDeleteAfterDays: days,
+          updatedAt: res?.updatedAt || '',
+        })
+        setArtifactLifecyclePolicyInput(String(days))
+      })
+      .catch((err) => setArtifactsError(err.message || String(err)))
+  }
+
+  function loadArtifactLifecycleStatus() {
+    getArtifactLifecycleStatus()
+      .then((res) => {
+        setArtifactLifecycleStatus({
+          enabled: Boolean(res?.enabled),
+          running: Boolean(res?.running),
+          intervalSeconds: Number(res?.intervalSeconds || 0),
+          batchLimit: Number(res?.batchLimit || 200),
+          alertReferenceThreshold: Number(res?.alertReferenceThreshold || 10),
+          lastRun: res?.lastRun || null,
+          alerts: Array.isArray(res?.alerts) ? res.alerts : [],
+        })
+      })
+      .catch((err) => setArtifactsError(err.message || String(err)))
+  }
+
   function loadDesired() {
     setDesiredError('')
     getDesiredState()
@@ -1377,7 +1764,7 @@ export default function App() {
   }
 
   async function handleDeleteArtifact(artifactId) {
-    const ok = window.confirm(`Delete artifact ${artifactId}? This will clear desired state references.`)
+    const ok = window.confirm(`Delete artifact ${artifactId}?`)
     if (!ok) return
     setArtifactsStatus('Deleting artifact...')
     try {
@@ -1385,6 +1772,67 @@ export default function App() {
       setArtifactsStatus(`Deleted artifact ${artifactId}`)
       loadArtifacts()
       loadDesired()
+    } catch (err) {
+      setArtifactsError(err.message || String(err))
+    }
+  }
+
+  async function handleDeprecateArtifact(artifactId) {
+    const ok = window.confirm(`Deprecate artifact ${artifactId}?`)
+    if (!ok) return
+    setArtifactsStatus('Deprecating artifact...')
+    try {
+      await deprecateArtifact(artifactId, Number(artifactLifecyclePolicyInput) || undefined)
+      setArtifactsStatus(`Deprecated artifact ${artifactId}`)
+      loadArtifacts()
+    } catch (err) {
+      setArtifactsError(err.message || String(err))
+    }
+  }
+
+  async function handleRestoreArtifact(artifactId) {
+    const ok = window.confirm(`Restore artifact ${artifactId} to active state?`)
+    if (!ok) return
+    setArtifactsStatus('Restoring artifact...')
+    try {
+      await restoreArtifact(artifactId)
+      setArtifactsStatus(`Restored artifact ${artifactId}`)
+      loadArtifacts()
+    } catch (err) {
+      setArtifactsError(err.message || String(err))
+    }
+  }
+
+  async function handleSaveArtifactLifecyclePolicy() {
+    const days = Number(artifactLifecyclePolicyInput)
+    if (!Number.isFinite(days) || days < 1) {
+      setArtifactsError('Retention days must be >= 1.')
+      return
+    }
+    setArtifactsStatus('Saving lifecycle policy...')
+    try {
+      const res = await setArtifactLifecyclePolicy(days)
+      setArtifactLifecyclePolicy({
+        deprecatedDeleteAfterDays: Number(res?.deprecatedDeleteAfterDays || days),
+        updatedAt: res?.updatedAt || '',
+      })
+      setArtifactsStatus('Lifecycle policy updated')
+      loadArtifactLifecycleStatus()
+    } catch (err) {
+      setArtifactsError(err.message || String(err))
+    }
+  }
+
+  async function handlePruneArtifacts() {
+    const ok = window.confirm('Prune deprecated artifacts that reached delete-after and are no longer referenced?')
+    if (!ok) return
+    setArtifactsStatus('Pruning deprecated artifacts...')
+    try {
+      const res = await pruneArtifacts(200)
+      setArtifactsStatus(`Prune complete: deleted ${res.deletedNum || 0}, skipped ${res.skippedNum || 0}`)
+      loadArtifacts()
+      loadDesired()
+      loadArtifactLifecycleStatus()
     } catch (err) {
       setArtifactsError(err.message || String(err))
     }
@@ -1433,11 +1881,207 @@ export default function App() {
       if (selectedGroupId === groupId) {
         setSelectedGroupId('')
       }
+      setSelectedGroupIds((prev) => prev.filter((id) => id !== groupId))
       loadGroups()
       loadDesired()
     } catch (err) {
       setGroupsError(err.message || String(err))
     }
+  }
+
+  async function applyGroupBatchActions(actions, statusPrefix) {
+    if (!actions || actions.length === 0) {
+      setGroupBatchError('No actions to apply.')
+      return { applied: 0, failed: 0, results: [] }
+    }
+    setGroupBatchError('')
+    setGroupBatchStatus(`${statusPrefix}...`)
+    try {
+      const response = await batchGroups({ actions })
+      const applied = Number(response?.applied || 0)
+      const failed = Number(response?.failed || 0)
+      const results = Array.isArray(response?.results) ? response.results : []
+      const firstError = results.find((item) => item?.status !== 'applied' && item?.error)
+      if (firstError) {
+        setGroupBatchError(firstError.error)
+      }
+      setGroupBatchStatus(`${statusPrefix}: ${applied} applied, ${failed} failed.`)
+      setGroupsStatus(`${statusPrefix}: ${applied} applied, ${failed} failed.`)
+      loadGroups()
+      loadDesired()
+      return { applied, failed, results }
+    } catch (err) {
+      const msg = err.message || String(err)
+      setGroupBatchError(msg)
+      setGroupBatchStatus('')
+      return { applied: 0, failed: actions.length, results: [] }
+    }
+  }
+
+  function clearGroupSelection() {
+    setSelectedGroupIds([])
+    groupSelectionAnchorRef.current = -1
+  }
+
+  function handleGroupRowSelect(index, checked, shiftKey) {
+    setSelectedGroupIds((prev) => {
+      const next = new Set(prev)
+      const anchor = groupSelectionAnchorRef.current
+      const hasRange = shiftKey && anchor >= 0 && anchor < groups.length
+      if (hasRange) {
+        const start = Math.min(anchor, index)
+        const end = Math.max(anchor, index)
+        for (let i = start; i <= end; i += 1) {
+          const id = groups[i]?.groupId
+          if (!id) continue
+          if (checked) next.add(id)
+          else next.delete(id)
+        }
+      } else {
+        const id = groups[index]?.groupId
+        if (id) {
+          if (checked) next.add(id)
+          else next.delete(id)
+        }
+      }
+      groupSelectionAnchorRef.current = index
+      return groups.map((group) => group.groupId).filter((id) => next.has(id))
+    })
+  }
+
+  function handleSelectAllGroups(checked) {
+    if (checked) {
+      setSelectedGroupIds(groups.map((group) => group.groupId))
+      return
+    }
+    clearGroupSelection()
+  }
+
+  async function handleBulkDeleteSelectedGroups() {
+    if (selectedGroupIds.length === 0) return
+    const confirmed = window.confirm(
+      `Delete ${selectedGroupIds.length} selected group(s)? This also clears desired state for those groups.`,
+    )
+    if (!confirmed) return
+    const actions = selectedGroupIds.map((groupId) => ({ action: 'delete', groupId }))
+    const res = await applyGroupBatchActions(actions, 'Bulk delete')
+    if (res.failed === 0) {
+      clearGroupSelection()
+    }
+  }
+
+  function selectedGroupsSnapshot() {
+    const selectedSet = new Set(selectedGroupIds)
+    return groups.filter((group) => selectedSet.has(group.groupId))
+  }
+
+  function openGroupMultiEdit() {
+    if (selectedGroupIds.length === 0) return
+    setGroupMultiEditError('')
+    setGroupMultiEditStatus('')
+    setGroupMultiEditForm({
+      region: '',
+      role: '',
+      site: '',
+      custom: [{ key: '', value: '' }],
+    })
+    setGroupMultiEditOpen(true)
+  }
+
+  async function handleApplyGroupMultiEdit() {
+    const selected = selectedGroupsSnapshot()
+    if (selected.length === 0) return
+    setGroupMultiEditError('')
+    setGroupMultiEditStatus('Applying group edits...')
+
+    const customRows = (groupMultiEditForm.custom || [])
+      .map((row) => ({ key: String(row.key || '').trim(), value: String(row.value || '') }))
+      .filter((row) => row.key)
+    const invalidCustom = customRows.some((row) => row.value === '')
+    if (invalidCustom) {
+      setGroupMultiEditError('Custom keys require values.')
+      setGroupMultiEditStatus('')
+      return
+    }
+
+    const hasAnyChange = Boolean(
+      groupMultiEditForm.region ||
+      groupMultiEditForm.role ||
+      groupMultiEditForm.site ||
+      customRows.length > 0,
+    )
+    if (!hasAnyChange) {
+      setGroupMultiEditError('Set at least one value to apply.')
+      setGroupMultiEditStatus('')
+      return
+    }
+
+    const actions = selected.map((group) => {
+      const selector = normalizeObject(group.selector)
+      if (groupMultiEditForm.region) selector.region = groupMultiEditForm.region
+      if (groupMultiEditForm.role) selector.role = groupMultiEditForm.role
+      if (groupMultiEditForm.site) selector.site = groupMultiEditForm.site
+      customRows.forEach((row) => {
+        selector[row.key] = row.value
+      })
+      return {
+        action: 'upsert',
+        groupId: group.groupId,
+        name: group.name || '',
+        selector,
+      }
+    })
+    const res = await applyGroupBatchActions(actions, 'Bulk group edit')
+    setGroupMultiEditStatus(`Applied edits: ${res.applied} succeeded, ${res.failed} failed.`)
+    if (res.failed === 0) {
+      setGroupMultiEditOpen(false)
+    }
+  }
+
+  function openGroupMultiDesired() {
+    if (selectedGroupIds.length === 0) return
+    setGroupMultiDesiredError('')
+    setGroupMultiDesiredStatus('')
+    setGroupMultiDesiredForm({
+      checkinIntervalSec: '',
+      components: [newComponentRow()],
+    })
+    setGroupMultiDesiredOpen(true)
+  }
+
+  async function handleApplyGroupMultiDesired(e) {
+    if (e) e.preventDefault()
+    const selected = selectedGroupsSnapshot()
+    if (selected.length === 0) return
+    setGroupMultiDesiredError('')
+    setGroupMultiDesiredStatus('Applying desired state...')
+    const { components, error } = buildComponentsPayload(groupMultiDesiredForm.components)
+    if (error) {
+      setGroupMultiDesiredError(error)
+      setGroupMultiDesiredStatus('')
+      return
+    }
+    const payload = {
+      components,
+      checkinIntervalSec: groupMultiDesiredForm.checkinIntervalSec
+        ? Number(groupMultiDesiredForm.checkinIntervalSec)
+        : undefined,
+    }
+    const results = await Promise.allSettled(
+      selected.map((group) => setDesiredStateGroup(group.groupId, payload)),
+    )
+    const failed = results.filter((item) => item.status === 'rejected').length
+    const succeeded = results.length - failed
+    setGroupMultiDesiredStatus(`Set desired for ${succeeded} group(s), ${failed} failed.`)
+    if (failed > 0) {
+      const firstError = results.find((item) => item.status === 'rejected')
+      if (firstError && firstError.status === 'rejected') {
+        setGroupMultiDesiredError(firstError.reason?.message || String(firstError.reason))
+      }
+    } else {
+      setGroupMultiDesiredOpen(false)
+    }
+    loadDesired()
   }
 
   async function handleGroupDeviceToggle(group, device, shouldAdd) {
@@ -1504,6 +2148,175 @@ export default function App() {
     }
   }
 
+  function handlePreviewGroupBulk() {
+    setGroupBulkError('')
+    setGroupBulkStatus('')
+    setGroupBulkRollbackCsv('')
+    const plan = parseBulkGroupsCsv(groupBulkCsv, groups)
+    setGroupBulkPreview(plan)
+    if (plan.summary.totalRows === 0) {
+      setGroupBulkError('No CSV rows found.')
+    } else if (plan.summary.errorRows > 0) {
+      setGroupBulkError(`Preview contains ${plan.summary.errorRows} row error(s). Fix and preview again.`)
+    }
+  }
+
+  async function handleGroupBulkFileChange(event) {
+    const file = event.target.files?.[0]
+    if (!file) return
+    try {
+      const text = await file.text()
+      setGroupBulkCsv(text)
+      setGroupBulkPreview(null)
+      setGroupBulkError('')
+      setGroupBulkStatus('')
+      setGroupBulkRollbackCsv('')
+    } catch (err) {
+      setGroupBulkError(err.message || String(err))
+    }
+  }
+
+  function downloadGroupBulkRollback() {
+    if (!groupBulkRollbackCsv) return
+    const blob = new Blob([groupBulkRollbackCsv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'groups-rollback.csv'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  function downloadGroupBulkTemplate() {
+    const template = [
+      'action,groupId,name,region,role,site,selector_json,selector.customer',
+      'upsert,,canary-west,west,edge,lab-1,,acme',
+      'upsert,,prod-west,west,edge,site-a,"{""tier"":""prod""}",',
+      'delete,00000000-0000-0000-0000-000000000000,,,,,,,',
+    ].join('\n')
+    const blob = new Blob([`${template}\n`], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'groups-bulk-template.csv'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  async function handleApplyGroupBulk() {
+    const plan = groupBulkPreview || parseBulkGroupsCsv(groupBulkCsv, groups)
+    setGroupBulkPreview(plan)
+    if (plan.summary.errorRows > 0) {
+      setGroupBulkError(`Cannot apply while ${plan.summary.errorRows} row error(s) exist.`)
+      return
+    }
+    const applyRows = plan.rows.filter((row) => ['create', 'update', 'delete'].includes(row.outcome))
+    if (applyRows.length === 0) {
+      setGroupBulkStatus('Nothing to apply. All rows are no-change or skipped.')
+      return
+    }
+    const ok = window.confirm(
+      `Apply bulk group changes?\n` +
+      `Create: ${plan.summary.createRows}\n` +
+      `Update: ${plan.summary.updateRows}\n` +
+      `Delete: ${plan.summary.deleteRows}`,
+    )
+    if (!ok) return
+
+    setGroupBulkApplying(true)
+    setGroupBulkError('')
+    setGroupBulkStatus('Applying bulk group changes...')
+    setGroupBulkRollbackCsv('')
+
+    const existingByID = new Map(groups.map((group) => [group.groupId, group]))
+    const rollbackRows = []
+    const applyStateByRowID = new Map()
+    const actions = applyRows.map((row) => (
+      row.action === 'delete'
+        ? { action: 'delete', groupId: row.groupId }
+        : {
+            action: 'upsert',
+            groupId: row.groupId,
+            name: row.name || '',
+            selector: row.selector || {},
+          }
+    ))
+
+    let success = 0
+    let failed = 0
+    try {
+      const batch = await batchGroups({ actions })
+      const results = Array.isArray(batch?.results) ? batch.results : []
+      if (results.length === 0) {
+        success = Number(batch?.applied || 0)
+        failed = Number(batch?.failed || 0)
+      } else {
+        results.forEach((result) => {
+          const idx = Number(result?.index)
+          const row = Number.isInteger(idx) && idx >= 0 && idx < applyRows.length ? applyRows[idx] : null
+          if (!row) return
+          if (result?.status === 'applied') {
+            applyStateByRowID.set(row.rowId, { applyStatus: 'applied', applyError: '' })
+            success += 1
+            const previous = existingByID.get(row.groupId)
+            if (row.action === 'delete') {
+              if (previous) {
+                rollbackRows.push({
+                  action: 'upsert',
+                  groupId: previous.groupId,
+                  name: previous.name || '',
+                  selector: normalizeSelector(previous.selector),
+                })
+              }
+            } else if (previous) {
+              rollbackRows.push({
+                action: 'upsert',
+                groupId: previous.groupId,
+                name: previous.name || '',
+                selector: normalizeSelector(previous.selector),
+              })
+            } else {
+              rollbackRows.push({
+                action: 'delete',
+                groupId: row.groupId,
+                name: '',
+                selector: {},
+              })
+            }
+          } else {
+            failed += 1
+            applyStateByRowID.set(row.rowId, { applyStatus: 'failed', applyError: result?.error || 'batch action failed' })
+          }
+        })
+      }
+    } catch (err) {
+      setGroupBulkApplying(false)
+      setGroupBulkError(err.message || String(err))
+      return
+    }
+
+    setGroupBulkPreview((current) => {
+      if (!current) return current
+      return {
+        ...current,
+        rows: current.rows.map((row) => {
+          const state = applyStateByRowID.get(row.rowId)
+          if (!state) return row
+          return { ...row, applyStatus: state.applyStatus, applyError: state.applyError }
+        }),
+      }
+    })
+    if (rollbackRows.length > 0) {
+      setGroupBulkRollbackCsv(buildBulkGroupsRollbackCsv(rollbackRows))
+    }
+
+    setGroupBulkStatus(`Bulk apply complete: ${success} succeeded, ${failed} failed.`)
+    setGroupsStatus(`Bulk group apply: ${success} succeeded, ${failed} failed.`)
+    setGroupBulkApplying(false)
+    loadGroups()
+    loadDesired()
+  }
+
   async function handleClearGroupDesired() {
     if (!selectedGroupId) return
     const ok = window.confirm('Clear desired state for this group?')
@@ -1559,6 +2372,29 @@ export default function App() {
       setLogError(err.message || String(err))
     } finally {
       setLogLoading(false)
+    }
+  }
+
+  function buildEventParams() {
+    return {
+      type: eventType || undefined,
+      deviceId: eventDeviceId || undefined,
+      since: toIsoIfValid(eventFrom) || undefined,
+      until: toIsoIfValid(eventTo) || undefined,
+      limit: eventLimit ? Number(eventLimit) : undefined,
+    }
+  }
+
+  async function loadEventsHistory() {
+    setEventLoading(true)
+    setEventQueryError('')
+    try {
+      const res = await listRuntimeEvents(buildEventParams())
+      setEventRows(res.items || [])
+    } catch (err) {
+      setEventQueryError(err.message || String(err))
+    } finally {
+      setEventLoading(false)
     }
   }
 
@@ -1677,6 +2513,33 @@ export default function App() {
       }
     } catch (err) {
       setAuditRetentionStatus(err.message || String(err))
+    }
+  }
+
+  async function loadEventRetention() {
+    try {
+      const res = await getEventRetention()
+      setEventRetentionState(res)
+      if (res?.days) {
+        setEventRetentionDays(String(res.days))
+      }
+    } catch (err) {
+      setEventRetentionStatus(err.message || String(err))
+    }
+  }
+
+  async function updateEventRetention() {
+    const value = Number(eventRetentionDays)
+    if (!value || value <= 0) return
+    setEventRetentionStatus('Updating retention...')
+    try {
+      const res = await setEventRetention(value)
+      setEventRetentionState(res)
+      setEventRetentionDays(String(res.days))
+      setEventRetentionStatus('Retention updated')
+      await loadEventsHistory()
+    } catch (err) {
+      setEventRetentionStatus(err.message || String(err))
     }
   }
 
@@ -1983,16 +2846,26 @@ export default function App() {
       })
       .sort((a, b) => a.name.localeCompare(b.name))
   }, [artifacts])
+  const activeArtifactGroups = useMemo(() => {
+    return artifactGroups
+      .map((group) => ({
+        ...group,
+        versions: group.versions.filter((artifact) => normalizeArtifactStatus(artifact.status) !== 'deprecated'),
+      }))
+      .filter((group) => group.versions.length > 0)
+  }, [artifactGroups])
   const artifactModalGroups = useMemo(() => {
-    if (!artifactPickerTarget) return artifactGroups
+    if (!artifactPickerTarget) return activeArtifactGroups
     const { scope, index } = artifactPickerTarget
     const row = scope === 'group'
       ? groupDesiredForm.components?.[index]
-      : deviceForm.components?.[index]
+      : scope === 'groupBulk'
+        ? groupMultiDesiredForm.components?.[index]
+        : deviceForm.components?.[index]
     const type = normalizeArtifactType(row?.artifactType)
-    if (!type) return artifactGroups
-    return filterArtifactGroupsByType(artifactGroups, type)
-  }, [artifactGroups, artifactPickerTarget, deviceForm.components, groupDesiredForm.components])
+    if (!type) return activeArtifactGroups
+    return filterArtifactGroupsByType(activeArtifactGroups, type)
+  }, [activeArtifactGroups, artifactPickerTarget, deviceForm.components, groupDesiredForm.components, groupMultiDesiredForm.components])
   const selectedGroup = groups.find((g) => g.groupId === selectedGroupId)
   const selectedGroupSelector = selectedGroup ? normalizeObject(selectedGroup.selector) : {}
   const groupDeviceList = useMemo(() => {
@@ -2010,6 +2883,9 @@ export default function App() {
     })
     return counts
   }, [groups, devices])
+  const selectedGroupSet = useMemo(() => new Set(selectedGroupIds), [selectedGroupIds])
+  const allGroupsSelected = groups.length > 0 && selectedGroupIds.length === groups.length
+  const someGroupsSelected = selectedGroupIds.length > 0 && !allGroupsSelected
 
   const groupSelectorById = useMemo(() => {
     const map = {}
@@ -2227,6 +3103,25 @@ export default function App() {
           <div className="status hint">
             Auth mode: {authStatus.mode}
           </div>
+          {bootstrapState.enabled && (
+            <div className="bootstrap-panel">
+              <div className="detail-label">Bootstrap</div>
+              {bootstrapState.tokenRequired && (
+                <>
+                  <label>{bootstrapState.tokenHeader || 'Bootstrap token'}</label>
+                  <input
+                    value={bootstrapToken}
+                    onChange={(e) => setBootstrapToken(e.target.value)}
+                    placeholder="paste bootstrap token"
+                  />
+                </>
+              )}
+              <button className="button ghost" onClick={doDownloadBootstrapCA}>
+                Download CA Certificate
+              </button>
+              {bootstrapStatusMessage && <div className="status">{bootstrapStatusMessage}</div>}
+            </div>
+          )}
         </div>
       </div>
     )
@@ -2433,15 +3328,57 @@ export default function App() {
                   >
                     Add Group
                   </button>
+                  <button
+                    onClick={() => {
+                      setGroupBulkOpen(true)
+                      setGroupBulkError('')
+                      setGroupBulkStatus('')
+                    }}
+                    className="button ghost"
+                  >
+                    Advanced CSV
+                  </button>
                   <button onClick={loadGroups} className="button ghost">Refresh</button>
                 </div>
               </div>
               {groupsError && <div className="error">{groupsError}</div>}
+              {groupBatchError && <div className="error">{groupBatchError}</div>}
+
+              <div className="group-selection-toolbar">
+                <div className="group-selection-count">{selectedGroupIds.length} selected</div>
+                <div className="inline-row">
+                  <button className="button ghost" onClick={openGroupMultiEdit} disabled={selectedGroupIds.length === 0}>
+                    Edit Selected
+                  </button>
+                  <button className="button ghost" onClick={openGroupMultiDesired} disabled={selectedGroupIds.length === 0}>
+                    Set Desired Selected
+                  </button>
+                  <button className="button" onClick={handleBulkDeleteSelectedGroups} disabled={selectedGroupIds.length === 0}>
+                    Delete Selected
+                  </button>
+                  <button className="button ghost" onClick={clearGroupSelection} disabled={selectedGroupIds.length === 0}>
+                    Clear
+                  </button>
+                </div>
+                {groupBatchStatus && <div className="status">{groupBatchStatus}</div>}
+              </div>
 
               <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
+                      <th>
+                        <input
+                          type="checkbox"
+                          checked={allGroupsSelected}
+                          ref={(el) => {
+                            if (el) {
+                              el.indeterminate = someGroupsSelected
+                            }
+                          }}
+                          onChange={(e) => handleSelectAllGroups(e.target.checked)}
+                        />
+                      </th>
                       <th>Name</th>
                       <th>Selector</th>
                       <th>Devices</th>
@@ -2449,8 +3386,15 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {groups.map((group) => (
+                    {groups.map((group, index) => (
                       <tr key={group.groupId} className={selectedGroupId === group.groupId ? 'selected' : ''}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={selectedGroupSet.has(group.groupId)}
+                            onChange={(e) => handleGroupRowSelect(index, e.target.checked, Boolean(e.nativeEvent?.shiftKey))}
+                          />
+                        </td>
                         <td>{group.name || group.groupId}</td>
                         <td><code>{formatSelector(group.selector || {})}</code></td>
                         <td>{groupCounts[group.groupId] ?? 0}</td>
@@ -2498,7 +3442,7 @@ export default function App() {
                     ))}
                     {groups.length === 0 && (
                       <tr>
-                        <td colSpan={4}>No groups yet.</td>
+                        <td colSpan={5}>No groups yet.</td>
                       </tr>
                     )}
                   </tbody>
@@ -2558,60 +3502,104 @@ export default function App() {
             </section>
 
             <section id="artifacts" className="card">
-          <div className="section-header">
-            <h2>Artifacts</h2>
-            <div className="inline-row">
-              <button onClick={() => setArtifactUploadOpen(true)} className="button">Upload</button>
-              <button onClick={loadArtifacts} className="button ghost">Refresh</button>
-            </div>
-          </div>
-          {artifactsError && <div className="error">{artifactsError}</div>}
+              <div className="section-header">
+                <h2>Artifacts</h2>
+                <div className="inline-row">
+                  <button onClick={() => setArtifactUploadOpen(true)} className="button" disabled={!canManageArtifacts}>
+                    Upload
+                  </button>
+                  <button
+                    onClick={handlePruneArtifacts}
+                    className="button ghost"
+                    disabled={!canManageArtifactLifecycle}
+                  >
+                    Prune now
+                  </button>
+                  <button onClick={loadArtifacts} className="button ghost">Refresh</button>
+                </div>
+              </div>
+              {artifactsError && <div className="error">{artifactsError}</div>}
 
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Artifact ID</th>
-                  <th>Version</th>
-                  <th>Signed</th>
-                  <th>SHA256</th>
-                  <th>Size</th>
-                  <th>Created</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {artifactGroups.map((group) => (
-                  group.versions.map((a, idx) => (
-                    <tr key={a.artifactId} className={idx === 0 ? 'artifact-group-start' : ''}>
-                      <td>{idx === 0 ? group.name : ''}</td>
-                      <td>{a.artifactId}</td>
-                      <td>{a.version}</td>
-                      <td>
-                        <span className={`pill ${a.signature ? 'signed' : 'unsigned'}`}>
-                          {a.signature ? 'signed' : 'unsigned'}
-                        </span>
-                      </td>
-                      <td className="mono">{a.sha256}</td>
-                      <td>{a.sizeBytes}</td>
-                      <td>{a.createdAt}</td>
-                      <td>
-                        <button className="button ghost" onClick={() => handleDeleteArtifact(a.artifactId)}>
-                          Delete
-                        </button>
-                      </td>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Artifact ID</th>
+                      <th>Version</th>
+                      <th>Type</th>
+                      <th>Lifecycle</th>
+                      <th>Signed</th>
+                      <th>Refs</th>
+                      <th>Delete After</th>
+                      <th>Created</th>
+                      <th>Actions</th>
                     </tr>
-                  ))
-                ))}
-                {artifactGroups.length === 0 && (
-                  <tr>
-                    <td colSpan={8}>No artifacts uploaded yet.</td>
-                  </tr>
-                )}
-              </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {artifactGroups.map((group) => (
+                      group.versions.map((a, idx) => {
+                        const lifecycle = normalizeArtifactStatus(a.status)
+                        const refs = Number(a.referenceCount || 0)
+                        const canDeleteArtifactVersion =
+                          canManageArtifacts && lifecycle === 'deprecated' && refs <= 0
+                        return (
+                          <tr key={a.artifactId} className={idx === 0 ? 'artifact-group-start' : ''}>
+                            <td>{idx === 0 ? group.name : ''}</td>
+                            <td className="mono">{a.artifactId}</td>
+                            <td>{a.version}</td>
+                            <td>{a.type || 'app_bundle'}</td>
+                            <td>
+                              <span className={`pill artifact-status ${lifecycle}`}>
+                                {lifecycle}
+                              </span>
+                            </td>
+                            <td>
+                              <span className={`pill ${a.signature ? 'signed' : 'unsigned'}`}>
+                                {a.signature ? 'signed' : 'unsigned'}
+                              </span>
+                            </td>
+                            <td>{refs}</td>
+                            <td>{lifecycle === 'deprecated' ? formatTime(a.deleteAfter) : '—'}</td>
+                            <td>{formatTime(a.createdAt)}</td>
+                            <td className="artifact-actions">
+                              {lifecycle === 'deprecated' ? (
+                                <button
+                                  className="button artifact-action-main"
+                                  onClick={() => handleRestoreArtifact(a.artifactId)}
+                                  disabled={!canManageArtifacts}
+                                >
+                                  Restore
+                                </button>
+                              ) : (
+                                <button
+                                  className="button artifact-action-main"
+                                  onClick={() => handleDeprecateArtifact(a.artifactId)}
+                                  disabled={!canManageArtifacts}
+                                >
+                                  Deprecate
+                                </button>
+                              )}
+                              <button
+                                className={lifecycle === 'deprecated' ? 'button' : 'button ghost muted'}
+                                onClick={() => handleDeleteArtifact(a.artifactId)}
+                                disabled={!canDeleteArtifactVersion}
+                              >
+                                Delete
+                              </button>
+                            </td>
+                          </tr>
+                        )
+                      })
+                    ))}
+                    {artifactGroups.length === 0 && (
+                      <tr>
+                        <td colSpan={10}>No artifacts uploaded yet.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </section>
           </>
         )}
@@ -2835,6 +3823,9 @@ export default function App() {
                 {logsTab === 'events' && (
                   <>
                     <span className={`pill ${eventsStatus}`}>{eventsStatus}</span>
+                    <button className="button" onClick={loadEventsHistory}>
+                      Fetch History
+                    </button>
                     <button className="button ghost" onClick={() => setEventsFeed([])}>
                       Clear
                     </button>
@@ -2874,6 +3865,7 @@ export default function App() {
             {logsTab === 'events' && (
               <div className="events">
                 {eventsError && <div className="error">{eventsError}</div>}
+                {eventQueryError && <div className="error">{eventQueryError}</div>}
                 <div className="events-feed scroll">
                   {liveEvents.length === 0 ? (
                     <div className="placeholder">No events yet.</div>
@@ -2891,6 +3883,94 @@ export default function App() {
                     ))
                   )}
                 </div>
+                <div className="form inline">
+                  <label>Type</label>
+                  <input
+                    value={eventType}
+                    onChange={(e) => setEventType(e.target.value)}
+                    placeholder="device.checkin"
+                  />
+                  <label>Device ID</label>
+                  <input
+                    value={eventDeviceId}
+                    onChange={(e) => setEventDeviceId(e.target.value)}
+                    placeholder="device uuid"
+                  />
+                  <label>From</label>
+                  <input
+                    type="datetime-local"
+                    value={eventFrom}
+                    onChange={(e) => setEventFrom(e.target.value)}
+                  />
+                  <label>To</label>
+                  <input
+                    type="datetime-local"
+                    value={eventTo}
+                    onChange={(e) => setEventTo(e.target.value)}
+                  />
+                  <label>Limit</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="5000"
+                    value={eventLimit}
+                    onChange={(e) => setEventLimit(e.target.value)}
+                  />
+                </div>
+
+                {isAdmin && (
+                  <div className="form inline audit-retention">
+                    <label>Retention (days)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="3650"
+                      value={eventRetentionDays}
+                      onChange={(e) => setEventRetentionDays(e.target.value)}
+                    />
+                    <button className="button ghost" onClick={updateEventRetention}>
+                      Update retention
+                    </button>
+                    <div className="status">
+                      Last updated: {eventRetention.updatedAt ? new Date(eventRetention.updatedAt).toLocaleString() : '—'}
+                    </div>
+                    {eventRetentionStatus && <div className="status">{eventRetentionStatus}</div>}
+                  </div>
+                )}
+
+                {eventLoading ? (
+                  <div className="placeholder">Loading retained events...</div>
+                ) : (
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Time</th>
+                          <th>Type</th>
+                          <th>Device</th>
+                          <th>Payload</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {eventRows.map((row, idx) => (
+                          <tr key={`${row.eventId || row.occurredAt}-${idx}`}>
+                            <td>{formatTime(row.occurredAt)}</td>
+                            <td>{row.type}</td>
+                            <td>{row.deviceId || '—'}</td>
+                            <td className="event-payload">
+                              <code>{row.payload ? JSON.stringify(row.payload) : '—'}</code>
+                            </td>
+                          </tr>
+                        ))}
+                        {eventRows.length === 0 && (
+                          <tr>
+                            <td colSpan={4}>No retained events found.</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             )}
 
@@ -3432,6 +4512,9 @@ export default function App() {
               <h2>Settings</h2>
               <div className="settings-toolbar">
                 <button className="button ghost" onClick={loadMaintenance}>Refresh maintenance</button>
+                <button className="button ghost" onClick={() => { loadArtifactLifecyclePolicy(); loadArtifactLifecycleStatus() }}>
+                  Refresh lifecycle
+                </button>
                 <button className="button ghost" onClick={loadUpgrade}>Refresh upgrade</button>
                 <button className="button ghost" onClick={loadUpgradeAvailable}>Refresh updates</button>
               </div>
@@ -3458,6 +4541,60 @@ export default function App() {
                       {maintenance.enabled ? 'Disable maintenance' : 'Enable maintenance'}
                     </button>
                   </div>
+                </div>
+              </div>
+
+              <div className="settings-section">
+                <div className="settings-title">Artifact Lifecycle</div>
+                <div className="artifact-lifecycle-toolbar">
+                  <div className="inline-row">
+                    <label className="artifact-lifecycle-label">Deprecated retention (days)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={artifactLifecyclePolicyInput}
+                      onChange={(e) => setArtifactLifecyclePolicyInput(e.target.value)}
+                      disabled={!canManageArtifactLifecycle}
+                    />
+                    <button
+                      className="button ghost"
+                      onClick={handleSaveArtifactLifecyclePolicy}
+                      disabled={!canManageArtifactLifecycle}
+                    >
+                      Save policy
+                    </button>
+                  </div>
+                  <div className="hint">
+                    Deprecated artifacts are eligible for prune after the configured retention window, if not referenced.
+                  </div>
+                  <div className="detail-note">
+                    Policy updated: {formatTime(artifactLifecyclePolicy.updatedAt)}
+                  </div>
+                  <div className="detail-note">
+                    Auto prune: {artifactLifecycleStatus.enabled ? 'enabled' : 'disabled'}
+                    {artifactLifecycleStatus.intervalSeconds > 0
+                      ? ` every ${formatDurationSeconds(artifactLifecycleStatus.intervalSeconds)}`
+                      : ''}
+                    {artifactLifecycleStatus.running ? ' (running)' : ''}
+                  </div>
+                  {artifactLifecycleStatus.lastRun && (
+                    <div className="detail-note">
+                      Last run: {formatTime(artifactLifecycleStatus.lastRun.finishedAt || artifactLifecycleStatus.lastRun.cutoffUtc)} ·
+                      deleted {artifactLifecycleStatus.lastRun.deletedNum || 0} ·
+                      skipped {artifactLifecycleStatus.lastRun.skippedNum || 0}
+                      {artifactLifecycleStatus.lastRun.error ? ` · error: ${artifactLifecycleStatus.lastRun.error}` : ''}
+                    </div>
+                  )}
+                  {artifactLifecycleStatus.alerts.length > 0 && (
+                    <div className="artifact-lifecycle-alerts">
+                      {artifactLifecycleStatus.alerts.map((alert) => (
+                        <span key={alert.code} className={`pill artifact-alert ${alert.severity || 'warning'}`}>
+                          {alert.message}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -3778,10 +4915,12 @@ export default function App() {
                     {deviceForm.components.map((row, idx) => {
                       const locked = Boolean(row.locked)
                       const type = normalizeArtifactType(row.artifactType)
-                      const groupsForType = filterArtifactGroupsByType(artifactGroups, type)
+                      const groupsForType = filterArtifactGroupsByType(activeArtifactGroups, type)
+                      const allGroupsForType = filterArtifactGroupsByType(artifactGroups, type)
                       const selected = artifacts.find((a) => a.artifactId === row.artifactId)
                       const selectedGroup = selected
-                        ? groupsForType.find((g) => g.name === selected.name)
+                        ? (groupsForType.find((g) => g.name === selected.name) ||
+                          allGroupsForType.find((g) => g.name === selected.name))
                         : null
                       return (
                         <div className="component-row" key={row.id || `${row.key}-${idx}`}>
@@ -4009,6 +5148,12 @@ export default function App() {
                                 desiredVersion: a.version,
                                 artifactType: normalizeArtifactType(a.type),
                               })
+                            } else if (artifactPickerTarget?.scope === 'groupBulk') {
+                              updateGroupMultiDesiredComponent(artifactPickerTarget.index, {
+                                artifactId: a.artifactId,
+                                desiredVersion: a.version,
+                                artifactType: normalizeArtifactType(a.type),
+                              })
                             } else if (artifactPickerTarget?.scope === 'device') {
                               updateDeviceComponent(artifactPickerTarget.index, {
                                 artifactId: a.artifactId,
@@ -4026,6 +5171,11 @@ export default function App() {
                       </tr>
                     ))
                   ))}
+                  {artifactModalGroups.length === 0 && (
+                    <tr>
+                      <td colSpan={5}>No active artifacts match this component type.</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -4164,6 +5314,365 @@ export default function App() {
         </div>
       )}
 
+      {groupMultiEditOpen && (
+        <div className="modal-backdrop" onClick={() => setGroupMultiEditOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="section-header">
+              <h3>Edit Selected Groups</h3>
+              <button className="button ghost" onClick={() => setGroupMultiEditOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="detail-note">Selected groups: {selectedGroupIds.length}</div>
+            <div className="form">
+              <div>
+                <label>Region</label>
+                <input
+                  value={groupMultiEditForm.region}
+                  onChange={(e) => setGroupMultiEditForm({ ...groupMultiEditForm, region: e.target.value })}
+                  placeholder="leave blank to skip"
+                />
+              </div>
+              <div>
+                <label>Role</label>
+                <input
+                  value={groupMultiEditForm.role}
+                  onChange={(e) => setGroupMultiEditForm({ ...groupMultiEditForm, role: e.target.value })}
+                  placeholder="leave blank to skip"
+                />
+              </div>
+              <div>
+                <label>Site</label>
+                <input
+                  value={groupMultiEditForm.site}
+                  onChange={(e) => setGroupMultiEditForm({ ...groupMultiEditForm, site: e.target.value })}
+                  placeholder="leave blank to skip"
+                />
+              </div>
+              <div className="full">
+                <label>Custom Selector Values</label>
+                <div className="key-value-list">
+                  {groupMultiEditForm.custom.map((row, idx) => (
+                    <div key={`multi-custom-${idx}`} className="key-value-row">
+                      <input
+                        value={row.key}
+                        onChange={(e) => {
+                          const next = [...groupMultiEditForm.custom]
+                          next[idx] = { ...row, key: e.target.value }
+                          setGroupMultiEditForm({ ...groupMultiEditForm, custom: next })
+                        }}
+                        placeholder="key"
+                      />
+                      <input
+                        value={row.value}
+                        onChange={(e) => {
+                          const next = [...groupMultiEditForm.custom]
+                          next[idx] = { ...row, value: e.target.value }
+                          setGroupMultiEditForm({ ...groupMultiEditForm, custom: next })
+                        }}
+                        placeholder="value"
+                      />
+                      <button
+                        className="button ghost"
+                        type="button"
+                        onClick={() => {
+                          const next = groupMultiEditForm.custom.filter((_, cidx) => cidx !== idx)
+                          setGroupMultiEditForm({ ...groupMultiEditForm, custom: next.length > 0 ? next : [{ key: '', value: '' }] })
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    className="button ghost"
+                    type="button"
+                    onClick={() => setGroupMultiEditForm({
+                      ...groupMultiEditForm,
+                      custom: [...groupMultiEditForm.custom, { key: '', value: '' }],
+                    })}
+                  >
+                    Add Custom Key
+                  </button>
+                </div>
+              </div>
+              <div className="full inline-row">
+                <button className="button" type="button" onClick={handleApplyGroupMultiEdit}>
+                  Apply to Selected
+                </button>
+                {groupMultiEditStatus && <span className="status">{groupMultiEditStatus}</span>}
+              </div>
+            </div>
+            {groupMultiEditError && <div className="error">{groupMultiEditError}</div>}
+          </div>
+        </div>
+      )}
+
+      {groupMultiDesiredOpen && (
+        <div className="modal-backdrop" onClick={() => setGroupMultiDesiredOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="section-header">
+              <h3>Set Desired for Selected Groups</h3>
+              <button className="button ghost" onClick={() => setGroupMultiDesiredOpen(false)}>
+                Close
+              </button>
+            </div>
+            <form className="form" onSubmit={handleApplyGroupMultiDesired}>
+              <label>Selected Groups</label>
+              <input value={String(selectedGroupIds.length)} readOnly />
+              <label>Components</label>
+              <div className="component-editor">
+                {groupMultiDesiredForm.components.map((row, idx) => {
+                  const locked = Boolean(row.locked)
+                  const type = normalizeArtifactType(row.artifactType)
+                  const groupsForType = filterArtifactGroupsByType(activeArtifactGroups, type)
+                  const allGroupsForType = filterArtifactGroupsByType(artifactGroups, type)
+                  const selected = artifacts.find((a) => a.artifactId === row.artifactId)
+                  const selectedGroup = selected
+                    ? (groupsForType.find((g) => g.name === selected.name) ||
+                      allGroupsForType.find((g) => g.name === selected.name))
+                    : null
+                  return (
+                    <div className="component-row" key={row.id || `${row.key}-${idx}`}>
+                      <div className="inline-row">
+                        <input
+                          value={row.key}
+                          onChange={(e) => updateGroupMultiDesiredComponent(idx, { key: e.target.value })}
+                          placeholder="component key (e.g. app:customer)"
+                          disabled={locked}
+                        />
+                        <input
+                          list="artifact-types"
+                          value={row.artifactType}
+                          onChange={(e) => updateGroupMultiDesiredComponent(idx, { artifactType: e.target.value })}
+                          placeholder="artifact type"
+                          disabled={locked}
+                        />
+                        <label className="inline-toggle">
+                          <input
+                            type="checkbox"
+                            checked={locked}
+                            onChange={(e) => updateGroupMultiDesiredComponent(idx, { locked: e.target.checked })}
+                          />
+                          Lock
+                        </label>
+                        <button
+                          className="button ghost"
+                          type="button"
+                          onClick={() => removeGroupMultiDesiredComponent(idx)}
+                          disabled={locked || groupMultiDesiredForm.components.length <= 1}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      <div className="inline-row">
+                        <select
+                          value={selected?.name || ''}
+                          onChange={(e) => {
+                            const name = e.target.value
+                            const group = groupsForType.find((g) => g.name === name)
+                            if (!group) {
+                              updateGroupMultiDesiredComponent(idx, { artifactId: '', desiredVersion: '' })
+                            } else {
+                              const pick = group.versions[group.versions.length - 1]
+                              updateGroupMultiDesiredComponent(idx, {
+                                artifactId: pick.artifactId,
+                                desiredVersion: pick.version,
+                                artifactType: normalizeArtifactType(pick.type),
+                              })
+                            }
+                          }}
+                          disabled={locked}
+                        >
+                          <option value="">Select artifact</option>
+                          {groupsForType.map((group) => (
+                            <option key={group.name} value={group.name}>{group.name}</option>
+                          ))}
+                        </select>
+                        <button
+                          className="button ghost"
+                          type="button"
+                          onClick={() => openArtifactPicker('groupBulk', idx)}
+                          disabled={locked}
+                        >
+                          Browse
+                        </button>
+                        <select
+                          value={selected?.version || ''}
+                          onChange={(e) => {
+                            const version = e.target.value
+                            const pick = selectedGroup?.versions.find((v) => v.version === version)
+                            if (pick) {
+                              updateGroupMultiDesiredComponent(idx, {
+                                artifactId: pick.artifactId,
+                                desiredVersion: pick.version,
+                                artifactType: normalizeArtifactType(pick.type),
+                              })
+                            }
+                          }}
+                          disabled={locked}
+                        >
+                          <option value="">Select version</option>
+                          {(selectedGroup?.versions || []).map((artifact) => (
+                            <option key={artifact.artifactId} value={artifact.version}>
+                              {artifact.version}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="inline-row">
+                        <input value={row.artifactId} readOnly placeholder="artifact uuid" />
+                        <input
+                          value={row.desiredVersion}
+                          onChange={(e) => updateGroupMultiDesiredComponent(idx, { desiredVersion: e.target.value })}
+                          placeholder="desired version"
+                          disabled={locked}
+                        />
+                        <input
+                          value={row.desiredConfigRev}
+                          onChange={(e) => updateGroupMultiDesiredComponent(idx, { desiredConfigRev: e.target.value })}
+                          placeholder="config rev"
+                          disabled={locked}
+                        />
+                      </div>
+                    </div>
+                  )
+                })}
+                <button className="button ghost" type="button" onClick={addGroupMultiDesiredComponent}>
+                  Add component
+                </button>
+              </div>
+              <label>Check-in Interval (sec)</label>
+              <input
+                value={groupMultiDesiredForm.checkinIntervalSec}
+                onChange={(e) => setGroupMultiDesiredForm({ ...groupMultiDesiredForm, checkinIntervalSec: e.target.value })}
+                placeholder="30"
+              />
+              <div className="inline-row">
+                <button className="button" type="submit">Apply to Selected</button>
+                {groupMultiDesiredStatus && <span className="status">{groupMultiDesiredStatus}</span>}
+              </div>
+            </form>
+            {groupMultiDesiredError && <div className="error">{groupMultiDesiredError}</div>}
+          </div>
+        </div>
+      )}
+
+      {groupBulkOpen && (
+        <div className="modal-backdrop" onClick={() => setGroupBulkOpen(false)}>
+          <div className="modal bulk-group-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="section-header">
+              <h3>Bulk Group Management</h3>
+              <button className="button ghost" onClick={() => setGroupBulkOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="bulk-group-toolbar">
+              <button className="button ghost" onClick={downloadGroupBulkTemplate}>
+                Download template
+              </button>
+              <label className="button ghost bulk-group-file">
+                Load CSV
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={handleGroupBulkFileChange}
+                />
+              </label>
+              <button className="button ghost" onClick={handlePreviewGroupBulk}>
+                Preview
+              </button>
+              <button className="button" onClick={handleApplyGroupBulk} disabled={groupBulkApplying}>
+                {groupBulkApplying ? 'Applying…' : 'Apply'}
+              </button>
+              {groupBulkRollbackCsv && (
+                <button className="button ghost" onClick={downloadGroupBulkRollback}>
+                  Download rollback CSV
+                </button>
+              )}
+            </div>
+            <div className="hint">
+              CSV columns: <code>action</code>, <code>groupId</code>, <code>name</code>, <code>region</code>, <code>role</code>,
+              <code>site</code>, <code>selector_json</code>, or dynamic <code>selector.&lt;key&gt;</code> columns.
+            </div>
+            <div className="form">
+              <div className="full">
+                <label>CSV input</label>
+                <textarea
+                  className="bulk-group-input"
+                  value={groupBulkCsv}
+                  onChange={(e) => {
+                    setGroupBulkCsv(e.target.value)
+                    setGroupBulkPreview(null)
+                    setGroupBulkRollbackCsv('')
+                    setGroupBulkError('')
+                    setGroupBulkStatus('')
+                  }}
+                  placeholder="action,groupId,name,region,role,site,selector_json"
+                />
+              </div>
+            </div>
+            {groupBulkError && <div className="error">{groupBulkError}</div>}
+            {groupBulkStatus && <div className="status">{groupBulkStatus}</div>}
+            {groupBulkPreview && (
+              <>
+                <div className="detail-note">
+                  Rows: {groupBulkPreview.summary.totalRows} · valid {groupBulkPreview.summary.validRows} · errors {groupBulkPreview.summary.errorRows} ·
+                  create {groupBulkPreview.summary.createRows} · update {groupBulkPreview.summary.updateRows} ·
+                  delete {groupBulkPreview.summary.deleteRows} · no change {groupBulkPreview.summary.noChangeRows}
+                </div>
+                <div className="table-wrap bulk-group-table">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Line</th>
+                        <th>Action</th>
+                        <th>Group ID</th>
+                        <th>Name</th>
+                        <th>Selector</th>
+                        <th>Preview</th>
+                        <th>Apply</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {groupBulkPreview.rows.map((row) => (
+                        <tr key={row.rowId}>
+                          <td>{row.line}</td>
+                          <td>{row.action}</td>
+                          <td className="mono">{row.groupId || '—'}</td>
+                          <td>{row.name || '—'}</td>
+                          <td><code>{row.action === 'upsert' ? formatSelector(row.selector) : '—'}</code></td>
+                          <td>
+                            {row.error ? (
+                              <span className="status error-inline">{row.error}</span>
+                            ) : (
+                              <span className="pill">{row.outcome}</span>
+                            )}
+                          </td>
+                          <td>
+                            {row.applyStatus ? (
+                              <span className={`pill ${row.applyStatus === 'applied' ? 'signed' : 'unsigned'}`}>
+                                {row.applyStatus === 'applied' ? 'ok' : 'failed'}
+                              </span>
+                            ) : '—'}
+                            {row.applyError && <div className="status error-inline">{row.applyError}</div>}
+                          </td>
+                        </tr>
+                      ))}
+                      {groupBulkPreview.rows.length === 0 && (
+                        <tr>
+                          <td colSpan={7}>No rows parsed.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {groupDesiredOpen && (
         <div className="modal-backdrop" onClick={() => setGroupDesiredOpen(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -4181,10 +5690,12 @@ export default function App() {
                 {groupDesiredForm.components.map((row, idx) => {
                   const locked = Boolean(row.locked)
                   const type = normalizeArtifactType(row.artifactType)
-                  const groupsForType = filterArtifactGroupsByType(artifactGroups, type)
+                  const groupsForType = filterArtifactGroupsByType(activeArtifactGroups, type)
+                  const allGroupsForType = filterArtifactGroupsByType(artifactGroups, type)
                   const selected = artifacts.find((a) => a.artifactId === row.artifactId)
                   const selectedGroup = selected
-                    ? groupsForType.find((g) => g.name === selected.name)
+                    ? (groupsForType.find((g) => g.name === selected.name) ||
+                      allGroupsForType.find((g) => g.name === selected.name))
                     : null
                   return (
                     <div className="component-row" key={row.id || `${row.key}-${idx}`}>

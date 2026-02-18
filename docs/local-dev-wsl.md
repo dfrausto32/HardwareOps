@@ -45,6 +45,10 @@ Verify:
 curl --cacert ./dev-ca.crt https://localhost:8080/healthz
 ```
 
+Note on trust paths:
+- `VITE_SIMULATE_PROD=1` means browser talks directly to `https://localhost:8080` and must trust `dev-ca.crt`.
+- `VITE_API_PROXY=1` (dev proxy mode) avoids installing CA on the browser machine for local testing.
+
 Note: `run-control-plane.sh` starts with maintenance mode **enabled** by default.
 To disable from the UI, set `VITE_MAINTENANCE_TOKEN=dev-token` (already in `ui/.env`) and click **Disable maintenance**.
 You can also start without maintenance:

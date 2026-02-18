@@ -12,6 +12,9 @@ ARTIFACT_TYPE=${ARTIFACT_TYPE:-app_bundle}
 COMPONENT_PREFIX=${COMPONENT_PREFIX:-app:}
 OUT_DIR=${OUT_DIR:-/tmp/hardwareops-multi-apps}
 SIGN_ARTIFACTS=${SIGN_ARTIFACTS:-1}
+AUTH_TOKEN=${AUTH_TOKEN:-}
+AUTH_EMAIL=${AUTH_EMAIL:-}
+AUTH_PASSWORD=${AUTH_PASSWORD:-}
 
 if [ "$SIGN_ARTIFACTS" = "1" ]; then
   source "$BASE_DIR/scripts/ensure-signing-key.sh"
@@ -24,6 +27,28 @@ if [[ "$BASE_URL" == https:* ]]; then
   elif [ "$INSECURE" = "1" ]; then
     curl_opts+=(-k)
   fi
+fi
+
+auth_header=()
+if [ -z "$AUTH_TOKEN" ] && [ -n "$AUTH_EMAIL" ] && [ -n "$AUTH_PASSWORD" ]; then
+  login_payload=$(python3 - <<'PY' "$AUTH_EMAIL" "$AUTH_PASSWORD"
+import json
+import sys
+print(json.dumps({"email": sys.argv[1], "password": sys.argv[2]}))
+PY
+)
+  login_json=$(curl -sS --fail "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/auth/login" \
+    -H "Content-Type: application/json" \
+    -d "$login_payload")
+  AUTH_TOKEN=$(python3 - <<'PY' "$login_json"
+import json
+import sys
+print(json.loads(sys.argv[1]).get("token",""))
+PY
+)
+fi
+if [ -n "$AUTH_TOKEN" ]; then
+  auth_header=(-H "Authorization: Bearer $AUTH_TOKEN")
 fi
 
 IFS=',' read -r -a app_list <<<"$APP_NAMES"
@@ -214,7 +239,7 @@ PY
     if [ -n "$SIG" ]; then
       form_args+=(-F "signature=$SIG" -F "signatureKeyId=$SIG_KEY_ID")
     fi
-    upload_json=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/artifacts/upload" "${form_args[@]}")
+    upload_json=$(curl -sS --fail "${curl_opts[@]}" "${auth_header[@]}" -X POST "$BASE_URL/api/v1/artifacts/upload" "${form_args[@]}")
 
     artifact_id=$(python3 - <<'PY' "$upload_json"
 import json, sys

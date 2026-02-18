@@ -30,6 +30,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - ✅ Artifact ingest validation harness (push + pull local smoke test + operator test runbook).
 - ✅ Artifactory pull adapter (provider plugin) + signed local demo workflow (`setup-artifactory-demo.sh` / `test-artifactory-adapter.sh`).
 - ✅ License anti-cheat hardening v1 (atomic enroll cap enforcement + clone-suspicion telemetry).
+- ✅ Device identity hardening v1 (`DEVICE_IDENTITY_MODE` audit/enforce + hardware identity conflict detection on enroll/check-in).
 
 ---
 
@@ -154,12 +155,12 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Notes:** `/metrics` endpoint + health summary API + UI metrics page + dashboard activity graph shipped.
 
 #### Event retention
-- **Status:** ⬜ Planned
+- **Status:** 🟢 Complete
 - **Scope:** Realtime WS/SSE + persisted event store + retention policy.
 - **Dependencies:** Storage backend; retention jobs.
 - **Risks:** Storage growth.
 - **Acceptance:** Events are queryable over defined retention window.
-- **Notes:** 
+- **Notes:** Runtime events are persisted (`runtime_events`) with query API (`GET /api/v1/events/history`), retention config endpoints (`GET/PUT /api/v1/events/retention`), startup+scheduled cleanup worker, and Logs-page UI controls for filtering/history + retention updates.
 
 #### Certificate rotation cleanup (hybrid)
 - **Status:** 🟢 Complete
@@ -170,8 +171,8 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Notes:** Cleanup endpoint + UI control + grace window in place (see `docs/certs.md`).
 
 #### Artifact lifecycle management
-- **Status:** ⬜ Planned
-- **Scope:** Retain/deprecate/delete; policy-based cleanup.
+- **Status:** 🟢 Complete
+- **Scope:** Retain/deprecate/delete with safety guardrails and policy-based cleanup.
 - **Dependencies:** Artifact metadata + policy engine.
 - **Risks:** Deleting in‑use artifacts.
 - **Acceptance:** 
@@ -187,11 +188,12 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Risks:** False positives on clone detection and operator friction on decommission workflows.
 - **Acceptance:**
   - Enrollment cap enforcement is transactional and race-safe under concurrent enroll requests.
+  - Hardware identity conflicts are detected across enroll/check-in and can be enforced (`audit`/`enforce` mode).
   - Suspicious identity reuse patterns (rapid source-IP switch and capability drift) produce runtime/audit signals.
   - Production guardrails prevent accidental insecure mode (`AUTH_MODE=disabled`, `LICENSE_ENFORCE=0`) in hardened profiles.
   - Trusted-proxy allowlist is enforced for forwarded client-cert headers.
   - Device slot reclaim/decommission path is explicit and auditable (no silent quota bypass by deletes).
-- **Notes:** Shipped now: transactional device cap enforcement + clone-suspicion runtime/audit events. Remaining hardening items are scheduled in Phase B.
+- **Notes:** Shipped now: transactional device cap enforcement, clone-suspicion runtime/audit events, and hardware identity audit/enforce checks (`docs/development/device-identity-hardening.md`). Remaining hardening items are scheduled in Phase B.
 
 #### Release channels
 - **Status:** ⬜ Planned
@@ -202,20 +204,25 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Notes:** 
 
 #### Bulk group management
-- **Status:** ⬜ Planned
+- **Status:** 🟢 Complete
 - **Scope:** CSV import + batch label changes.
 - **Dependencies:** UI + API.
 - **Risks:** Accidental broad changes.
 - **Acceptance:** Bulk changes are previewable and reversible.
-- **Notes:** 
+- **Notes:** Groups page supports row-by-row multi-select (including shift-range), modal multi-edit for selected groups, modal multi-group desired-state apply, delete-selected, and an advanced CSV workflow with preview/apply + rollback CSV. Batch API is available at `POST /api/v1/groups/batch`.
 
 #### CI integrations
-- **Status:** ⬜ Planned
-- **Scope:** Presigned uploads + repo/blob pulls (Artifactory/S3/GCS).
+- **Status:** 🟡 In progress
+- **Scope:** Presigned uploads + repo/blob pulls (HTTP/Artifactory) with signed artifact ingestion.
 - **Dependencies:** Secrets management; ingest modes.
 - **Risks:** Credential leakage.
 - **Acceptance:** CI can publish artifacts without long‑lived creds.
-- **Notes:** 
+- **Notes:** Presigned CI push path implemented (`/artifacts/presign-upload` + `/artifacts/complete`) with scoped expiring service tokens (`artifact.publish`) and `scripts/ci-upload-artifact.sh`. Pull ingest API implemented (`/artifacts/pull`) with checksum validation + host/size/timeout guardrails. Adapter framework and backward-compatible source shape are in place (`sourceUrl` or `source.kind` + `source.uri`; current kinds=`http`,`artifactory`). Credential resolver abstraction is in place (`source.credentialRef`) with static map (`ARTIFACT_PULL_CREDENTIALS_FILE`/`ARTIFACT_PULL_CREDENTIALS_JSON`) plus AWS Secrets Manager-backed loading (`ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID`). Artifactory adapter shipped with local docker smoke scripts (`scripts/setup-artifactory-demo.sh`, `scripts/test-artifactory-adapter.sh`) and signed artifact demo flow. Test coverage/runbook added (`scripts/test-artifact-ingest.sh`, `docs/development/artifact-ingest-test-plan.md`). Remaining Phase B work: CI provider templates and operational rotation/reload workflow for pull credentials; Vault resolver backend is deferred to Phase C.
+
+### Recommended Next Sequence (Current)
+1. **CI integrations (finish Phase B):** Add CI provider templates (GitHub/GitLab/Jenkins) + operational credential-rotation runbook.
+2. **Release channels:** Add stable/canary promotion and staged rollout targeting.
+3. **Phase B closeout:** Run end-to-end validation + docs cleanup for CI/release workflow handoff.
 
 ---
 
@@ -260,6 +267,38 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Acceptance:** Users can log in via OIDC and get correct roles.
 - **Notes:** 
 
+#### CI workload identity federation
+- **Status:** ⬜ Planned
+- **Scope:** OIDC-based CI auth (GitHub/GitLab/Jenkins) for publish/pull without static secrets.
+- **Dependencies:** OIDC trust config, service-token exchange endpoint/policy.
+- **Risks:** Misconfigured trust policies.
+- **Acceptance:** CI jobs can obtain short-lived publish credentials by identity, no long-lived credential files required.
+- **Notes:** Candidate for Phase C once Phase B static-secret resolver and adapters are complete.
+
+#### Supply-chain provenance policy (Cosign/Sigstore)
+- **Status:** ⬜ Planned
+- **Scope:** Optional attestations/provenance verification policy in addition to Ed25519 signature checks.
+- **Dependencies:** CI provenance generation, policy model, verification pipeline.
+- **Risks:** Operational complexity and false rejects.
+- **Acceptance:** Policy can enforce trusted builder/provenance on selected artifact classes.
+- **Notes:** Phase C hardening item; current v1 remains Ed25519-compatible.
+
+#### Vulnerability scanning integration (optional, Tenable Nessus)
+- **Status:** ⬜ Planned
+- **Scope:** Optional integration to ingest Nessus scan results and surface vulnerability posture for deployed artifacts/devices.
+- **Dependencies:** Tenable API credentials, scan-to-asset mapping model, ingestion/sync job, UI views.
+- **Risks:** Asset identity mismatch, stale scan data, noisy findings without normalization.
+- **Acceptance:** Operators can see per-device/per-artifact vulnerability status (last scan time, severity counts, top CVEs), with no impact when feature is disabled.
+- **Notes:** Keep non-blocking for deployments; customers can enable/disable per environment. Initial cut should be read-only visibility first, policy gating later.
+
+#### Cloud-native pull adapters (S3/GCS)
+- **Status:** ⬜ Planned
+- **Scope:** Native `source.kind` adapters for S3 and GCS pull ingest.
+- **Dependencies:** IAM/Workload Identity, credential resolver policy, host/path allowlists.
+- **Risks:** Credential misconfiguration and broad bucket permissions.
+- **Acceptance:** Control-plane can ingest artifacts directly from S3/GCS sources with checksum/signature verification and audit parity.
+- **Notes:** Deferred from Phase B to Phase C; HTTP/Artifactory remain the v1 pull adapters.
+
 #### LDAP / AD support
 - **Status:** ⬜ Planned
 - **Scope:** LDAP/AD auth or sync.
@@ -274,7 +313,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Dependencies:** Secrets provider.
 - **Risks:** Secret sprawl.
 - **Acceptance:** No long‑lived secrets in config files.
-- **Notes:** 
+- **Notes:** AWS Secrets Manager-backed pull credential resolver is in place for CI pull ingest (`ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID`) from Phase B. Phase C expands this with a HashiCorp Vault resolver backend (plus auth/rotation runbook) so customers can use Vault as the source of pull credentials and related control-plane secrets.
 
 #### Break-glass workflows
 - **Status:** 🟡 In progress
@@ -295,28 +334,41 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 
 ### Feature Templates
 #### AWS reference deployment
-- **Status:** ⬜ Backlog
+- **Status:** 🟡 In progress
 - **Scope:** ECS Fargate + RDS + S3 + ALB + ACM.
 - **Dependencies:** Container build pipeline.
 - **Risks:** Operational cost creep.
 - **Acceptance:** AWS deployment runbook + reference infra.
-- **Notes:** 
+- **Notes:** Terraform scaffold + CLI/runbook shipped (`deploy/aws/terraform`, `scripts/aws-customer.sh`); production hardening pass in progress.
 
 #### IAM integration
-- **Status:** ⬜ Backlog
+- **Status:** 🟡 In progress
 - **Scope:** S3 + KMS access control.
 - **Dependencies:** AWS IAM design.
 - **Risks:** Over‑permissioned roles.
 - **Acceptance:** Least‑privilege IAM policies validated.
-- **Notes:** 
+- **Notes:** Baseline task roles exist; least-privilege tightening is next.
 
 #### Network isolation guidance
-- **Status:** ⬜ Backlog
+- **Status:** 🟡 In progress
 - **Scope:** VPC / private subnet patterns.
 - **Dependencies:** AWS architecture.
 - **Risks:** Misconfigured routes.
 - **Acceptance:** Reference diagram + sample config.
-- **Notes:** 
+- **Notes:** Private subnet model documented; ingress hardening and WAF policy rollout pending.
+
+#### AWS security hardening pack
+- **Status:** 🟡 In progress
+- **Scope:** Secrets Manager-first production path, least-privilege IAM, WAF on app ingress, ingress CIDR split, ECS exec guardrails, and security alarms.
+- **Dependencies:** Terraform modules, runbook updates, incident response wiring.
+- **Risks:** Misconfigured hardening controls can block traffic or operations.
+- **Acceptance:** 
+  - No plaintext secrets in production task definitions.
+  - WAF attached and tested.
+  - IAM policy review passed with scoped permissions.
+  - ECS exec disabled by default for production.
+  - Security alarms routed to on-call channel.
+- **Notes:** Execution details tracked in `docs/development/security-hardening.md`.
 
 #### Multi-tenant controls (optional)
 - **Status:** ⬜ Backlog

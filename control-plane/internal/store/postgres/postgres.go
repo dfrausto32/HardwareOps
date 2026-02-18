@@ -201,6 +201,28 @@ func (s *Store) GetDeviceByFingerprint(fingerprint string) (store.Device, bool, 
 	return d, true, nil
 }
 
+func (s *Store) GetDeviceByHardwareID(hardwareID string) (store.Device, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if hardwareID == "" {
+		return store.Device{}, false, nil
+	}
+
+	var d store.Device
+	err := s.pool.QueryRow(ctx, `
+		SELECT device_id, COALESCE(cert_fingerprint, ''), status, last_seen, labels, metadata
+		FROM devices
+		WHERE metadata #>> '{hwops,identity,hardwareId}' = $1
+	`, hardwareID).Scan(&d.DeviceID, &d.CertFingerprint, &d.Status, &d.LastSeen, &d.LabelsJSON, &d.MetadataJSON)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Device{}, false, nil
+	}
+	if err != nil {
+		return store.Device{}, false, err
+	}
+	return d, true, nil
+}
+
 func (s *Store) GetDeviceState(deviceID string) (store.DeviceState, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -663,10 +685,14 @@ func (s *Store) CreateArtifact(artifact store.Artifact) error {
 	if atype == "" {
 		atype = "app_bundle"
 	}
+	status := artifact.Status
+	if status == "" {
+		status = "active"
+	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO artifacts (artifact_id, name, version, type, object_key, sha256, signature, size_bytes, metadata, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-	`, artifact.ArtifactID, artifact.Name, artifact.Version, atype, artifact.ObjectKey, artifact.SHA256, nullIfEmpty(artifact.Signature), artifact.SizeBytes, nullIfEmptyBytes(artifact.MetadataJSON), artifact.CreatedAt)
+		INSERT INTO artifacts (artifact_id, name, version, type, status, object_key, sha256, signature, size_bytes, metadata, created_at, deprecated_at, delete_after)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+	`, artifact.ArtifactID, artifact.Name, artifact.Version, atype, status, artifact.ObjectKey, artifact.SHA256, nullIfEmpty(artifact.Signature), artifact.SizeBytes, nullIfEmptyBytes(artifact.MetadataJSON), artifact.CreatedAt, nullIfZeroTime(artifact.DeprecatedAt), nullIfZeroTime(artifact.DeleteAfter))
 	return err
 }
 
@@ -676,10 +702,10 @@ func (s *Store) GetArtifact(artifactID string) (store.Artifact, bool, error) {
 
 	var a store.Artifact
 	err := s.pool.QueryRow(ctx, `
-		SELECT artifact_id, name, version, COALESCE(type, 'app_bundle'), object_key, sha256, COALESCE(signature, ''), size_bytes, COALESCE(metadata, '{}'::jsonb), created_at
+		SELECT artifact_id, name, version, COALESCE(type, 'app_bundle'), COALESCE(status, 'active'), object_key, sha256, COALESCE(signature, ''), size_bytes, COALESCE(metadata, '{}'::jsonb), created_at, COALESCE(deprecated_at, '0001-01-01T00:00:00Z'::timestamptz), COALESCE(delete_after, '0001-01-01T00:00:00Z'::timestamptz)
 		FROM artifacts
 		WHERE artifact_id = $1
-	`, artifactID).Scan(&a.ArtifactID, &a.Name, &a.Version, &a.Type, &a.ObjectKey, &a.SHA256, &a.Signature, &a.SizeBytes, &a.MetadataJSON, &a.CreatedAt)
+	`, artifactID).Scan(&a.ArtifactID, &a.Name, &a.Version, &a.Type, &a.Status, &a.ObjectKey, &a.SHA256, &a.Signature, &a.SizeBytes, &a.MetadataJSON, &a.CreatedAt, &a.DeprecatedAt, &a.DeleteAfter)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.Artifact{}, false, nil
 	}
@@ -701,7 +727,7 @@ func (s *Store) ListArtifacts(name, version string, limit, offset int) ([]store.
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT artifact_id, name, version, COALESCE(type, 'app_bundle'), object_key, sha256, COALESCE(signature, ''), size_bytes, COALESCE(metadata, '{}'::jsonb), created_at
+		SELECT artifact_id, name, version, COALESCE(type, 'app_bundle'), COALESCE(status, 'active'), object_key, sha256, COALESCE(signature, ''), size_bytes, COALESCE(metadata, '{}'::jsonb), created_at, COALESCE(deprecated_at, '0001-01-01T00:00:00Z'::timestamptz), COALESCE(delete_after, '0001-01-01T00:00:00Z'::timestamptz)
 		FROM artifacts
 		WHERE ($1 = '' OR name = $1)
 		  AND ($2 = '' OR version = $2)
@@ -716,7 +742,7 @@ func (s *Store) ListArtifacts(name, version string, limit, offset int) ([]store.
 	out := []store.Artifact{}
 	for rows.Next() {
 		var a store.Artifact
-		if err := rows.Scan(&a.ArtifactID, &a.Name, &a.Version, &a.Type, &a.ObjectKey, &a.SHA256, &a.Signature, &a.SizeBytes, &a.MetadataJSON, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ArtifactID, &a.Name, &a.Version, &a.Type, &a.Status, &a.ObjectKey, &a.SHA256, &a.Signature, &a.SizeBytes, &a.MetadataJSON, &a.CreatedAt, &a.DeprecatedAt, &a.DeleteAfter); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -725,6 +751,146 @@ func (s *Store) ListArtifacts(name, version string, limit, offset int) ([]store.
 		return nil, rows.Err()
 	}
 	return out, nil
+}
+
+func (s *Store) DeprecateArtifact(artifactID string, deprecatedAt, deleteAfter time.Time) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if artifactID == "" {
+		return errors.New("artifact_id required")
+	}
+	_, err := s.pool.Exec(ctx, `
+		UPDATE artifacts
+		SET status = 'deprecated',
+		    deprecated_at = $2,
+		    delete_after = $3
+		WHERE artifact_id = $1
+	`, artifactID, deprecatedAt, nullIfZeroTime(deleteAfter))
+	return err
+}
+
+func (s *Store) RestoreArtifact(artifactID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if artifactID == "" {
+		return errors.New("artifact_id required")
+	}
+	_, err := s.pool.Exec(ctx, `
+		UPDATE artifacts
+		SET status = 'active',
+		    deprecated_at = NULL,
+		    delete_after = NULL
+		WHERE artifact_id = $1
+	`, artifactID)
+	return err
+}
+
+func (s *Store) ListArtifactsForPrune(cutoff time.Time, limit int) ([]store.Artifact, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT artifact_id, name, version, COALESCE(type, 'app_bundle'), COALESCE(status, 'active'), object_key, sha256, COALESCE(signature, ''), size_bytes, COALESCE(metadata, '{}'::jsonb), created_at, COALESCE(deprecated_at, '0001-01-01T00:00:00Z'::timestamptz), COALESCE(delete_after, '0001-01-01T00:00:00Z'::timestamptz)
+		FROM artifacts
+		WHERE status = 'deprecated'
+		  AND delete_after IS NOT NULL
+		  AND delete_after <= $1
+		ORDER BY delete_after ASC
+		LIMIT $2
+	`, cutoff, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]store.Artifact, 0, limit)
+	for rows.Next() {
+		var a store.Artifact
+		if err := rows.Scan(&a.ArtifactID, &a.Name, &a.Version, &a.Type, &a.Status, &a.ObjectKey, &a.SHA256, &a.Signature, &a.SizeBytes, &a.MetadataJSON, &a.CreatedAt, &a.DeprecatedAt, &a.DeleteAfter); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+	return out, nil
+}
+
+func (s *Store) CountArtifactReferences(artifactID string) (int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if artifactID == "" {
+		return 0, errors.New("artifact_id required")
+	}
+
+	var count int
+	err := s.pool.QueryRow(ctx, `
+		SELECT
+			COALESCE((SELECT COUNT(*) FROM desired_state_device WHERE artifact_id::text = $1), 0) +
+			COALESCE((SELECT COUNT(*) FROM desired_state_group WHERE artifact_id::text = $1), 0) +
+			COALESCE((
+				SELECT COUNT(*)
+				FROM desired_state_device d
+				CROSS JOIN LATERAL jsonb_each(COALESCE(d.components, '{}'::jsonb)) j
+				WHERE j.value->>'artifactId' = $1
+			), 0) +
+			COALESCE((
+				SELECT COUNT(*)
+				FROM desired_state_group g
+				CROSS JOIN LATERAL jsonb_each(COALESCE(g.components, '{}'::jsonb)) j
+				WHERE j.value->>'artifactId' = $1
+			), 0)
+	`, artifactID).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (s *Store) GetArtifactLifecyclePolicy() (store.ArtifactLifecyclePolicy, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var policy store.ArtifactLifecyclePolicy
+	err := s.pool.QueryRow(ctx, `
+		SELECT deprecated_delete_after_days, updated_at
+		FROM artifact_lifecycle_policy
+		WHERE policy_id = 1
+	`).Scan(&policy.DeprecatedDeleteAfterDays, &policy.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		now := time.Now().UTC()
+		return store.ArtifactLifecyclePolicy{
+			DeprecatedDeleteAfterDays: 30,
+			UpdatedAt:                 now,
+		}, nil
+	}
+	if err != nil {
+		return store.ArtifactLifecyclePolicy{}, err
+	}
+	return policy, nil
+}
+
+func (s *Store) SetArtifactLifecyclePolicy(days int) (store.ArtifactLifecyclePolicy, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if days < 1 {
+		return store.ArtifactLifecyclePolicy{}, errors.New("days must be >= 1")
+	}
+	var policy store.ArtifactLifecyclePolicy
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO artifact_lifecycle_policy (policy_id, deprecated_delete_after_days, updated_at)
+		VALUES (1, $1, now())
+		ON CONFLICT (policy_id)
+		DO UPDATE SET deprecated_delete_after_days = EXCLUDED.deprecated_delete_after_days, updated_at = now()
+		RETURNING deprecated_delete_after_days, updated_at
+	`, days).Scan(&policy.DeprecatedDeleteAfterDays, &policy.UpdatedAt)
+	if err != nil {
+		return store.ArtifactLifecyclePolicy{}, err
+	}
+	return policy, nil
 }
 
 func (s *Store) DeleteArtifact(artifactID string) error {
@@ -801,6 +967,124 @@ func (s *Store) CreateApplyResult(result store.ApplyResult) error {
 	`, result.ApplyID, result.DeviceID, nullIfEmpty(result.ArtifactID), nullIfEmpty(result.Component), result.Status, nullIfEmpty(result.AppliedVersion),
 		nullIfEmpty(result.AppliedConfigRev), nullIfEmpty(result.Error), nullIfEmpty(result.PreApplyStatus), nullIfEmpty(result.PreApplyError), result.CreatedAt)
 	return err
+}
+
+func (s *Store) CreateRuntimeEvent(event store.RuntimeEvent) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	occurredAt := event.OccurredAt
+	if occurredAt.IsZero() {
+		occurredAt = time.Now().UTC()
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO runtime_events (
+			event_id, occurred_at, event_type, device_id, payload
+		) VALUES (
+			COALESCE($1::uuid, gen_random_uuid()), $2, $3, $4, $5
+		)
+	`, nullIfEmpty(event.EventID),
+		occurredAt,
+		event.Type,
+		nullIfEmpty(event.DeviceID),
+		nullIfEmptyBytes(event.PayloadJSON),
+	)
+	return err
+}
+
+func (s *Store) ListRuntimeEvents(filter store.RuntimeEventFilter) ([]store.RuntimeEvent, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 200
+	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT event_id, occurred_at, event_type, COALESCE(device_id, ''), COALESCE(payload, '{}'::jsonb)
+		FROM runtime_events
+		WHERE ($1 = '' OR event_type = $1)
+		  AND ($2 = '' OR device_id = $2)
+		  AND ($3::timestamptz IS NULL OR occurred_at >= $3)
+		  AND ($4::timestamptz IS NULL OR occurred_at <= $4)
+		ORDER BY occurred_at DESC
+		LIMIT $5 OFFSET $6
+	`, filter.Type, filter.DeviceID, nullIfZeroTime(filter.Since), nullIfZeroTime(filter.Until), limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []store.RuntimeEvent{}
+	for rows.Next() {
+		var ev store.RuntimeEvent
+		if err := rows.Scan(&ev.EventID, &ev.OccurredAt, &ev.Type, &ev.DeviceID, &ev.PayloadJSON); err != nil {
+			return nil, err
+		}
+		out = append(out, ev)
+	}
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+	return out, nil
+}
+
+func (s *Store) DeleteRuntimeEventsBefore(cutoff time.Time) (int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if cutoff.IsZero() {
+		return 0, nil
+	}
+	tag, err := s.pool.Exec(ctx, `DELETE FROM runtime_events WHERE occurred_at < $1`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}
+
+func (s *Store) EnsureRuntimeEventRetentionDays(days int) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if days <= 0 {
+		days = 30
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO runtime_event_retention (id, days, updated_at)
+		VALUES (1, $1, now())
+		ON CONFLICT (id) DO UPDATE SET days = EXCLUDED.days, updated_at = now()
+	`, days)
+	return err
+}
+
+func (s *Store) GetRuntimeEventRetentionDays() (store.RuntimeEventRetention, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var out store.RuntimeEventRetention
+	err := s.pool.QueryRow(ctx, `
+		SELECT days, updated_at
+		FROM runtime_event_retention
+		WHERE id = 1
+	`).Scan(&out.Days, &out.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		out.Days = 30
+		out.UpdatedAt = time.Now().UTC()
+		return out, nil
+	}
+	if err != nil {
+		return store.RuntimeEventRetention{}, err
+	}
+	return out, nil
+}
+
+func (s *Store) SetRuntimeEventRetentionDays(days int) (store.RuntimeEventRetention, error) {
+	if err := s.EnsureRuntimeEventRetentionDays(days); err != nil {
+		return store.RuntimeEventRetention{}, err
+	}
+	return s.GetRuntimeEventRetentionDays()
 }
 
 func (s *Store) CreateAuditEvent(event store.AuditEvent) error {
@@ -1174,6 +1458,133 @@ func (s *Store) MarkAuthVoucherUsed(voucherID, usedBy string, at time.Time) (boo
 		  AND revoked = false
 		  AND used_at IS NULL
 	`, voucherID, at, nullIfEmpty(usedBy))
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (s *Store) CreateServiceToken(token store.ServiceToken) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO service_tokens (token_id, name, token_hash, scopes, expires_at, created_at, created_by, last_used_at, revoked_at, revoked_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`, token.TokenID,
+		token.Name,
+		token.TokenHash,
+		nullIfEmptyBytes(token.ScopesJSON),
+		token.ExpiresAt,
+		token.CreatedAt,
+		nullIfEmpty(token.CreatedBy),
+		nullIfZeroTime(token.LastUsedAt),
+		nullIfZeroTime(token.RevokedAt),
+		nullIfEmpty(token.RevokedBy),
+	)
+	return err
+}
+
+func (s *Store) GetServiceTokenByTokenHash(tokenHash string) (store.ServiceToken, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var token store.ServiceToken
+	var lastUsedAt sql.NullTime
+	var revokedAt sql.NullTime
+	var revokedBy sql.NullString
+	err := s.pool.QueryRow(ctx, `
+		SELECT token_id, name, token_hash, COALESCE(scopes, '[]'::jsonb),
+		       expires_at, created_at, COALESCE(created_by, ''), last_used_at, revoked_at, revoked_by
+		FROM service_tokens
+		WHERE token_hash = $1
+	`, tokenHash).Scan(&token.TokenID, &token.Name, &token.TokenHash, &token.ScopesJSON,
+		&token.ExpiresAt, &token.CreatedAt, &token.CreatedBy, &lastUsedAt, &revokedAt, &revokedBy)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.ServiceToken{}, false, nil
+	}
+	if err != nil {
+		return store.ServiceToken{}, false, err
+	}
+	if lastUsedAt.Valid {
+		token.LastUsedAt = lastUsedAt.Time
+	}
+	if revokedAt.Valid {
+		token.RevokedAt = revokedAt.Time
+	}
+	if revokedBy.Valid {
+		token.RevokedBy = revokedBy.String
+	}
+	return token, true, nil
+}
+
+func (s *Store) ListServiceTokens(limit, offset int) ([]store.ServiceToken, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if limit <= 0 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT token_id, name, token_hash, COALESCE(scopes, '[]'::jsonb),
+		       expires_at, created_at, COALESCE(created_by, ''),
+		       last_used_at, revoked_at, revoked_by
+		FROM service_tokens
+		ORDER BY created_at DESC
+		LIMIT $1 OFFSET $2
+	`, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []store.ServiceToken{}
+	for rows.Next() {
+		var token store.ServiceToken
+		var lastUsedAt sql.NullTime
+		var revokedAt sql.NullTime
+		var revokedBy sql.NullString
+		if err := rows.Scan(&token.TokenID, &token.Name, &token.TokenHash, &token.ScopesJSON,
+			&token.ExpiresAt, &token.CreatedAt, &token.CreatedBy, &lastUsedAt, &revokedAt, &revokedBy); err != nil {
+			return nil, err
+		}
+		if lastUsedAt.Valid {
+			token.LastUsedAt = lastUsedAt.Time
+		}
+		if revokedAt.Valid {
+			token.RevokedAt = revokedAt.Time
+		}
+		if revokedBy.Valid {
+			token.RevokedBy = revokedBy.String
+		}
+		out = append(out, token)
+	}
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
+	return out, nil
+}
+
+func (s *Store) SetServiceTokenLastUsed(tokenID string, at time.Time) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		UPDATE service_tokens
+		SET last_used_at = $2
+		WHERE token_id = $1
+	`, tokenID, at)
+	return err
+}
+
+func (s *Store) RevokeServiceToken(tokenID, revokedBy string, at time.Time) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE service_tokens
+		SET revoked_at = $2,
+		    revoked_by = $3
+		WHERE token_id = $1
+		  AND revoked_at IS NULL
+	`, tokenID, at, nullIfEmpty(revokedBy))
 	if err != nil {
 		return false, err
 	}

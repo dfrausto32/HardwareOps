@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hardwareops/control-plane/internal/artifactingest"
 	"github.com/hardwareops/control-plane/internal/auth"
 	"github.com/hardwareops/control-plane/internal/backup"
 	"github.com/hardwareops/control-plane/internal/certs"
@@ -17,6 +18,7 @@ import (
 	"github.com/hardwareops/control-plane/internal/events"
 	"github.com/hardwareops/control-plane/internal/httpapi"
 	"github.com/hardwareops/control-plane/internal/license"
+	"github.com/hardwareops/control-plane/internal/lifecycle"
 	"github.com/hardwareops/control-plane/internal/logging"
 	"github.com/hardwareops/control-plane/internal/metrics"
 	"github.com/hardwareops/control-plane/internal/migrate"
@@ -206,6 +208,48 @@ func main() {
 			}
 		}
 	}
+	artifactLifecycleManager := lifecycle.NewManager(lifecycle.ManagerConfig{
+		Enabled:                 cfg.ArtifactPruneEnabled,
+		Interval:                cfg.ArtifactPruneInterval,
+		BatchLimit:              cfg.ArtifactPruneBatchLimit,
+		AlertReferenceThreshold: cfg.ArtifactPruneAlertRefThreshold,
+		Store:                   store,
+		ObjectStore:             objStore,
+		Bucket:                  cfg.S3Bucket,
+		Metrics:                 metricsCollector,
+		Logger:                  logger.Printf,
+	})
+	if artifactLifecycleManager != nil {
+		artifactLifecycleManager.Start(context.Background())
+	}
+	pullCredentialResolver := artifactingest.CredentialResolver(artifactingest.NoopCredentialResolver{})
+	var credentialSets []map[string]map[string]string
+	if cfg.ArtifactPullCredentialsFile != "" || strings.TrimSpace(cfg.ArtifactPullCredentialsJSON) != "" {
+		creds, err := artifactingest.LoadStaticCredentials(cfg.ArtifactPullCredentialsFile, cfg.ArtifactPullCredentialsJSON)
+		if err != nil {
+			logger.Fatalf("artifact pull credentials (static): %v", err)
+		}
+		if len(creds) > 0 {
+			credentialSets = append(credentialSets, creds)
+		}
+	}
+	if strings.TrimSpace(cfg.ArtifactPullCredentialsAWSSecretID) != "" {
+		creds, err := artifactingest.LoadStaticCredentialsFromAWSSecretManager(
+			context.Background(),
+			cfg.ArtifactPullCredentialsAWSSecretID,
+			cfg.ArtifactPullCredentialsAWSRegion,
+		)
+		if err != nil {
+			logger.Fatalf("artifact pull credentials (aws secrets manager): %v", err)
+		}
+		if len(creds) > 0 {
+			credentialSets = append(credentialSets, creds)
+		}
+	}
+	mergedCreds := artifactingest.MergeStaticCredentialSets(credentialSets...)
+	if len(mergedCreds) > 0 {
+		pullCredentialResolver = artifactingest.NewStaticCredentialResolver(mergedCreds)
+	}
 	deps := httpapi.Dependencies{
 		Store:            store,
 		Signer:           certManager,
@@ -220,22 +264,31 @@ func main() {
 			CheckinRPM:         cfg.CheckinRPM,
 			ApplyResultRPM:     cfg.ApplyResultRPM,
 		},
-		LogDir:             cfg.LogDir,
-		Events:             hub,
-		CORSAllowedOrigins: cfg.CORSAllowedOrigins,
-		Maintenance:        httpapi.NewMaintenanceState(cfg.MaintenanceEnabled, cfg.MaintenanceMessage),
-		MaintenanceToken:   cfg.MaintenanceToken,
-		Upgrade:            upgradeRunner,
-		UpgradeUpdatesDir:  cfg.UpgradeUpdatesDir,
-		Backup:             backupRunner,
-		Restore:            restoreRunner,
-		BackupDir:          cfg.BackupDir,
-		Metrics:            metricsCollector,
-		MetricsPath:        cfg.MetricsPath,
-		Auth:               authManager,
-		License:            licenseManager,
-		CertManager:        certManager,
-		CertRotationGrace:  cfg.CertRotationGracePeriod,
+		LogDir:                         cfg.LogDir,
+		Events:                         hub,
+		CORSAllowedOrigins:             cfg.CORSAllowedOrigins,
+		Maintenance:                    httpapi.NewMaintenanceState(cfg.MaintenanceEnabled, cfg.MaintenanceMessage),
+		MaintenanceToken:               cfg.MaintenanceToken,
+		Upgrade:                        upgradeRunner,
+		UpgradeUpdatesDir:              cfg.UpgradeUpdatesDir,
+		Backup:                         backupRunner,
+		Restore:                        restoreRunner,
+		BackupDir:                      cfg.BackupDir,
+		Metrics:                        metricsCollector,
+		MetricsPath:                    cfg.MetricsPath,
+		Auth:                           authManager,
+		BootstrapToken:                 cfg.BootstrapToken,
+		License:                        licenseManager,
+		CertManager:                    certManager,
+		CertRotationGrace:              cfg.CertRotationGracePeriod,
+		ArtifactLifecycle:              artifactLifecycleManager,
+		ArtifactPullHosts:              cfg.ArtifactPullAllowedHosts,
+		ArtifactPullMaxBytes:           cfg.ArtifactPullMaxBytes,
+		ArtifactPullTimeout:            cfg.ArtifactPullTimeout,
+		ArtifactPullCreds:              pullCredentialResolver,
+		DeviceIdentityMode:             cfg.DeviceIdentityMode,
+		DeviceIdentityRequireOnEnroll:  cfg.DeviceIdentityRequireOnEnroll,
+		DeviceIdentityRequireOnCheckin: cfg.DeviceIdentityRequireOnCheckin,
 	}
 
 	updateMetricsCounts := func() {
@@ -283,6 +336,10 @@ func main() {
 		logger.Printf("audit retention init error: %v", err)
 	}
 
+	if err := store.EnsureRuntimeEventRetentionDays(cfg.RuntimeEventRetentionDays); err != nil {
+		logger.Printf("runtime event retention init error: %v", err)
+	}
+
 	if cfg.AuditRetentionCleanupInterval > 0 {
 		interval := cfg.AuditRetentionCleanupInterval
 		go func() {
@@ -305,6 +362,35 @@ func main() {
 						logger.Printf("delete audit events error: %v", err)
 					} else if count > 0 {
 						logger.Printf("deleted audit events count=%d cutoff=%s", count, cutoff.Format(time.RFC3339))
+					}
+				}
+				<-ticker.C
+			}
+		}()
+	}
+
+	if cfg.RuntimeEventRetentionCleanupInterval > 0 {
+		interval := cfg.RuntimeEventRetentionCleanupInterval
+		go func() {
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				retention, err := store.GetRuntimeEventRetentionDays()
+				if err != nil {
+					logger.Printf("runtime event retention fetch error: %v", err)
+				} else {
+					days := retention.Days
+					if days <= 0 {
+						days = cfg.RuntimeEventRetentionDays
+					}
+					if days <= 0 {
+						days = 30
+					}
+					cutoff := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
+					if count, err := store.DeleteRuntimeEventsBefore(cutoff); err != nil {
+						logger.Printf("delete runtime events error: %v", err)
+					} else if count > 0 {
+						logger.Printf("deleted runtime events count=%d cutoff=%s", count, cutoff.Format(time.RFC3339))
 					}
 				}
 				<-ticker.C

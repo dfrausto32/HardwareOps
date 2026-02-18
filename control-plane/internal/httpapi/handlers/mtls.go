@@ -3,6 +3,7 @@ package handlers
 import (
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
@@ -50,18 +51,68 @@ func peerCertFromRequest(r *http.Request, trustProxy bool, header string) *x509.
 	if val == "" {
 		return nil
 	}
+	if cert := parseCertPEM(val); cert != nil {
+		return cert
+	}
+	if unesc, err := url.PathUnescape(val); err == nil {
+		if cert := parseCertPEM(unesc); cert != nil {
+			return cert
+		}
+	}
 	if unesc, err := url.QueryUnescape(val); err == nil {
-		val = unesc
+		if cert := parseCertPEM(unesc); cert != nil {
+			return cert
+		}
 	}
-	val = strings.ReplaceAll(val, "\\n", "\n")
-	val = strings.ReplaceAll(val, "\r", "")
-	block, _ := pem.Decode([]byte(val))
-	if block == nil || block.Type != "CERTIFICATE" {
+	return nil
+}
+
+func parseCertPEM(raw string) *x509.Certificate {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
 		return nil
 	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil
+	raw = strings.ReplaceAll(raw, "\\n", "\n")
+	raw = strings.ReplaceAll(raw, "\r", "")
+	data := []byte(raw)
+	var certs []*x509.Certificate
+	for {
+		block, rest := pem.Decode(data)
+		if block == nil {
+			break
+		}
+		if block.Type == "CERTIFICATE" {
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err == nil {
+				certs = append(certs, cert)
+			}
+		}
+		data = rest
 	}
-	return cert
+	if len(certs) > 0 {
+		for _, cert := range certs {
+			if cert != nil && !cert.IsCA {
+				return cert
+			}
+		}
+		return certs[0]
+	}
+	compacted := strings.ReplaceAll(raw, "\n", "")
+	compacted = strings.ReplaceAll(compacted, " ", "+")
+	for _, enc := range []*base64.Encoding{
+		base64.StdEncoding,
+		base64.RawStdEncoding,
+		base64.URLEncoding,
+		base64.RawURLEncoding,
+	} {
+		der, err := enc.DecodeString(compacted)
+		if err != nil {
+			continue
+		}
+		cert, err := x509.ParseCertificate(der)
+		if err == nil {
+			return cert
+		}
+	}
+	return nil
 }

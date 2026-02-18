@@ -11,41 +11,51 @@ import (
 )
 
 type Store struct {
-	mu              sync.Mutex
-	devices         map[string]store.Device
-	states          map[string]store.DeviceState
-	tokens          map[string]store.EnrollmentToken
-	groups          map[string]store.Group
-	desiredGroups   map[string]store.DesiredStateGroup
-	desiredDevices  map[string]store.DesiredStateDevice
-	artifacts       map[string]store.Artifact
-	applyResults    map[string]store.ApplyResult
-	auditEvents     []store.AuditEvent
-	auditRetention  store.AuditRetention
-	certRotation    *store.CertRotationState
-	users           map[string]store.User
-	userEmailIndex  map[string]string
-	vouchers        map[string]store.AuthVoucher
-	voucherTokenIdx map[string]string
+	mu               sync.Mutex
+	devices          map[string]store.Device
+	states           map[string]store.DeviceState
+	tokens           map[string]store.EnrollmentToken
+	groups           map[string]store.Group
+	desiredGroups    map[string]store.DesiredStateGroup
+	desiredDevices   map[string]store.DesiredStateDevice
+	artifacts        map[string]store.Artifact
+	artifactPolicy   store.ArtifactLifecyclePolicy
+	applyResults     map[string]store.ApplyResult
+	runtimeEvents    []store.RuntimeEvent
+	runtimeRetention store.RuntimeEventRetention
+	auditEvents      []store.AuditEvent
+	auditRetention   store.AuditRetention
+	certRotation     *store.CertRotationState
+	users            map[string]store.User
+	userEmailIndex   map[string]string
+	vouchers         map[string]store.AuthVoucher
+	voucherTokenIdx  map[string]string
+	serviceTokens    map[string]store.ServiceToken
+	serviceTokenIdx  map[string]string
 }
 
 func New() *Store {
 	return &Store{
-		devices:         map[string]store.Device{},
-		states:          map[string]store.DeviceState{},
-		tokens:          map[string]store.EnrollmentToken{},
-		groups:          map[string]store.Group{},
-		desiredGroups:   map[string]store.DesiredStateGroup{},
-		desiredDevices:  map[string]store.DesiredStateDevice{},
-		artifacts:       map[string]store.Artifact{},
-		applyResults:    map[string]store.ApplyResult{},
-		auditEvents:     []store.AuditEvent{},
-		auditRetention:  store.AuditRetention{Days: 90, UpdatedAt: time.Now().UTC()},
-		certRotation:    nil,
-		users:           map[string]store.User{},
-		userEmailIndex:  map[string]string{},
-		vouchers:        map[string]store.AuthVoucher{},
-		voucherTokenIdx: map[string]string{},
+		devices:          map[string]store.Device{},
+		states:           map[string]store.DeviceState{},
+		tokens:           map[string]store.EnrollmentToken{},
+		groups:           map[string]store.Group{},
+		desiredGroups:    map[string]store.DesiredStateGroup{},
+		desiredDevices:   map[string]store.DesiredStateDevice{},
+		artifacts:        map[string]store.Artifact{},
+		artifactPolicy:   store.ArtifactLifecyclePolicy{DeprecatedDeleteAfterDays: 30, UpdatedAt: time.Now().UTC()},
+		applyResults:     map[string]store.ApplyResult{},
+		runtimeEvents:    []store.RuntimeEvent{},
+		runtimeRetention: store.RuntimeEventRetention{Days: 30, UpdatedAt: time.Now().UTC()},
+		auditEvents:      []store.AuditEvent{},
+		auditRetention:   store.AuditRetention{Days: 90, UpdatedAt: time.Now().UTC()},
+		certRotation:     nil,
+		users:            map[string]store.User{},
+		userEmailIndex:   map[string]string{},
+		vouchers:         map[string]store.AuthVoucher{},
+		voucherTokenIdx:  map[string]string{},
+		serviceTokens:    map[string]store.ServiceToken{},
+		serviceTokenIdx:  map[string]string{},
 	}
 }
 
@@ -201,6 +211,20 @@ func (s *Store) GetDeviceByFingerprint(fingerprint string) (store.Device, bool, 
 	return store.Device{}, false, nil
 }
 
+func (s *Store) GetDeviceByHardwareID(hardwareID string) (store.Device, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if hardwareID == "" {
+		return store.Device{}, false, nil
+	}
+	for _, d := range s.devices {
+		if deviceHardwareID(d.MetadataJSON) == hardwareID {
+			return d, true, nil
+		}
+	}
+	return store.Device{}, false, nil
+}
+
 func (s *Store) GetDeviceState(deviceID string) (store.DeviceState, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -335,6 +359,20 @@ func computeDeviceStatus(lastSeen time.Time, staleCutoff, offlineCutoff time.Tim
 	return "active"
 }
 
+func deviceHardwareID(metadata []byte) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(metadata, &raw); err != nil {
+		return ""
+	}
+	hwops, _ := raw["hwops"].(map[string]any)
+	identity, _ := hwops["identity"].(map[string]any)
+	id, _ := identity["hardwareId"].(string)
+	return id
+}
+
 func componentsHaveErrors(raw []byte) bool {
 	if len(raw) == 0 {
 		return false
@@ -380,6 +418,23 @@ func pruneComponentsJSON(raw []byte, artifactID string) []byte {
 		return nil
 	}
 	return updated
+}
+
+func countArtifactRefsInComponents(raw []byte, artifactID string) int {
+	if len(raw) == 0 || artifactID == "" {
+		return 0
+	}
+	var comps map[string]map[string]any
+	if err := json.Unmarshal(raw, &comps); err != nil {
+		return 0
+	}
+	count := 0
+	for _, comp := range comps {
+		if val, ok := comp["artifactId"].(string); ok && val == artifactID {
+			count++
+		}
+	}
+	return count
 }
 
 func (s *Store) UpsertGroup(group store.Group) error {
@@ -522,6 +577,9 @@ func (s *Store) CreateArtifact(artifact store.Artifact) error {
 	if artifact.Type == "" {
 		artifact.Type = "app_bundle"
 	}
+	if artifact.Status == "" {
+		artifact.Status = "active"
+	}
 	s.artifacts[artifact.ArtifactID] = artifact
 	return nil
 }
@@ -546,6 +604,9 @@ func (s *Store) ListArtifacts(name, version string, limit, offset int) ([]store.
 		}
 		out = append(out, a)
 	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
 	start := offset
 	if start < 0 {
 		start = 0
@@ -558,6 +619,103 @@ func (s *Store) ListArtifacts(name, version string, limit, offset int) ([]store.
 		end = start + limit
 	}
 	return out[start:end], nil
+}
+
+func (s *Store) DeprecateArtifact(artifactID string, deprecatedAt, deleteAfter time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if artifactID == "" {
+		return errors.New("artifact_id required")
+	}
+	artifact, ok := s.artifacts[artifactID]
+	if !ok {
+		return nil
+	}
+	artifact.Status = "deprecated"
+	artifact.DeprecatedAt = deprecatedAt
+	artifact.DeleteAfter = deleteAfter
+	s.artifacts[artifactID] = artifact
+	return nil
+}
+
+func (s *Store) RestoreArtifact(artifactID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if artifactID == "" {
+		return errors.New("artifact_id required")
+	}
+	artifact, ok := s.artifacts[artifactID]
+	if !ok {
+		return nil
+	}
+	artifact.Status = "active"
+	artifact.DeprecatedAt = time.Time{}
+	artifact.DeleteAfter = time.Time{}
+	s.artifacts[artifactID] = artifact
+	return nil
+}
+
+func (s *Store) ListArtifactsForPrune(cutoff time.Time, limit int) ([]store.Artifact, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if limit <= 0 {
+		limit = 100
+	}
+	out := make([]store.Artifact, 0, limit)
+	for _, a := range s.artifacts {
+		if a.Status != "deprecated" || a.DeleteAfter.IsZero() || a.DeleteAfter.After(cutoff) {
+			continue
+		}
+		out = append(out, a)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].DeleteAfter.Before(out[j].DeleteAfter)
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (s *Store) CountArtifactReferences(artifactID string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if artifactID == "" {
+		return 0, errors.New("artifact_id required")
+	}
+	count := 0
+	for _, d := range s.desiredDevices {
+		if d.ArtifactID == artifactID {
+			count++
+		}
+		count += countArtifactRefsInComponents(d.ComponentsJSON, artifactID)
+	}
+	for _, g := range s.desiredGroups {
+		if g.ArtifactID == artifactID {
+			count++
+		}
+		count += countArtifactRefsInComponents(g.ComponentsJSON, artifactID)
+	}
+	return count, nil
+}
+
+func (s *Store) GetArtifactLifecyclePolicy() (store.ArtifactLifecyclePolicy, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.artifactPolicy, nil
+}
+
+func (s *Store) SetArtifactLifecyclePolicy(days int) (store.ArtifactLifecyclePolicy, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if days < 1 {
+		return store.ArtifactLifecyclePolicy{}, errors.New("days must be >= 1")
+	}
+	s.artifactPolicy = store.ArtifactLifecyclePolicy{
+		DeprecatedDeleteAfterDays: days,
+		UpdatedAt:                 time.Now().UTC(),
+	}
+	return s.artifactPolicy, nil
 }
 
 func (s *Store) DeleteArtifact(artifactID string) error {
@@ -608,6 +766,105 @@ func (s *Store) CreateApplyResult(result store.ApplyResult) error {
 	}
 	s.applyResults[result.ApplyID] = result
 	return nil
+}
+
+func (s *Store) CreateRuntimeEvent(event store.RuntimeEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if event.OccurredAt.IsZero() {
+		event.OccurredAt = time.Now().UTC()
+	}
+	if event.Type == "" {
+		return errors.New("event type required")
+	}
+	s.runtimeEvents = append(s.runtimeEvents, event)
+	return nil
+}
+
+func (s *Store) ListRuntimeEvents(filter store.RuntimeEventFilter) ([]store.RuntimeEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 200
+	}
+	if filter.Offset < 0 {
+		filter.Offset = 0
+	}
+	matches := make([]store.RuntimeEvent, 0, len(s.runtimeEvents))
+	for _, ev := range s.runtimeEvents {
+		if filter.Type != "" && ev.Type != filter.Type {
+			continue
+		}
+		if filter.DeviceID != "" && ev.DeviceID != filter.DeviceID {
+			continue
+		}
+		if !filter.Since.IsZero() && ev.OccurredAt.Before(filter.Since) {
+			continue
+		}
+		if !filter.Until.IsZero() && ev.OccurredAt.After(filter.Until) {
+			continue
+		}
+		matches = append(matches, ev)
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].OccurredAt.After(matches[j].OccurredAt)
+	})
+	if filter.Offset >= len(matches) {
+		return []store.RuntimeEvent{}, nil
+	}
+	end := filter.Offset + limit
+	if end > len(matches) {
+		end = len(matches)
+	}
+	return append([]store.RuntimeEvent{}, matches[filter.Offset:end]...), nil
+}
+
+func (s *Store) DeleteRuntimeEventsBefore(cutoff time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cutoff.IsZero() {
+		return 0, nil
+	}
+	kept := make([]store.RuntimeEvent, 0, len(s.runtimeEvents))
+	deleted := 0
+	for _, ev := range s.runtimeEvents {
+		if ev.OccurredAt.Before(cutoff) {
+			deleted++
+			continue
+		}
+		kept = append(kept, ev)
+	}
+	s.runtimeEvents = kept
+	return deleted, nil
+}
+
+func (s *Store) EnsureRuntimeEventRetentionDays(days int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if days <= 0 {
+		days = 30
+	}
+	if s.runtimeRetention.Days != days {
+		s.runtimeRetention = store.RuntimeEventRetention{Days: days, UpdatedAt: time.Now().UTC()}
+	}
+	return nil
+}
+
+func (s *Store) GetRuntimeEventRetentionDays() (store.RuntimeEventRetention, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runtimeRetention, nil
+}
+
+func (s *Store) SetRuntimeEventRetentionDays(days int) (store.RuntimeEventRetention, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if days <= 0 {
+		days = 30
+	}
+	s.runtimeRetention = store.RuntimeEventRetention{Days: days, UpdatedAt: time.Now().UTC()}
+	return s.runtimeRetention, nil
 }
 
 func (s *Store) CreateAuditEvent(event store.AuditEvent) error {
@@ -783,6 +1040,101 @@ func (s *Store) MarkAuthVoucherUsed(voucherID, usedBy string, at time.Time) (boo
 	v.UsedAt = at
 	v.UsedBy = usedBy
 	s.vouchers[voucherID] = v
+	return true, nil
+}
+
+func (s *Store) CreateServiceToken(token store.ServiceToken) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if token.TokenID == "" {
+		return errors.New("token_id required")
+	}
+	if token.Name == "" {
+		return errors.New("name required")
+	}
+	if token.TokenHash == "" {
+		return errors.New("token_hash required")
+	}
+	if token.ExpiresAt.IsZero() {
+		return errors.New("expires_at required")
+	}
+	if _, ok := s.serviceTokenIdx[token.TokenHash]; ok {
+		return errors.New("token already exists")
+	}
+	now := time.Now().UTC()
+	if token.CreatedAt.IsZero() {
+		token.CreatedAt = now
+	}
+	s.serviceTokens[token.TokenID] = token
+	s.serviceTokenIdx[token.TokenHash] = token.TokenID
+	return nil
+}
+
+func (s *Store) GetServiceTokenByTokenHash(tokenHash string) (store.ServiceToken, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tokenID, ok := s.serviceTokenIdx[tokenHash]
+	if !ok {
+		return store.ServiceToken{}, false, nil
+	}
+	token, ok := s.serviceTokens[tokenID]
+	if !ok {
+		return store.ServiceToken{}, false, nil
+	}
+	return token, true, nil
+}
+
+func (s *Store) ListServiceTokens(limit, offset int) ([]store.ServiceToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if limit <= 0 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	out := make([]store.ServiceToken, 0, len(s.serviceTokens))
+	for _, token := range s.serviceTokens {
+		out = append(out, token)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if offset >= len(out) {
+		return []store.ServiceToken{}, nil
+	}
+	end := offset + limit
+	if end > len(out) {
+		end = len(out)
+	}
+	return append([]store.ServiceToken{}, out[offset:end]...), nil
+}
+
+func (s *Store) SetServiceTokenLastUsed(tokenID string, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	token, ok := s.serviceTokens[tokenID]
+	if !ok {
+		return errors.New("service token not found")
+	}
+	token.LastUsedAt = at
+	s.serviceTokens[tokenID] = token
+	return nil
+}
+
+func (s *Store) RevokeServiceToken(tokenID, revokedBy string, at time.Time) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	token, ok := s.serviceTokens[tokenID]
+	if !ok {
+		return false, nil
+	}
+	if !token.RevokedAt.IsZero() {
+		return false, nil
+	}
+	token.RevokedAt = at
+	token.RevokedBy = revokedBy
+	s.serviceTokens[tokenID] = token
 	return true, nil
 }
 

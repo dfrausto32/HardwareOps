@@ -12,3 +12,4 @@ $TTL 60
 @   IN NS ns1.hardwareops.internal.
 ns1 IN A 192.168.1.10
 @   IN A 192.168.1.10
+agent IN A 192.168.1.10

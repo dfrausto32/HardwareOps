@@ -88,3 +88,14 @@ LICENSE_EMBED_PUBKEY_PATH=./license-keys/ed25519.pub \
 ## Enforcement Behavior
 - **Enrollments** are blocked when cap is exceeded.
 - Existing devices can continue to check in.
+
+## Optional Duplicate-Device Hardening (Phase B)
+To make cloning/reuse more painful, enable hardware identity checks:
+
+```env
+DEVICE_IDENTITY_MODE=enforce
+DEVICE_IDENTITY_REQUIRE_ON_ENROLL=1
+DEVICE_IDENTITY_REQUIRE_ON_CHECKIN=1
+```
+
+Details and rollout strategy: `docs/development/device-identity-hardening.md`.

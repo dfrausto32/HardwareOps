@@ -1,152 +1,248 @@
-# AWS Cloud Setup Plan (Demo + Customer Option)
+# AWS Cloud Setup Plan (Production-Grade Customer Deployment)
 
-This document defines a practical AWS path that gives HardwareOps:
-- A cloud demo environment quickly.
-- A production-capable cloud option customers can choose instead of on-prem.
+This document formalizes a production-grade AWS path for customer deployments while preserving the existing on-prem product model.
 
-It is intentionally phased so we can deliver value now without blocking on larger infrastructure changes.
+Execution runbook: `docs/development/aws-customer-deployment-runbook.md`.  
+Security hardening tracker: `docs/development/security-hardening.md`.
 
-## Goals
-- Preserve current platform behavior (artifacts, check-ins, mTLS device identity, desired state, audit logs).
-- Keep on-prem as a supported option.
-- Add an AWS deployment path that is repeatable and supportable.
-- Stand up a demo environment that is easy to run for sales and product walkthroughs.
+## Scope and Goals
+- Preserve current product behavior: artifacts, desired state, agent mTLS identity, audit logs, auth, and backup/restore workflows.
+- Provide a repeatable AWS deployment pattern for customer-facing production environments.
+- Keep a fast demo path, but prioritize production controls and operability.
+- Minimize cloud-specific code forks by introducing explicit runtime adapters where needed.
 
-## Current Constraints (from repo behavior)
-- Device check-in/apply endpoints require client cert identity (mTLS cert must be available directly or forwarded in a trusted header).
-- Object store client currently expects explicit `S3_ACCESS_KEY` and `S3_SECRET_KEY`.
-- Backup/upgrade runners are Docker-host oriented (`docker` runner mode); this does not map cleanly to Fargate.
-- On-prem compose defaults are optimized for private environments, not internet exposure.
+## Ground Rules
+- Single-tenant deployment per customer environment (default).
+- Environment tiers: `dev`, `staging`, `prod`.
+- Human/UI traffic and agent/device traffic are split at DNS and ingress policy.
+- No plaintext credentials in task definitions.
+
+---
+
+## Architecture Baseline (Target State)
+
+### 1) Account and Environment Strategy
+- Use multi-account landing zone (at least separate prod/non-prod accounts).
+- Keep shared security/logging controls outside workload account(s).
+- Treat each customer production environment as an isolated workload boundary.
+
+### 2) Networking
+- VPC across 3 Availability Zones.
+- Public subnets: ALB only.
+- Private subnets: ECS services and RDS.
+- No direct internet ingress to ECS tasks or database.
+- Use VPC endpoints where possible for private service access.
+
+### 3) Ingress and Endpoint Split
+- `app.<domain>`: UI + operator APIs.
+- `devices.<domain>`: agent endpoints only.
+- ALB host-based listener rules enforce this split.
+- Apply AWS WAF web ACL on ALB for `app.<domain>`.
+
+### 4) TLS and mTLS
+- Human endpoint uses ACM certificate(s) on ALB.
+- Device endpoint requires mTLS.
+- Preferred cloud pattern:
+  - ALB mutual TLS in verify mode, then forward certificate identity in headers to control-plane.
+- Application must accept ALB mTLS headers (`X-Amzn-Mtls-*`) as trusted identity source when `TRUST_PROXY=1`.
+
+### 5) Compute
+- ECS Fargate services:
+  - `control-plane` service.
+  - `gateway` service (or move static UI to S3/CloudFront later).
+- Minimum 2 tasks per service in production, spread across AZs.
+- Use deployment protection:
+  - deployment circuit breaker with rollback for rolling deploys.
+  - optionally blue/green for higher-risk upgrades.
+
+### 6) Data Plane
+- Database: Amazon RDS PostgreSQL.
+  - Prefer Multi-AZ in production.
+  - Evaluate Multi-AZ DB cluster vs Multi-AZ DB instance by engine/version and feature constraints.
+- Artifact store: Amazon S3 bucket.
+  - Versioning enabled.
+  - Lifecycle policy for retention/cost.
+  - Explicit encryption policy (SSE-KMS with customer managed key for stricter controls).
+
+### 7) Secrets and Identity
+- Secrets Manager for app secrets and DB credentials.
+- ECS task role + execution role separation (least privilege).
+- Avoid static long-lived S3 keys in env:
+  - use IAM task role and AWS credential chain.
+- Rotate database credentials via managed rotation or Lambda-based rotation schedule.
+
+### 8) Observability and Ops
+- CloudWatch Logs for all services.
+- CloudWatch metrics and alarms:
+  - ALB 5xx, target health, latency.
+  - ECS task restart/crash loops, deployment failures.
+  - RDS CPU/storage/connections/replication lag.
+- Add synthetic checks for `/healthz` and login path.
+
+### 9) Backup, Restore, and DR
+- RDS automated backups with PITR.
+- Additional scheduled snapshots for retention policy.
+- S3 versioning + (optional) cross-region replication for DR objectives.
+- Restore drill cadence and evidence capture.
+
+---
 
 ## Deployment Modes
-1. `Mode A (Now)`: AWS EC2 single-host demo stack (fastest path, minimal code change).
-2. `Mode B (Target)`: AWS managed deployment (ECS Fargate + RDS + S3 + LB + Secrets).
 
-## Mode A: EC2 Demo Stack (Immediate)
-Use this first so demos can run quickly while Mode B is implemented.
+## Mode A (Short-Term): EC2 Demo Stack
+- Existing compose stack on a hardened EC2 host.
+- Useful for sales/demo and smoke validation.
+- Not the target production model.
 
-### Target Shape
-- One Ubuntu EC2 instance.
-- Existing `deploy/compose/docker-compose.onprem.yml` stack:
-  - `gateway` (UI + API reverse proxy)
-  - `control-plane`
-  - `postgres`
-  - `minio`
-- Route53 DNS record to the instance.
-- Security group allowlist for known demo operator IPs.
+## Mode B (Target): Managed Customer Cloud
+- ECS Fargate + RDS + S3 + ALB + WAF + ACM + Secrets Manager.
+- This is the production model to standardize for customers.
+- Optional demo overlay in `dev`: 3 ECS demo agents with EFS-backed persistence for customer demos and manual artifact switching.
 
-### Step-by-Step
-1. Create AWS baseline.
-   - Region: pick one primary region.
-   - EC2 IAM role: CloudWatch agent/log shipping only (no wide admin role).
-   - Route53 hosted zone for demo domain.
-2. Launch instance.
-   - Ubuntu 22.04 LTS, `t3.large` minimum.
-   - 100+ GB gp3 EBS.
-   - Attach Elastic IP.
-   - Security group:
-     - `22/tcp` from admin IPs only.
-     - `443/tcp` from known demo user IPs (or VPN CIDR).
-3. Install runtime and repo.
-   - Install Docker: `./scripts/install-docker-ubuntu.sh`
-   - Clone repo and `cd` into it.
-4. Configure on-prem compose env for cloud host.
-   - `cp deploy/compose/.env.onprem.example deploy/compose/.env.onprem`
-   - Set:
-     - `DOMAIN=<demo-domain>`
-     - `PUBLIC_BASE_URL=https://<demo-domain>`
-     - Strong values for `POSTGRES_PASSWORD`, `MINIO_ROOT_PASSWORD`, `MAINTENANCE_TOKEN`.
-   - For demo-only deployments where licensing is not enforced:
-     - `LICENSE_ENFORCE=0`
-5. Create cert material for gateway/control-plane.
-   - `sudo OUT_DIR=/opt/hardwareops/certs DOMAIN=<demo-domain> ./scripts/setup-control-plane.sh`
-   - Note: this creates a private CA chain. Demo browsers must trust the CA cert.
-6. Start stack.
-   - `docker compose -f deploy/compose/docker-compose.onprem.yml --env-file deploy/compose/.env.onprem up -d --build`
-7. Validate health.
-   - `curl --cacert /opt/hardwareops/certs/ca.crt https://<demo-domain>/healthz`
-   - Open `https://<demo-domain>/` and verify UI loads.
-8. Enroll demo agent(s).
-   - Set `CONTROL_PLANE_URL=https://<demo-domain>`
-   - Use `scripts/agent-enroll.sh` and `docs/agent-systemd.md`.
-9. Operational checks before each demo.
-   - `docker compose ... ps`
-   - Disk free space (`df -h`)
-   - Recent logs for `control-plane` and `gateway`
-   - Last backup timestamp
+---
 
-### Mode A Risks and Guardrails
-- Do not expose this stack broadly to the internet without auth hardening.
-- Keep ingress IP-restricted for demos unless auth and WAF are in place.
-- Use scheduled EBS snapshots + periodic `scripts/backup-stack.sh`.
+## Production Readiness Controls (Must-Have)
 
-## Mode B: Managed AWS Deployment (Customer Cloud Option)
-This is the recommended long-term cloud option.
+### Security
+- IAM least-privilege task roles and scoped secrets access.
+- WAF on ALB and security group minimization.
+- Private subnets for ECS/RDS, no direct database ingress from internet.
+- TLS 1.2+ policies on ALB listeners.
+- mTLS verify on `devices.<domain>`.
 
-### Target Shape
-- ECS Fargate services for application containers.
-- RDS PostgreSQL for control-plane data.
-- S3 for artifacts.
-- AWS Secrets Manager for runtime secrets.
-- CloudWatch Logs/metrics and alarms.
-- Route53 + ACM + Load Balancer endpoints.
+### Reliability
+- Multi-AZ service distribution.
+- RDS Multi-AZ.
+- Health checks tuned for faster but safe deployments.
+- Automatic rollback policy on failed deployments.
 
-### Proposed Endpoint Model
-- `app.<domain>` for UI/operator API.
-- `devices.<domain>` for agent traffic (mTLS-required path).
+### Operations
+- Runbooks for deploy, rollback, cert rotation, backup restore, incident response.
+- Alarm routing (PagerDuty/Slack/SNS).
+- Change windows and maintenance workflow.
 
-This split allows tighter security controls for devices and avoids mixing browser/operator traffic with strict mTLS policy.
+### Compliance/Audit
+- Audit log retention policy documented and enforced.
+- Access logging and change history retained.
+- Secret rotation policy documented and auditable.
 
-### Phase Plan
-1. Phase B0: Architecture decision and spike.
-   - Confirm mTLS ingress pattern with a working proof:
-     - LB/client-cert forwarding header compatibility with `CLIENT_CERT_HEADER`, or
-     - NLB pass-through to in-task TLS proxy preserving current `X-Client-Cert` behavior.
-2. Phase B1: Infrastructure as code.
-   - Terraform modules for VPC, ECS, RDS, S3, Secrets, IAM, DNS, LB.
-   - One stack per environment (`dev`, `demo`, `prod`).
-3. Phase B2: Runtime configuration.
-   - Move control-plane env and secrets to ECS task definitions + Secrets Manager.
-   - Set `TRUST_PROXY=1` when certs are forwarded by an ingress layer.
-   - Disable host-bound runners:
-     - `UPGRADE_RUNNER_MODE=disabled`
-     - `BACKUP_RUNNER_MODE=disabled`
-4. Phase B3: AWS-native operations.
-   - Backups: RDS snapshots + S3 versioning/lifecycle + optional AWS Backup.
-   - Deployments: rolling or blue/green ECS service deploys.
-   - Monitoring: CloudWatch alarms + dashboards.
-5. Phase B4: Production readiness.
-   - Disaster recovery test.
-   - Security review (IAM least privilege, SG rules, secret rotation).
-   - Runbook validation with an end-to-end agent apply scenario.
+---
 
-## Required Repo Work Items for Mode B
-1. Add cloud deployment manifests/IaC folder (`deploy/aws/terraform`).
-2. Add env passthrough for auth settings in deployment templates used for cloud.
-3. Add object-store credential strategy improvement:
-   - Current: static keys.
-   - Target: IAM role/default AWS credential chain support.
-4. Add cloud-native backup/restore adapters (RDS/S3 aware) for maintenance APIs.
-5. Add cloud-native upgrade workflow (replace Docker-in-Docker runner assumptions).
+## Repo Work Required (Cloud Blockers)
 
-## Recommended Environment Profiles
-- `demo`:
-  - Small ECS task sizes, single-AZ acceptable, lower retention.
-  - Tight access controls for invited demo users.
-- `customer-prod`:
-  - Multi-AZ RDS, private subnets, stricter alarms, documented RTO/RPO.
+1. Ingress identity adapter
+- Add support for ALB mTLS headers (`X-Amzn-Mtls-Clientcert-Leaf` or verify-mode fields).
+- Preserve existing on-prem `X-Client-Cert` behavior behind trusted proxy toggle.
 
-## Acceptance Criteria
-- A repeatable AWS deployment exists and is documented.
-- Agents can enroll and perform mTLS check-ins against cloud endpoint.
-- Artifact upload/download and apply flow works end-to-end.
-- Recovery drill passes (restore DB/object data and resume operations).
-- Demo environment can be stood up and validated within one working day.
+2. AWS credentials chain for object store
+- Replace mandatory `S3_ACCESS_KEY`/`S3_SECRET_KEY` assumption.
+- Support IAM task role credentials by default.
 
-## Open Decisions / Questions
-1. Should we support one cloud environment per customer account, or a vendor-hosted single-tenant environment per customer?
-2. Is the immediate priority:
-   - `A)` demo environment fast (Mode A first), or
-   - `B)` managed customer cloud first (Mode B first)?
-3. For initial cloud launch, is IP allowlisting acceptable, or do you require internet-open access with full auth hardening from day one?
-4. Do we want to keep license enforcement in cloud deployments, or scope it to on-prem only?
+3. Cloud-native maintenance adapters
+- Backup/restore runners currently assume host Docker access.
+- Introduce AWS-mode handlers for:
+  - backup orchestration (RDS/S3 aware),
+  - restore orchestration (documented controls),
+  - upgrade workflow without Docker-in-Docker assumptions.
+
+4. IaC baseline
+- Add `deploy/aws/terraform` modules:
+  - VPC, ALB, ECS services, RDS, S3, KMS, Secrets, IAM, Route53, WAF, alarms.
+
+5. Deployment pipeline
+- Build/push images to ECR.
+- Promote immutable images across environments.
+- Apply infrastructure and service deploy with approvals.
+
+## Current Scaffold in Repo
+- Terraform scaffold now lives under `deploy/aws/terraform`.
+- It includes:
+  - reusable modules (`network`, `security`, `artifact_store`, `database`, `alb`, `ecs`, `customer_stack`)
+  - environment entry points in `deploy/aws/terraform/envs/dev`, `deploy/aws/terraform/envs/staging`, and `deploy/aws/terraform/envs/prod`
+- This scaffold is intentionally opinionated for:
+  - vendor-hosted, per-customer stacks
+  - ALB mTLS for device ingress
+  - ECS deployment circuit-breaker rollback
+
+---
+
+## Implementation Sequence (Recommended)
+
+### Phase 0: Cloud Foundation (1-2 weeks)
+- Landing zone/account model and environment naming.
+- Terraform skeleton and state strategy.
+- DNS and certificate strategy finalized.
+
+### Phase 1: Runtime Parity in AWS (2-3 weeks)
+- ECS + ALB + RDS + S3 up in `dev`.
+- Basic auth/login and artifact flows work.
+- mTLS ingress proof on `devices.<domain>`.
+
+### Phase 2: Security and Operability (2-3 weeks)
+- Secrets Manager integration.
+- IAM least privilege pass.
+- CloudWatch dashboards/alarms + runbooks.
+- WAF and ingress hardening.
+
+### Phase 3: Production Controls (2-3 weeks)
+- Backup/PITR restore test in staging.
+- Deployment rollback validation.
+- Load and failure tests.
+- Go-live checklist and sign-off.
+
+---
+
+## Customer Go-Live Checklist (Condensed)
+- DNS delegated and certificates issued.
+- Auth bootstrap and admin controls validated.
+- Device enrollment + check-in + apply successful in staging.
+- Backup + restore drill completed and timed.
+- Alerting and on-call routing active.
+- Security review complete (IAM, SGs, WAF, secret rotation).
+- Rollback procedure executed at least once in staging.
+
+---
+
+## Open Decisions (Need to Lock)
+1. mTLS ingress implementation:
+- ALB verify headers at app layer, or NLB passthrough + sidecar proxy termination.
+
+2. Customer hosting model:
+- Customer AWS account (preferred for isolation), or vendor-hosted per-customer tenancy.
+
+3. Database HA mode:
+- RDS Multi-AZ instance vs Multi-AZ DB cluster based on required engine features and constraints.
+
+4. Upgrade model in cloud:
+- rolling with circuit breaker only, or blue/green for all production releases.
+
+---
+
+## AWS Source Notes (Primary References)
+- ALB mTLS modes and headers:
+  - https://docs.aws.amazon.com/elasticloadbalancing/latest/application/mutual-authentication.html
+  - https://docs.aws.amazon.com/elasticloadbalancing/latest/application/configuring-mtls-with-elb.html
+- ALB HTTPS listener/certificates:
+  - https://docs.aws.amazon.com/elasticloadbalancing/latest/application/create-https-listener.html
+  - https://docs.aws.amazon.com/elasticloadbalancing/latest/application/https-listener-certificates.html
+- ECS IAM roles and autoscaling:
+  - https://docs.aws.amazon.com/AmazonECS/latest/developerguide/security-iam-roles.html
+  - https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-auto-scaling.html
+  - https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-autoscaling-targettracking.html
+- ECS deployment safety:
+  - https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-ecs-service-deploymentcircuitbreaker.html
+  - https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-type-bluegreen.html
+- ECS secrets handling:
+  - https://docs.aws.amazon.com/AmazonECS/latest/developerguide/specifying-sensitive-data.html
+  - https://docs.aws.amazon.com/AmazonECS/latest/userguide/secrets-envvar-secrets-manager.html
+- RDS HA and backup/PITR:
+  - https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/create-multi-az-db-cluster.html
+  - https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZSingleStandby.html
+  - https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithAutomatedBackups.BackupRetention.html
+  - https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_PIT.html
+- S3 encryption defaults:
+  - https://docs.aws.amazon.com/AmazonS3/latest/userguide/default-bucket-encryption.html
+- WAF association:
+  - https://docs.aws.amazon.com/waf/latest/developerguide/web-acl-associating-aws-resource.html
+- Multi-account landing zone:
+  - https://docs.aws.amazon.com/controltower/latest/userguide/aws-multi-account-landing-zone.html

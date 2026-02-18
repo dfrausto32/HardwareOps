@@ -25,7 +25,7 @@ func TestDeviceCheckin_Valid(t *testing.T) {
 	req, deviceID = attachMTLSDevice(t, mem, req, deviceID)
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "", nil, nil).ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -61,7 +61,7 @@ func TestDeviceCheckin_MissingDeviceID(t *testing.T) {
 	req, _ = attachMTLSDevice(t, mem, req, "")
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "", nil, nil).ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -77,7 +77,7 @@ func TestDeviceCheckin_InvalidDeviceID(t *testing.T) {
 	req, _ = attachMTLSDevice(t, mem, req, "")
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "", nil, nil).ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", w.Code)
@@ -105,7 +105,7 @@ func TestDeviceCheckin_CloneSignalOnRapidSourceIPSwitch(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	DeviceCheckin(logger, mem, nil, false, "", nil, nil).ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -137,5 +137,43 @@ func TestDeviceCheckin_CloneSignalOnRapidSourceIPSwitch(t *testing.T) {
 	}
 	if int(identity["suspectedCloneCount"].(float64)) != 2 {
 		t.Fatalf("expected suspectedCloneCount=2, got %#v", identity["suspectedCloneCount"])
+	}
+}
+
+func TestDeviceCheckin_RejectsHardwareIdentityReuseInEnforceMode(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+	otherDeviceID := uuid.NewString()
+	hardwareID := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	if err := mem.CreateDevice(store.Device{
+		DeviceID:     otherDeviceID,
+		Status:       "active",
+		LastSeen:     time.Now().UTC(),
+		MetadataJSON: []byte(`{"hwops":{"identity":{"hardwareId":"` + hardwareID + `"}}}`),
+	}); err != nil {
+		t.Fatalf("seed device failed: %v", err)
+	}
+
+	deviceID := uuid.NewString()
+	reqBody := []byte(`{"deviceId":"` + deviceID + `","agentVersion":"0.1.0","current":{"softwareVersion":"v1","configRev":"c1"},"capabilities":{"hw":{"identity":{"id":"` + hardwareID + `","source":"machine-id"}}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/checkin", bytes.NewReader(reqBody))
+	req, _ = attachMTLSDevice(t, mem, req, deviceID)
+	w := httptest.NewRecorder()
+
+	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{Mode: "enforce"}, nil).ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", w.Code)
+	}
+
+	eventsRows, err := mem.ListRuntimeEvents(store.RuntimeEventFilter{
+		Type:     events.TypeDeviceIdentityConflict,
+		DeviceID: deviceID,
+		Limit:    10,
+	})
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if len(eventsRows) != 1 {
+		t.Fatalf("expected one identity conflict event, got %d", len(eventsRows))
 	}
 }

@@ -174,10 +174,11 @@ type ApplyResultRequest struct {
 	PreApplyError    string `json:"preApplyError,omitempty"`
 }
 
-func (c *Client) CheckIn(st state.State) (*CheckinResponse, error) {
+func (c *Client) CheckIn(st state.State, capabilities any) (*CheckinResponse, error) {
 	payload := CheckinRequest{
 		DeviceID:     st.DeviceID,
 		AgentVersion: st.AgentVersion,
+		Capabilities: capabilities,
 		Current: CheckinCurrent{
 			SoftwareVersion:     st.CurrentVersion,
 			ConfigRev:           st.CurrentConfigRev,

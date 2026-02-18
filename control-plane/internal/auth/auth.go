@@ -37,9 +37,10 @@ type Claims struct {
 type ctxKey string
 
 const (
-	userKey       ctxKey = "auth.user"
-	ModeDisabled         = "disabled"
-	ModeLocal            = "local"
+	userKey      ctxKey = "auth.user"
+	serviceKey   ctxKey = "auth.service_token"
+	ModeDisabled        = "disabled"
+	ModeLocal           = "local"
 )
 
 var roleRank = map[string]int{
@@ -149,13 +150,17 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		user, err := m.userFromToken(tokenStr)
-		if err != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		if user, err := m.userFromToken(tokenStr); err == nil {
+			ctx := context.WithValue(r.Context(), userKey, user)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
-		ctx := context.WithValue(r.Context(), userKey, user)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		if svc, ok, _ := m.serviceTokenFromToken(tokenStr); ok {
+			ctx := context.WithValue(r.Context(), serviceKey, svc)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	})
 }
 
@@ -188,6 +193,14 @@ func UserFromContext(ctx context.Context) (User, bool) {
 	return user, ok
 }
 
+func ServiceTokenFromContext(ctx context.Context) (ServiceToken, bool) {
+	if ctx == nil {
+		return ServiceToken{}, false
+	}
+	svc, ok := ctx.Value(serviceKey).(ServiceToken)
+	return svc, ok
+}
+
 func rolesFromJSON(data []byte) []string {
 	if len(data) == 0 {
 		return nil
@@ -210,6 +223,10 @@ func hasRole(userRoles []string, required string) bool {
 		}
 	}
 	return best >= reqRank
+}
+
+func HasRole(userRoles []string, required string) bool {
+	return hasRole(userRoles, required)
 }
 
 func (m *Manager) userFromToken(tokenStr string) (User, error) {
@@ -245,6 +262,35 @@ func (m *Manager) userFromToken(tokenStr string) (User, error) {
 		Roles:      rolesFromJSON(user.RolesJSON),
 		AuthMethod: m.mode,
 	}, nil
+}
+
+func (m *Manager) serviceTokenFromToken(tokenStr string) (ServiceToken, bool, error) {
+	if m == nil || !m.Enabled() {
+		return ServiceToken{}, false, nil
+	}
+	tokenHash := HashToken(tokenStr)
+	token, ok, err := m.store.GetServiceTokenByTokenHash(tokenHash)
+	if err != nil {
+		return ServiceToken{}, false, err
+	}
+	if !ok {
+		return ServiceToken{}, false, nil
+	}
+	now := time.Now().UTC()
+	if !token.RevokedAt.IsZero() {
+		return ServiceToken{}, false, nil
+	}
+	if !token.ExpiresAt.IsZero() && now.After(token.ExpiresAt) {
+		return ServiceToken{}, false, nil
+	}
+	_ = m.store.SetServiceTokenLastUsed(token.TokenID, now)
+	return ServiceToken{
+		TokenID:    token.TokenID,
+		Name:       token.Name,
+		Scopes:     parseScopes(token.ScopesJSON),
+		AuthMethod: "service_token",
+		ExpiresAt:  token.ExpiresAt,
+	}, true, nil
 }
 
 func HashPassword(password string) (string, error) {

@@ -70,6 +70,7 @@ func main() {
 
 	tlsConfig := buildTLSConfig(cfg, logger)
 	c := client.NewWithTLS(cfg.ControlPlaneURL, tlsConfig)
+	capabilities := buildCapabilities(logger)
 	interval := cfg.CheckinInterval
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
@@ -81,7 +82,7 @@ func main() {
 		}
 	}
 	for {
-		resp, err := c.CheckIn(st)
+		resp, err := c.CheckIn(st, capabilities)
 		if err != nil {
 			if rl, ok := err.(client.RateLimitError); ok {
 				wait := rl.RetryAfter

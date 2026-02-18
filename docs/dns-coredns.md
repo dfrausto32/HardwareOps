@@ -15,6 +15,7 @@ DNS_IP=<CONTROL_PLANE_IP> ./scripts/run-coredns.sh
 This generates a zone file with:
 - `@ IN A <CONTROL_PLANE_IP>`
 - `ns1 IN A <CONTROL_PLANE_IP>`
+- `agent IN A <CONTROL_PLANE_IP>`
 
 Manual path (edit the sample zone file):
 ```
@@ -24,6 +25,7 @@ Update these lines:
 ```
 ns1 IN A <CONTROL_PLANE_IP>
 @   IN A <CONTROL_PLANE_IP>
+agent IN A <CONTROL_PLANE_IP>
 ```
 
 ## 3) Run CoreDNS (Docker)

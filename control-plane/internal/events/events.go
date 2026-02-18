@@ -7,9 +7,10 @@ import (
 )
 
 const (
-	TypeDeviceCheckin        = "device.checkin"
-	TypeDeviceApplyResult    = "device.apply_result"
-	TypeDeviceCloneSuspected = "device.clone_suspected"
+	TypeDeviceCheckin          = "device.checkin"
+	TypeDeviceApplyResult      = "device.apply_result"
+	TypeDeviceCloneSuspected   = "device.clone_suspected"
+	TypeDeviceIdentityConflict = "device.identity_conflict"
 )
 
 type Event struct {

@@ -1,7 +1,9 @@
 const env = import.meta.env
 const useProxy = env.VITE_API_PROXY === '1'
 const defaultProtocol = env.VITE_TLS === '1' ? 'https' : 'http'
-const defaultBase = `${defaultProtocol}://localhost:8080`
+const runtimeOrigin =
+  typeof window !== 'undefined' && window.location?.origin ? window.location.origin : ''
+const defaultBase = runtimeOrigin || `${defaultProtocol}://localhost:8080`
 const apiTarget = env.VITE_API_BASE_URL || defaultBase
 let authToken = env.VITE_AUTH_TOKEN || ''
 
@@ -118,6 +120,13 @@ export async function deleteGroup(groupId: string) {
   })
 }
 
+export async function batchGroups(payload: Record<string, unknown>) {
+  return requestJson('/api/v1/groups/batch', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export async function getDesiredState() {
   return requestJson('/api/v1/desired-state')
 }
@@ -171,6 +180,47 @@ export async function deleteArtifact(artifactId: string) {
   })
 }
 
+export async function deprecateArtifact(artifactId: string, deleteAfterDays?: number) {
+  const payload: Record<string, unknown> = {}
+  if (deleteAfterDays && deleteAfterDays > 0) {
+    payload.deleteAfterDays = deleteAfterDays
+  }
+  return requestJson(`/api/v1/artifacts/${encodeURIComponent(artifactId)}/deprecate`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function restoreArtifact(artifactId: string) {
+  return requestJson(`/api/v1/artifacts/${encodeURIComponent(artifactId)}/restore`, {
+    method: 'POST',
+  })
+}
+
+export async function getArtifactLifecyclePolicy() {
+  return requestJson('/api/v1/artifacts/lifecycle/policy')
+}
+
+export async function getArtifactLifecycleStatus() {
+  return requestJson('/api/v1/artifacts/lifecycle/status')
+}
+
+export async function setArtifactLifecyclePolicy(deprecatedDeleteAfterDays: number) {
+  return requestJson('/api/v1/artifacts/lifecycle/policy', {
+    method: 'PUT',
+    body: JSON.stringify({ deprecatedDeleteAfterDays }),
+  })
+}
+
+export async function pruneArtifacts(limit = 100) {
+  const qs = new URLSearchParams()
+  if (limit > 0) qs.set('limit', String(limit))
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  return requestJson(`/api/v1/artifacts/lifecycle/prune${suffix}`, {
+    method: 'POST',
+  })
+}
+
 export async function getDeviceLogs(deviceId: string) {
   return requestText(`/api/v1/logs/${encodeURIComponent(deviceId)}`)
 }
@@ -183,6 +233,27 @@ export async function listAuditEvents(params: Record<string, string | number | u
   })
   const suffix = qs.toString() ? `?${qs.toString()}` : ''
   return requestJson(`/api/v1/audit${suffix}`)
+}
+
+export async function listRuntimeEvents(params: Record<string, string | number | undefined> = {}) {
+  const qs = new URLSearchParams()
+  Object.entries(params).forEach(([key, val]) => {
+    if (val === undefined || val === null || val === '') return
+    qs.set(key, String(val))
+  })
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  return requestJson(`/api/v1/events/history${suffix}`)
+}
+
+export async function getEventRetention() {
+  return requestJson('/api/v1/events/retention')
+}
+
+export async function setEventRetention(days: number) {
+  return requestJson('/api/v1/events/retention', {
+    method: 'PUT',
+    body: JSON.stringify({ days }),
+  })
 }
 
 export async function downloadAuditCSV(params: Record<string, string | number | undefined> = {}) {
@@ -313,6 +384,26 @@ export async function getMe() {
 
 export async function getAuthStatus() {
   return requestJson('/api/v1/auth/status')
+}
+
+export async function getBootstrapStatus() {
+  return requestJson('/api/v1/bootstrap')
+}
+
+export async function downloadBootstrapCA(token?: string) {
+  const headers: Record<string, string> = {}
+  if (token) {
+    headers['X-Bootstrap-Token'] = token
+  }
+  const resp = await fetch(buildUrl('/api/v1/bootstrap/ca'), {
+    method: 'GET',
+    headers: buildHeaders(headers),
+  })
+  if (!resp.ok) {
+    const text = await resp.text()
+    throw new Error(`request failed ${resp.status}: ${text}`)
+  }
+  return resp.blob()
 }
 
 export async function registerWithVoucher(payload: Record<string, unknown>) {

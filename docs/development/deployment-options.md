@@ -48,9 +48,12 @@ Lowest ops for a small team, fast iteration, no Kubernetes overhead.
 - **EC2 + Docker Compose**: simplest ops, least scalable; good for POCs.
 
 ## DNS + TLS (both modes)
-- Use a **customer‑owned domain** (e.g., `hardwareops.internal`).
-- Install a **local CA** on all agents + operator machines.
-- Control‑plane serves HTTPS; agents use **mTLS** with device certs.
+- Use a **customer‑owned domain** and split hostnames:
+  - Human/UI host: `hardwareops.internal`
+  - Agent/API host: `agent.hardwareops.internal`
+- Prefer a browser‑trusted server cert on the human host (public CA or enterprise PKI).
+- Keep agent traffic on mTLS device certs (check‑in/apply/reenroll).
+- For private CA onboarding, use bootstrap token flow (`/api/v1/bootstrap/ca`) to fetch CA cert before full login/use.
 
 ## Upgrade Path
 1. On‑prem installs for early customers.

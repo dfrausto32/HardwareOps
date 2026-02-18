@@ -1,0 +1,62 @@
+aws_region    = "us-east-1"
+customer_slug = "customer-a"
+owner         = "platform"
+
+vpc_cidr = "10.40.0.0/16"
+public_subnet_cidrs = {
+  "us-east-1a" = "10.40.0.0/20"
+  "us-east-1b" = "10.40.16.0/20"
+  "us-east-1c" = "10.40.32.0/20"
+}
+private_subnet_cidrs = {
+  "us-east-1a" = "10.40.64.0/20"
+  "us-east-1b" = "10.40.80.0/20"
+  "us-east-1c" = "10.40.96.0/20"
+}
+
+route53_zone_id = "Z0123456789ABCDEFG"
+app_host        = "app.staging.customer-a.example.com"
+devices_host    = "agent.staging.customer-a.example.com"
+
+acm_certificate_arn = "arn:aws:acm:us-east-1:111122223333:certificate/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+device_mtls_bucket = "customer-a-security-assets"
+device_mtls_key    = "mtls/device-ca-bundle.pem"
+# Start with "passthrough" during initial token-based enrollment, then switch to "verify".
+device_mtls_mode   = "passthrough"
+
+control_plane_image = "111122223333.dkr.ecr.us-east-1.amazonaws.com/hardwareops-control-plane:latest"
+gateway_image       = "111122223333.dkr.ecr.us-east-1.amazonaws.com/hardwareops-gateway:latest"
+# Optional: Secrets Manager secret containing pull adapter credential map JSON.
+# Example value (ARN recommended):
+# artifact_pull_credentials_aws_secret_id = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/customer-a/staging/artifact-pull-credentials-AbCdEf"
+
+control_plane_desired_count = 2
+gateway_desired_count       = 2
+db_manage_master_user_password = false
+db_master_password             = "change-me-staging-password"
+
+control_plane_env = {
+  AUTH_MODE               = "local"
+  AUTH_JWT_SECRET         = "replace-with-long-random-secret"
+  AUTH_BOOTSTRAP_EMAIL    = "admin@customer-a.example.com"
+  AUTH_BOOTSTRAP_PASSWORD = "replace-with-bootstrap-password"
+}
+
+gateway_env = {}
+
+# Optional demo fleet (manual artifact switching in UI):
+enable_demo_fleet = false
+demo_agent_count  = 3
+demo_agent_image  = null
+demo_agent_cpu    = 256
+demo_agent_memory = 512
+demo_agent_checkin_interval_sec = 5
+demo_bootstrap_email    = "admin@customer-a.example.com"
+demo_bootstrap_password = "replace-with-bootstrap-password"
+
+# Example for secret wiring:
+# control_plane_secret_arns = {
+#   DATABASE_URL = "arn:aws:secretsmanager:us-east-1:111122223333:secret:customer-a/dev/database-url"
+#   MAINTENANCE_TOKEN = "arn:aws:secretsmanager:us-east-1:111122223333:secret:customer-a/dev/maintenance-token"
+# }

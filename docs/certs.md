@@ -1,6 +1,21 @@
 # TLS + CA Setup (On‑Prem)
 
-This uses a local internal CA to issue the server certificate for `hardwareops.internal`.
+This uses a local internal CA to issue the server certificate for `hardwareops.internal`
+and the agent endpoint host `agent.hardwareops.internal` (SAN).
+
+## Formal split: Server TLS vs Device CA
+
+There are two different trust chains:
+
+- **Device CA (agent mTLS):** `ca.crt` + `ca.key`
+  - Used for device enrollment, check-in mTLS, and CA rotation.
+- **Server TLS cert (browser/UI):** `server.crt` + `server.key`
+  - Used by the gateway HTTPS endpoint for human users.
+
+Recommended production posture:
+- Keep device CA private to HardwareOps agent trust.
+- Use an enterprise/publicly trusted server cert for `server.crt`/`server.key`.
+- In on-prem scripts, set `SERVER_CERT_MODE=external`.
 
 ## Certificate Rotation — What It Is (and What It Isn’t)
 Rotation means **switching the device‑signing CA** to a new one without breaking mTLS.
@@ -33,17 +48,28 @@ Outputs:
 
 ## 2) Issue server cert
 ```
-sudo OUT_DIR=/opt/hardwareops/certs DOMAIN=hardwareops.internal ./scripts/issue-server-cert.sh
+sudo OUT_DIR=/opt/hardwareops/certs DOMAIN=hardwareops.internal AGENT_DOMAIN=agent.hardwareops.internal ./scripts/issue-server-cert.sh
 ```
 
 ### Fast path (CA + server cert + env)
 ```
-sudo OUT_DIR=/opt/hardwareops/certs DOMAIN=hardwareops.internal ./scripts/setup-control-plane.sh
+sudo OUT_DIR=/opt/hardwareops/certs DOMAIN=hardwareops.internal AGENT_DOMAIN=agent.hardwareops.internal ./scripts/setup-control-plane.sh
 ```
+
+### External server cert path (recommended for UI without local CA install)
+Use this when you have a trusted cert/key from enterprise PKI or a public CA:
+```
+sudo OUT_DIR=/opt/hardwareops/certs \
+  SERVER_CERT_MODE=external \
+  SERVER_CERT_INPUT=/path/to/trusted-server.crt \
+  SERVER_KEY_INPUT=/path/to/trusted-server.key \
+  ./scripts/setup-control-plane.sh
+```
+This still creates/uses `ca.crt` + `ca.key` for device mTLS, but leaves browser trust to your external server cert.
 
 If you change domains or see TLS errors (AKI/SKI mismatch), reissue with:
 ```
-sudo FORCE=1 OUT_DIR=/opt/hardwareops/certs DOMAIN=hardwareops.internal ./scripts/setup-control-plane.sh
+sudo FORCE=1 OUT_DIR=/opt/hardwareops/certs DOMAIN=hardwareops.internal AGENT_DOMAIN=agent.hardwareops.internal ./scripts/setup-control-plane.sh
 ```
 
 Outputs:
@@ -64,6 +90,14 @@ sudo update-ca-certificates
 ### macOS
 1. Add `ca.crt` to Keychain Access
 2. Set to **Always Trust**
+
+### Bootstrap download flow (no auth session yet)
+If on-prem auth is enabled and you want a pre-login path to fetch CA cert:
+```
+curl -k -H "X-Bootstrap-Token: <BOOTSTRAP_TOKEN>" \
+  https://hardwareops.internal/api/v1/bootstrap/ca -o hardwareops-ca.crt
+```
+Then install `hardwareops-ca.crt` in system/browser trust and use the UI normally.
 
 ## 4) Agent trust (no system trust required)
 Agents can point directly to the CA:

@@ -1,0 +1,159 @@
+worker_processes auto;
+events { worker_connections 1024; }
+
+http {
+  include       /etc/nginx/mime.types;
+  default_type  application/octet-stream;
+  sendfile      on;
+  keepalive_timeout  65;
+  # Route agent traffic through agent.<domain> and keep UI/API traffic on the human host.
+  map $host $is_agent_host {
+    default 0;
+    ~^agent\..+ 1;
+  }
+  # ALB can forward client cert under different headers:
+  # - verify mode default/custom leaf header
+  # - passthrough mode full-chain header
+  # - listener attribute override to X-Client-Cert
+  map $http_x_client_cert $alb_client_cert_base {
+    default $http_x_client_cert;
+    ""      $http_x_amzn_mtls_clientcert_leaf;
+  }
+  map $alb_client_cert_base $alb_client_cert_final {
+    default $alb_client_cert_base;
+    ""      $http_x_amzn_mtls_clientcert;
+  }
+
+  resolver ${DNS_RESOLVER} valid=10s ipv6=off;
+  server {
+    listen 8081;
+    server_name _;
+
+    client_max_body_size 10g;
+
+    set $control_plane_upstream ${CONTROL_PLANE_UPSTREAM};
+
+    location /api/v1/events {
+      if ($is_agent_host = 1) {
+        return 404;
+      }
+      proxy_http_version 1.1;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-Proto https;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Client-Cert $alb_client_cert_final;
+      proxy_read_timeout 3600s;
+      proxy_pass http://$control_plane_upstream;
+    }
+
+    # Enrollment remains token-based, but is only exposed on the agent host.
+    location = /api/v1/devices/enroll {
+      if ($is_agent_host = 0) {
+        return 421;
+      }
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-Proto https;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Client-Cert $alb_client_cert_final;
+      proxy_pass http://$control_plane_upstream;
+    }
+
+    # Device runtime endpoints: only on agent host, and require client cert.
+    location = /api/v1/devices/checkin {
+      if ($is_agent_host = 0) {
+        return 421;
+      }
+      if ($alb_client_cert_final = "") {
+        return 401;
+      }
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-Proto https;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Client-Cert $alb_client_cert_final;
+      proxy_pass http://$control_plane_upstream;
+    }
+
+    location = /api/v1/devices/reenroll {
+      if ($is_agent_host = 0) {
+        return 421;
+      }
+      if ($alb_client_cert_final = "") {
+        return 401;
+      }
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-Proto https;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Client-Cert $alb_client_cert_final;
+      proxy_pass http://$control_plane_upstream;
+    }
+
+    location ~ ^/api/v1/devices/[^/]+/apply-result$ {
+      if ($is_agent_host = 0) {
+        return 421;
+      }
+      if ($alb_client_cert_final = "") {
+        return 401;
+      }
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-Proto https;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Client-Cert $alb_client_cert_final;
+      proxy_pass http://$control_plane_upstream;
+    }
+
+    location ~ "^/api/v1/artifacts/[0-9a-fA-F-]{36}$" {
+      if ($is_agent_host = 0) {
+        return 421;
+      }
+      if ($alb_client_cert_final = "") {
+        return 401;
+      }
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-Proto https;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Client-Cert $alb_client_cert_final;
+      proxy_pass http://$control_plane_upstream;
+    }
+
+    location ~ "^/api/v1/artifacts/[0-9a-fA-F-]{36}/presign$" {
+      if ($is_agent_host = 0) {
+        return 421;
+      }
+      if ($http_x_amzn_mtls_clientcert = "") {
+        return 401;
+      }
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-Proto https;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Client-Cert $alb_client_cert_final;
+      proxy_pass http://$control_plane_upstream;
+    }
+
+    location /api/ {
+      if ($is_agent_host = 1) {
+        return 404;
+      }
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-Proto https;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Client-Cert $http_x_amzn_mtls_clientcert;
+      proxy_pass http://$control_plane_upstream;
+    }
+
+    location /healthz {
+      access_log off;
+      add_header Content-Type text/plain;
+      return 200 "ok\n";
+    }
+
+    location / {
+      if ($is_agent_host = 1) {
+        return 404;
+      }
+      root /usr/share/nginx/html;
+      try_files $uri /index.html;
+    }
+  }
+}

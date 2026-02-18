@@ -211,24 +211,22 @@ func PostApplyResult(logger *log.Logger, st store.Store, hub *events.Hub, trustP
 		resp := ApplyResultResponse{ApplyID: res.ApplyID, DeviceID: res.DeviceID, Status: res.Status, At: res.CreatedAt}
 		writeAudit(logger, st, event, nil)
 
-		if hub != nil {
-			payload, _ := json.Marshal(map[string]any{
-				"status":           res.Status,
-				"artifactId":       res.ArtifactID,
-				"component":        res.Component,
-				"appliedVersion":   res.AppliedVersion,
-				"appliedConfigRev": res.AppliedConfigRev,
-				"error":            res.Error,
-				"preApplyStatus":   res.PreApplyStatus,
-				"preApplyError":    res.PreApplyError,
-			})
-			hub.Publish(events.Event{
-				Type:     events.TypeDeviceApplyResult,
-				DeviceID: res.DeviceID,
-				At:       res.CreatedAt,
-				Payload:  payload,
-			})
-		}
+		payload, _ := json.Marshal(map[string]any{
+			"status":           res.Status,
+			"artifactId":       res.ArtifactID,
+			"component":        res.Component,
+			"appliedVersion":   res.AppliedVersion,
+			"appliedConfigRev": res.AppliedConfigRev,
+			"error":            res.Error,
+			"preApplyStatus":   res.PreApplyStatus,
+			"preApplyError":    res.PreApplyError,
+		})
+		emitRuntimeEvent(logger, st, hub, events.Event{
+			Type:     events.TypeDeviceApplyResult,
+			DeviceID: res.DeviceID,
+			At:       res.CreatedAt,
+			Payload:  payload,
+		})
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)

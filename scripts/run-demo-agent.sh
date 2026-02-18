@@ -4,6 +4,7 @@ set -euo pipefail
 BASE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 BASE_URL=${BASE_URL:-https://localhost:8080}
+AGENT_BASE_URL=${AGENT_BASE_URL:-}
 CERT_DIR_BASE=${CERT_DIR:-/tmp/hardwareops-demo/certs}
 DATA_DIR_BASE=${DATA_DIR:-/tmp/hardwareops-demo/data}
 IMAGE_NAME=${IMAGE_NAME:-hardwareops-agent-demo}
@@ -22,8 +23,27 @@ REQUIRE_ARTIFACT_SIGNATURE=${REQUIRE_ARTIFACT_SIGNATURE:-$SIGN_ARTIFACTS}
 UPLOAD_AGENT_BUNDLE=${UPLOAD_AGENT_BUNDLE:-1}
 AGENT_ARTIFACT_NAME=${AGENT_ARTIFACT_NAME:-agent}
 AGENT_ARTIFACT_VERSION=${AGENT_ARTIFACT_VERSION:-0.1.0}
+AUTH_TOKEN=${AUTH_TOKEN:-}
+AUTH_EMAIL=${AUTH_EMAIL:-}
+AUTH_PASSWORD=${AUTH_PASSWORD:-}
 
 HOST_URL="$BASE_URL"
+if [ -z "$AGENT_BASE_URL" ]; then
+  if [[ "$BASE_URL" =~ ^https?://localhost(:|/|$) ]] || [[ "$BASE_URL" =~ ^https?://127\.0\.0\.1(:|/|$) ]]; then
+    AGENT_BASE_URL="$BASE_URL"
+  else
+    scheme=${BASE_URL%%://*}
+    rest=${BASE_URL#*://}
+    hostport=${rest%%/*}
+    pathpart=""
+    if [[ "$rest" == */* ]]; then
+      pathpart=/${rest#*/}
+    fi
+    AGENT_BASE_URL="${scheme}://agent.${hostport}${pathpart}"
+  fi
+fi
+AGENT_HOST_URL="$AGENT_BASE_URL"
+
 if [[ "$BASE_URL" == http:* ]]; then
   echo "Control-plane must be HTTPS for mTLS. Start with ENABLE_TLS=1 ./scripts/run-control-plane.sh" >&2
   exit 1
@@ -37,6 +57,71 @@ fi
 
 # Ensure signing keys are available for demo verification.
 source "$BASE_DIR/scripts/ensure-signing-key.sh"
+
+curl_opts=(--cacert "$CA_CERT_PATH")
+if ! curl -s "${curl_opts[@]}" "$HOST_URL/healthz" >/dev/null; then
+  echo "Control-plane not reachable at $HOST_URL" >&2
+  exit 1
+fi
+
+auth_status_json=$(curl -sS "${curl_opts[@]}" "$HOST_URL/api/v1/auth/status" || true)
+AUTH_ENABLED=$(python3 - <<'PY' "$auth_status_json"
+import json, sys
+raw = sys.argv[1] if len(sys.argv) > 1 else ""
+try:
+    payload = json.loads(raw) if raw else {}
+except Exception:
+    print("0")
+    raise SystemExit(0)
+print("1" if payload.get("enabled") else "0")
+PY
+)
+
+if [ "$AUTH_ENABLED" = "1" ] && [ -z "$AUTH_TOKEN" ]; then
+  if [ -n "$AUTH_EMAIL" ] && [ -n "$AUTH_PASSWORD" ]; then
+    LOGIN_PAYLOAD=$(python3 - <<'PY' "$AUTH_EMAIL" "$AUTH_PASSWORD"
+import json, sys
+print(json.dumps({"email": sys.argv[1], "password": sys.argv[2]}))
+PY
+)
+    login_resp=$(curl -sS "${curl_opts[@]}" -X POST "$HOST_URL/api/v1/auth/login" \
+      -H "Content-Type: application/json" \
+      -d "$LOGIN_PAYLOAD" \
+      -w $'\n%{http_code}')
+    login_status=${login_resp##*$'\n'}
+    login_json=${login_resp%$'\n'*}
+    if [ "$login_status" != "200" ]; then
+      echo "Auth login failed (status=$login_status)." >&2
+      if [ -n "$login_json" ]; then
+        echo "$login_json" >&2
+      fi
+      exit 1
+    fi
+    AUTH_TOKEN=$(python3 - <<'PY' "$login_json"
+import json, sys
+print(json.loads(sys.argv[1]).get("token", ""))
+PY
+)
+    if [ -z "$AUTH_TOKEN" ]; then
+      echo "Auth login succeeded but token was empty." >&2
+      exit 1
+    fi
+  else
+    cat >&2 <<EOF
+Auth is enabled on the control-plane.
+Set either:
+  AUTH_TOKEN=<jwt>
+or:
+  AUTH_EMAIL=<user email> AUTH_PASSWORD=<password>
+EOF
+    exit 1
+  fi
+fi
+
+auth_args=()
+if [ -n "$AUTH_TOKEN" ]; then
+  auth_args=(-H "Authorization: Bearer $AUTH_TOKEN")
+fi
 
 if [ "$UPLOAD_AGENT_BUNDLE" = "1" ]; then
   AGENT_BUNDLE_DIR="$BASE_DIR/.tmp/agent-bundle"
@@ -86,19 +171,14 @@ EOF
   INPUT_DIR="$AGENT_BUNDLE_DIR" \
   BASE_URL="$BASE_URL" \
   CA_CERT_PATH="$CA_CERT_PATH" \
+  AUTH_TOKEN="$AUTH_TOKEN" \
   SIGNING_KEY="$SIGNING_KEY" \
   SIGNING_KEY_ID="$SIGNING_KEY_ID" \
   "$BASE_DIR/scripts/pack-upload-artifact.sh" >/dev/null
   echo "Uploaded agent bundle artifact ${AGENT_ARTIFACT_NAME}:${AGENT_ARTIFACT_VERSION}"
 fi
 
-curl_opts=(--cacert "$CA_CERT_PATH")
-if ! curl -s "${curl_opts[@]}" "$HOST_URL/healthz" >/dev/null; then
-  echo "Control-plane not reachable at $HOST_URL" >&2
-  exit 1
-fi
-
-AGENT_URL=${AGENT_URL:-$BASE_URL}
+AGENT_URL=${AGENT_URL:-$AGENT_HOST_URL}
 AGENT_URL=${AGENT_URL/localhost/host.docker.internal}
 AGENT_URL=${AGENT_URL/127.0.0.1/host.docker.internal}
 
@@ -153,7 +233,7 @@ for i in $(seq 1 "$DEMO_COUNT"); do
         -subj "/CN=hardwareops-device"
     fi
 
-    token_resp=$(curl -sS "${curl_opts[@]}" -X POST "$HOST_URL/api/v1/enrollments" \
+    token_resp=$(curl -sS "${curl_opts[@]}" "${auth_args[@]}" -X POST "$HOST_URL/api/v1/enrollments" \
       -H "Content-Type: application/json" \
       -d '{"expiresInSec":3600}' \
       -w $'\n%{http_code}')
@@ -161,6 +241,9 @@ for i in $(seq 1 "$DEMO_COUNT"); do
     TOKEN_JSON=${token_resp%$'\n'*}
     if [ -z "$TOKEN_JSON" ] || [ "$token_status" != "200" ]; then
       echo "Failed to create enrollment token (status=$token_status)." >&2
+      if [ "$token_status" = "401" ] || [ "$token_status" = "403" ]; then
+        echo "Tip: auth is enabled; run with AUTH_TOKEN or AUTH_EMAIL/AUTH_PASSWORD." >&2
+      fi
       if [ -n "$TOKEN_JSON" ]; then
         echo "$TOKEN_JSON" >&2
       fi
@@ -177,13 +260,20 @@ PY
       exit 1
     fi
 
-    ENROLL_PAYLOAD=$(python3 - <<'PY' "$TOKEN" "$DEVICE_CSR_PATH"
-import json, sys
-print(json.dumps({"token": sys.argv[1], "csr": open(sys.argv[2]).read()}))
+    ENROLL_PAYLOAD=$(python3 - <<'PY' "$TOKEN" "$DEVICE_CSR_PATH" "$NAME"
+import hashlib, json, sys
+hardware = hashlib.sha256(sys.argv[3].encode("utf-8")).hexdigest()
+print(json.dumps({
+  "token": sys.argv[1],
+  "csr": open(sys.argv[2]).read(),
+  "capabilities": {
+    "hw": {"identity": {"id": hardware, "source": "demo-agent-name"}}
+  }
+}))
 PY
 )
 
-    enroll_resp=$(curl -sS "${curl_opts[@]}" -X POST "$HOST_URL/api/v1/devices/enroll" \
+    enroll_resp=$(curl -sS "${curl_opts[@]}" -X POST "$AGENT_HOST_URL/api/v1/devices/enroll" \
       -H "Content-Type: application/json" \
       -d "$ENROLL_PAYLOAD" \
       -w $'\n%{http_code}')
@@ -191,6 +281,25 @@ PY
     ENROLL_JSON=${enroll_resp%$'\n'*}
     if [ -z "$ENROLL_JSON" ] || [ "$enroll_status" != "200" ]; then
       echo "Enrollment failed (status=$enroll_status)." >&2
+      if [ "$enroll_status" = "400" ] && [[ "$ENROLL_JSON" == *"csr invalid"* ]]; then
+        active_ca_crt="$BASE_DIR/dev-ca-active.crt"
+        active_ca_key="$BASE_DIR/dev-ca-active.key"
+        if [ -f "$active_ca_crt" ] && [ -f "$active_ca_key" ]; then
+          crt_md5=$(openssl x509 -noout -modulus -in "$active_ca_crt" 2>/dev/null | openssl md5 2>/dev/null | awk '{print $2}' || true)
+          key_md5=$(openssl rsa -noout -modulus -in "$active_ca_key" 2>/dev/null | openssl md5 2>/dev/null | awk '{print $2}' || true)
+          if [ -n "$crt_md5" ] && [ -n "$key_md5" ] && [ "$crt_md5" != "$key_md5" ]; then
+            cat >&2 <<EOF
+Hint: active CA cert/key mismatch detected:
+  $active_ca_crt
+  $active_ca_key
+Copy a matching cert/key pair and reload cert rotation:
+  cp dev-ca.crt dev-ca-active.crt
+  cp dev-ca.key dev-ca-active.key
+  curl --cacert ./dev-ca.crt -H "Authorization: Bearer <token>" -X POST $HOST_URL/api/v1/cert-rotation/reload
+EOF
+          fi
+        fi
+      fi
       if [ -n "$ENROLL_JSON" ]; then
         echo "$ENROLL_JSON" >&2
       fi

@@ -16,5 +16,8 @@ RUN npm run build
 
 FROM nginx:1.25-alpine
 
-COPY deploy/compose/nginx/nginx.conf /etc/nginx/nginx.conf
+COPY deploy/compose/nginx/nginx-https.conf.template /etc/nginx/nginx-https.conf.template
+COPY deploy/compose/nginx/nginx-http.conf.template /etc/nginx/nginx-http.conf.template
+COPY deploy/compose/nginx/40-render-nginx-conf.sh /docker-entrypoint.d/40-render-nginx-conf.sh
+RUN chmod +x /docker-entrypoint.d/40-render-nginx-conf.sh
 COPY --from=build /app/dist /usr/share/nginx/html

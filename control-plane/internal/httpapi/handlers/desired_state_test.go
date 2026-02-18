@@ -181,7 +181,7 @@ func TestDeviceCheckin_AgentDesiredOverrides(t *testing.T) {
 	req, _ = attachMTLSDevice(t, mem, req, deviceID)
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "", nil, nil).ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -209,7 +209,7 @@ func TestDeviceCheckin_GroupDesiredOverridesAgent(t *testing.T) {
 	req, _ = attachMTLSDevice(t, mem, req, deviceID)
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "", nil, nil).ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -235,7 +235,7 @@ func TestDeviceCheckin_AgentSetsDesired(t *testing.T) {
 	req, _ = attachMTLSDevice(t, mem, req, deviceID)
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "", nil, nil).ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)

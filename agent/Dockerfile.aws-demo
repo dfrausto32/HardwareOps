@@ -1,0 +1,31 @@
+FROM golang:1.22 AS build
+
+WORKDIR /src
+COPY agent/go.mod agent/go.sum ./agent/
+WORKDIR /src/agent
+RUN go mod download
+
+COPY agent/ .
+RUN CGO_ENABLED=0 go build -o /out/agent ./cmd/agent
+
+FROM alpine:3.19
+RUN adduser -D -u 10001 agent && \
+    apk add --no-cache ca-certificates curl openssl python3 && \
+    mkdir -p /data && chown -R agent:agent /data
+
+COPY agent/demo/aws-entrypoint.sh /usr/local/bin/aws-demo-entrypoint.sh
+RUN chmod +x /usr/local/bin/aws-demo-entrypoint.sh
+
+USER agent
+WORKDIR /home/agent
+
+ENV STATE_PATH=/data/agent-state.json
+ENV ARTIFACT_ROOT=/data/artifacts
+ENV CHECKIN_INTERVAL_SEC=5
+ENV AUTO_REENROLL=1
+
+VOLUME ["/data"]
+
+COPY --from=build /out/agent /usr/local/bin/agent
+
+ENTRYPOINT ["/usr/local/bin/aws-demo-entrypoint.sh"]

@@ -30,15 +30,110 @@ Cons: requires pipeline wiring.
 Pros: integrates with existing artifact systems.  
 Cons: needs credentials + network access.
 
-## Config (future)
-We’ll expose a config to enable any subset:
-- `ARTIFACT_INGEST_MODES=manual,push,pull`
-- `DEFAULT_INGEST_MODE=manual`
+## Ingest Selection Guide
+- See `development/push-vs-pull-workflows.md` for operator guidance on when to choose push vs pull.
+- See `development/artifact-ingest-test-plan.md` for an end-to-end test plan.
 
-### Repo Pull Config (examples)
-- `ARTIFACT_REPO_TYPE=artifactory|s3|gcs|http`
-- `ARTIFACT_REPO_URL=...`
-- `ARTIFACT_REPO_CREDENTIALS=...` (stored in secrets manager)
+## CI Push API (implemented)
+1) `POST /api/v1/artifacts/presign-upload`
+   - Returns `artifactId`, `objectKey`, `uploadUrl`, `expiresAt`
+2) CI uploads bytes directly with `PUT <uploadUrl>`
+3) `POST /api/v1/artifacts/complete`
+   - Finalizes artifact metadata after server-side object validation (`size` + `sha256`)
+
+### CI auth (implemented)
+- Create scoped service tokens via:
+  - `POST /api/v1/auth/service-tokens` (admin)
+- Scope for v1:
+  - `artifact.publish`
+- Service tokens are expiring and revocable (`POST /api/v1/auth/service-tokens/{tokenId}/revoke`).
+
+### CI helper script (implemented)
+Use:
+`scripts/ci-upload-artifact.sh`
+
+Example:
+```bash
+ARTIFACT_NAME=agent \
+ARTIFACT_VERSION=1.2.3 \
+ARTIFACT_TYPE=agent_bundle \
+INPUT_DIR=./dist/agent \
+CI_SERVICE_TOKEN='<token>' \
+BASE_URL=https://control-plane.example.com \
+CA_CERT_PATH=./ca.crt \
+./scripts/ci-upload-artifact.sh
+```
+
+## Pull API (implemented)
+`POST /api/v1/artifacts/pull`
+
+Required fields:
+- `name`
+- `version`
+- `sha256`
+
+Source fields (backward compatible):
+- Legacy: `sourceUrl` (http/https)
+- Adapter-ready: `source.kind` + `source.uri` (+ optional `source.credentialRef`)
+- If both are sent, they must refer to the same URI.
+
+Supported source kinds (current):
+- `http`
+- `artifactory`
+
+Optional fields:
+- `type`
+- `sizeBytes`
+- `signature`
+- `signatureKeyId`
+- `metadata`
+
+Server behavior:
+- Fetches from resolved source URI (`source.uri` or `sourceUrl`)
+- Enforces size limit and timeout
+- Verifies `sha256` (and `sizeBytes` when provided)
+- Stores in object store and creates artifact metadata
+
+Pull safety controls:
+- `ARTIFACT_PULL_ALLOWED_HOSTS` (comma-separated host allowlist; empty allows any)
+- `ARTIFACT_PULL_MAX_BYTES` (default `1073741824`, 1 GiB)
+- `ARTIFACT_PULL_TIMEOUT` (default `15m`)
+
+Credential resolver (adapter-ready):
+- `ARTIFACT_PULL_CREDENTIALS_FILE` (path to JSON file)
+- `ARTIFACT_PULL_CREDENTIALS_JSON` (inline JSON; used when file is unset)
+- `ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID` (AWS Secrets Manager secret containing the same JSON map)
+- `ARTIFACT_PULL_CREDENTIALS_AWS_REGION` (optional region override for the AWS secret lookup)
+- AWS resolver execution requirement: control-plane runtime must have AWS credentials/role permission for `secretsmanager:GetSecretValue` on the configured secret.
+
+Resolver behavior:
+- Static credentials (`FILE`/`JSON`) and AWS secret credentials are both loaded when configured.
+- If the same `credentialRef` exists in multiple sources, later-loaded sources override earlier values.
+- Current load order: static first, AWS secret second (AWS wins on collisions).
+
+Static credential JSON format:
+```json
+{
+  "repo-a": {
+    "authorization": "Bearer <token>"
+  },
+  "repo-basic": {
+    "username": "user",
+    "password": "pass"
+  },
+  "repo-headers": {
+    "header:X-Api-Key": "abc123"
+  }
+}
+```
+
+Artifactory-specific credential aliases (same static credential map):
+- `artifactory_token` or `jfrog_access_token` → `Authorization: Bearer <token>`
+- `artifactory_api_key` or `jfrog_api_key` → `X-JFrog-Art-Api: <key>`
+
+Local Artifactory adapter smoke test:
+- `./scripts/setup-artifactory-demo.sh`
+- `./scripts/test-artifactory-adapter.sh`
 
 ## Security Notes
 - Prefer **presigned URLs** for CI.

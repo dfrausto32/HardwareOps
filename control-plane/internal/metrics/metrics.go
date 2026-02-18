@@ -31,6 +31,11 @@ type Metrics struct {
 	preApplyTotal        *prometheus.CounterVec
 	artifactUploadTotal  *prometheus.CounterVec
 	artifactPresignTotal *prometheus.CounterVec
+	artifactPruneTotal   *prometheus.CounterVec
+	artifactPruneDeleted prometheus.Counter
+	artifactPruneSkipped *prometheus.CounterVec
+	artifactPruneLastRun prometheus.Gauge
+	artifactPruneFails   prometheus.Gauge
 	rateLimitTotal       *prometheus.CounterVec
 	upgradeTotal         *prometheus.CounterVec
 	backupTotal          *prometheus.CounterVec
@@ -107,6 +112,26 @@ func New() *Metrics {
 		Name: "hwops_artifact_presign_total",
 		Help: "Artifact presign requests by status.",
 	}, []string{"status"})
+	artifactPruneTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hwops_artifact_prune_total",
+		Help: "Artifact lifecycle prune runs by trigger and status.",
+	}, []string{"trigger", "status"})
+	artifactPruneDeleted := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "hwops_artifact_prune_deleted_total",
+		Help: "Total artifacts deleted by lifecycle prune runs.",
+	})
+	artifactPruneSkipped := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hwops_artifact_prune_skipped_total",
+		Help: "Total artifacts skipped by lifecycle prune runs.",
+	}, []string{"reason"})
+	artifactPruneLastRun := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "hwops_artifact_prune_last_run_unix",
+		Help: "Unix timestamp of the last lifecycle prune run completion.",
+	})
+	artifactPruneFails := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "hwops_artifact_prune_consecutive_failures",
+		Help: "Current count of consecutive lifecycle prune failures.",
+	})
 	rateLimitTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "hwops_rate_limit_total",
 		Help: "Rate limit hits by endpoint.",
@@ -124,7 +149,7 @@ func New() *Metrics {
 		Help: "Pending actions issued to devices by type.",
 	}, []string{"type"})
 
-	reg.MustRegister(httpRequests, httpDuration, deviceTotal, deviceStatus, dbOpenConns, dbInUse, dbWaitCount, s3ObjectsTotal, s3BytesTotal, checkinTotal, enrollTokenTotal, enrollTotal, applyTotal, preApplyTotal, artifactUploadTotal, artifactPresignTotal, rateLimitTotal, upgradeTotal, backupTotal, pendingActionsTotal)
+	reg.MustRegister(httpRequests, httpDuration, deviceTotal, deviceStatus, dbOpenConns, dbInUse, dbWaitCount, s3ObjectsTotal, s3BytesTotal, checkinTotal, enrollTokenTotal, enrollTotal, applyTotal, preApplyTotal, artifactUploadTotal, artifactPresignTotal, artifactPruneTotal, artifactPruneDeleted, artifactPruneSkipped, artifactPruneLastRun, artifactPruneFails, rateLimitTotal, upgradeTotal, backupTotal, pendingActionsTotal)
 
 	return &Metrics{
 		registry:             reg,
@@ -144,6 +169,11 @@ func New() *Metrics {
 		preApplyTotal:        preApplyTotal,
 		artifactUploadTotal:  artifactUploadTotal,
 		artifactPresignTotal: artifactPresignTotal,
+		artifactPruneTotal:   artifactPruneTotal,
+		artifactPruneDeleted: artifactPruneDeleted,
+		artifactPruneSkipped: artifactPruneSkipped,
+		artifactPruneLastRun: artifactPruneLastRun,
+		artifactPruneFails:   artifactPruneFails,
 		rateLimitTotal:       rateLimitTotal,
 		upgradeTotal:         upgradeTotal,
 		backupTotal:          backupTotal,
@@ -287,6 +317,38 @@ func (m *Metrics) IncArtifactPresign(status string) {
 		status = "error"
 	}
 	m.artifactPresignTotal.WithLabelValues(status).Inc()
+}
+
+func (m *Metrics) ObserveArtifactPrune(trigger, status string, deleted int, skippedByReason map[string]int, finishedAt time.Time, consecutiveFailures int) {
+	if m == nil {
+		return
+	}
+	if trigger == "" {
+		trigger = "unknown"
+	}
+	if status == "" {
+		status = "unknown"
+	}
+	m.artifactPruneTotal.WithLabelValues(trigger, status).Inc()
+	if deleted > 0 {
+		m.artifactPruneDeleted.Add(float64(deleted))
+	}
+	for reason, count := range skippedByReason {
+		if reason == "" {
+			reason = "unknown"
+		}
+		if count <= 0 {
+			continue
+		}
+		m.artifactPruneSkipped.WithLabelValues(reason).Add(float64(count))
+	}
+	if !finishedAt.IsZero() {
+		m.artifactPruneLastRun.Set(float64(finishedAt.Unix()))
+	}
+	if consecutiveFailures < 0 {
+		consecutiveFailures = 0
+	}
+	m.artifactPruneFails.Set(float64(consecutiveFailures))
 }
 
 func (m *Metrics) IncRateLimit(endpoint string) {

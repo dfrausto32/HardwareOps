@@ -1,0 +1,276 @@
+variable "name_prefix" {
+  description = "Global prefix for this customer environment."
+  type        = string
+}
+
+variable "tags" {
+  description = "Common tags applied to all resources."
+  type        = map(string)
+  default     = {}
+}
+
+variable "vpc_cidr" {
+  description = "VPC CIDR."
+  type        = string
+}
+
+variable "public_subnet_cidrs" {
+  description = "Public subnet CIDRs keyed by AZ."
+  type        = map(string)
+}
+
+variable "private_subnet_cidrs" {
+  description = "Private subnet CIDRs keyed by AZ."
+  type        = map(string)
+}
+
+variable "ingress_cidrs" {
+  description = "CIDRs allowed to reach ALB listeners."
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+}
+
+variable "acm_certificate_arn" {
+  description = "ACM certificate ARN for ALB listeners."
+  type        = string
+}
+
+variable "route53_zone_id" {
+  description = "Hosted zone ID for app/devices records."
+  type        = string
+}
+
+variable "create_dns_records" {
+  description = "Create app/devices Route53 records."
+  type        = bool
+  default     = true
+}
+
+variable "app_host" {
+  description = "App host name."
+  type        = string
+}
+
+variable "devices_host" {
+  description = "Devices host name."
+  type        = string
+}
+
+variable "device_mtls_bucket" {
+  description = "S3 bucket containing device trust bundle for ALB mTLS."
+  type        = string
+}
+
+variable "device_mtls_key" {
+  description = "S3 key containing device trust bundle for ALB mTLS."
+  type        = string
+}
+
+variable "device_mtls_object_version" {
+  description = "S3 object version for device trust bundle."
+  type        = string
+  default     = null
+}
+
+variable "device_mtls_mode" {
+  description = "ALB device listener mTLS mode (verify or passthrough)."
+  type        = string
+  default     = "verify"
+}
+
+variable "artifact_bucket_name" {
+  description = "Override artifact bucket name."
+  type        = string
+  default     = null
+}
+
+variable "artifact_store_create_kms_key" {
+  description = "Create KMS key for artifact bucket."
+  type        = bool
+  default     = true
+}
+
+variable "db_name" {
+  description = "Database name."
+  type        = string
+  default     = "hardwareops"
+}
+
+variable "db_username" {
+  description = "Database master username."
+  type        = string
+  default     = "hardwareops"
+}
+
+variable "db_master_password" {
+  description = "Database master password for non-managed mode."
+  type        = string
+  default     = "hardwareops-dev-change-me"
+  sensitive   = true
+}
+
+variable "db_manage_master_user_password" {
+  description = "Use RDS-managed master password mode."
+  type        = bool
+  default     = false
+}
+
+variable "db_instance_class" {
+  description = "RDS instance class."
+  type        = string
+  default     = "db.t4g.medium"
+}
+
+variable "db_allocated_storage" {
+  description = "RDS allocated storage (GB)."
+  type        = number
+  default     = 100
+}
+
+variable "db_max_allocated_storage" {
+  description = "RDS max storage autoscaling limit (GB)."
+  type        = number
+  default     = 500
+}
+
+variable "db_engine_version" {
+  description = "RDS PostgreSQL engine version."
+  type        = string
+  default     = "16.4"
+}
+
+variable "db_multi_az" {
+  description = "Enable RDS Multi-AZ."
+  type        = bool
+  default     = true
+}
+
+variable "db_backup_retention_days" {
+  description = "RDS backup retention days."
+  type        = number
+  default     = 14
+}
+
+variable "db_deletion_protection" {
+  description = "Enable RDS deletion protection."
+  type        = bool
+  default     = true
+}
+
+variable "control_plane_image" {
+  description = "Control-plane image URI."
+  type        = string
+}
+
+variable "gateway_image" {
+  description = "Gateway image URI."
+  type        = string
+}
+
+variable "control_plane_container_port" {
+  description = "Control-plane container port."
+  type        = number
+  default     = 8080
+}
+
+variable "gateway_container_port" {
+  description = "Gateway container port."
+  type        = number
+  default     = 8081
+}
+
+variable "control_plane_desired_count" {
+  description = "Control-plane ECS desired task count."
+  type        = number
+  default     = 2
+}
+
+variable "gateway_desired_count" {
+  description = "Gateway ECS desired task count."
+  type        = number
+  default     = 2
+}
+
+variable "control_plane_env" {
+  description = "Control-plane environment variables."
+  type        = map(string)
+  default     = {}
+}
+
+variable "artifact_pull_credentials_aws_secret_id" {
+  description = "Optional AWS Secrets Manager secret ID/ARN that contains artifact pull credentials JSON."
+  type        = string
+  default     = null
+}
+
+variable "gateway_env" {
+  description = "Gateway environment variables."
+  type        = map(string)
+  default     = {}
+}
+
+variable "control_plane_secret_arns" {
+  description = "Control-plane secrets map (env name => secret ARN)."
+  type        = map(string)
+  default     = {}
+}
+
+variable "gateway_secret_arns" {
+  description = "Gateway secrets map (env name => secret ARN)."
+  type        = map(string)
+  default     = {}
+}
+
+variable "enable_demo_fleet" {
+  description = "Enable demo agent fleet resources in this stack."
+  type        = bool
+  default     = false
+}
+
+variable "demo_agent_count" {
+  description = "Number of demo agents when demo fleet is enabled."
+  type        = number
+  default     = 3
+}
+
+variable "demo_agent_image" {
+  description = "Demo agent image URI."
+  type        = string
+  default     = null
+}
+
+variable "demo_agent_cpu" {
+  description = "Demo agent task CPU units."
+  type        = number
+  default     = 256
+}
+
+variable "demo_agent_memory" {
+  description = "Demo agent task memory in MiB."
+  type        = number
+  default     = 512
+}
+
+variable "demo_agent_checkin_interval_sec" {
+  description = "Default check-in interval for demo agents."
+  type        = number
+  default     = 5
+}
+
+variable "demo_agent_env" {
+  description = "Additional environment variables for demo agent containers."
+  type        = map(string)
+  default     = {}
+}
+
+variable "demo_bootstrap_email" {
+  description = "Bootstrap admin email for demo agent self-enrollment. If null, derived from control_plane_env."
+  type        = string
+  default     = null
+}
+
+variable "demo_bootstrap_password" {
+  description = "Bootstrap admin password for demo agent self-enrollment. If null, derived from control_plane_env."
+  type        = string
+  default     = null
+}

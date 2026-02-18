@@ -46,6 +46,24 @@ cp .env.onprem.example .env.onprem
 docker compose -f docker-compose.onprem.yml --env-file .env.onprem up -d
 ```
 
+On-prem defaults now assume:
+- Human UI/API: `PUBLIC_BASE_URL` (for example `https://hardwareops.internal`)
+- Agent/API host: `AGENT_BASE_URL` (for example `https://agent.hardwareops.internal`)
+- Local auth enabled (`AUTH_MODE=local`)
+- Device identity hardening in audit mode (`DEVICE_IDENTITY_MODE=audit`)
+
+Set DNS for both hostnames to the gateway host. Agent runtime endpoints are restricted to
+the `agent.*` host and require client mTLS for check-in/apply traffic.
+To block duplicate hardware identities, set `DEVICE_IDENTITY_MODE=enforce` and optionally require identity on enroll/check-in.
+
+Server TLS vs device CA:
+- Device CA (`ca.crt`/`ca.key`) is for agent enrollment + mTLS.
+- Gateway server cert (`server.crt`/`server.key`) is for browser trust.
+- For production browsers, set `SERVER_CERT_MODE=external` and provide a publicly/enterprise-trusted server cert.
+
+If users need to bootstrap trust, set `BOOTSTRAP_TOKEN` and download the CA cert from:
+`GET /api/v1/bootstrap/ca` with header `X-Bootstrap-Token: <token>`.
+
 Metrics stack (Prometheus + Grafana):
 ```
 docker compose -f docker-compose.metrics.yml up -d

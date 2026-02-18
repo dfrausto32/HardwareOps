@@ -54,6 +54,7 @@ cat > "$ZONE_FILE" <<EOF
 @   IN NS ns1.$DOMAIN.
 ns1 IN A $DNS_IP
 @   IN A $DNS_IP
+agent IN A $DNS_IP
 EOF
 
 if [ "$HOST_NET" = "1" ]; then

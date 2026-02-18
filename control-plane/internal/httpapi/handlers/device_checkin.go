@@ -3,6 +3,7 @@ package handlers
 import (
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -96,8 +97,9 @@ type Action struct {
 	TimeoutSec int             `json:"timeoutSec"`
 }
 
-func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustProxy bool, clientCertHeader string, activeCAPool func() *x509.CertPool, metricsCollector *metrics.Metrics) http.HandlerFunc {
+func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustProxy bool, clientCertHeader string, activeCAPool func() *x509.CertPool, identityPolicy DeviceIdentityPolicy, metricsCollector *metrics.Metrics) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		policy := identityPolicy.normalized()
 		recordCheckin := func(status, reason string) {
 			if metricsCollector != nil {
 				metricsCollector.IncCheckin(status, reason)
@@ -106,6 +108,26 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 		device, err := deviceFromMTLS(r, st, trustProxy, clientCertHeader)
 		if err != nil {
 			recordCheckin("error", "unauthorized")
+			if errors.Is(err, errUnknownDeviceCert) {
+				logger.Printf("checkin auth failed: unknown device certificate")
+				http.Error(w, "unknown device certificate", http.StatusUnauthorized)
+				return
+			}
+			if errors.Is(err, errClientCertRequired) {
+				headerVal := strings.TrimSpace(r.Header.Get(clientCertHeader))
+				leafVal := strings.TrimSpace(r.Header.Get("X-Amzn-Mtls-Clientcert-Leaf"))
+				chainVal := strings.TrimSpace(r.Header.Get("X-Amzn-Mtls-Clientcert"))
+				logger.Printf(
+					"checkin auth failed: client certificate required header=%s(len=%d) leaf_len=%d chain_len=%d trust_proxy=%t",
+					clientCertHeader,
+					len(headerVal),
+					len(leafVal),
+					len(chainVal),
+					trustProxy,
+				)
+			} else {
+				logger.Printf("checkin auth failed: %v", err)
+			}
 			http.Error(w, "client certificate required", http.StatusUnauthorized)
 			return
 		}
@@ -128,6 +150,7 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 		metadataValue := device.MetadataJSON
 		metadataChanged := false
 		var cloneSignal *cloneSuspicion
+		incomingHardware := parseHardwareIdentity(req.Capabilities)
 		var certNeedsReenroll bool
 		if activeCAPool != nil {
 			pool := activeCAPool()
@@ -142,6 +165,17 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 				}
 			}
 		}
+		if identityMeta, changed := upsertHardwareIdentityMeta(metadataValue, incomingHardware, now); changed {
+			metadataValue = identityMeta
+			metadataChanged = true
+		}
+		identityViolation, identityErr := checkinIdentityViolation(st, req.DeviceID, device.MetadataJSON, incomingHardware, policy)
+		if identityErr != nil {
+			logger.Printf("checkin identity lookup failed device=%s: %v", req.DeviceID, identityErr)
+			recordCheckin("error", "storage_error")
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
 		if identityMeta, changed, signal := updateIdentityMeta(metadataValue, sourceIP, req.Capabilities, device.LastSeen, now); changed {
 			metadataValue = identityMeta
 			metadataChanged = true
@@ -150,6 +184,36 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 		metadataPatch := []byte(nil)
 		if metadataChanged {
 			metadataPatch = metadataValue
+		}
+		if identityViolation != nil {
+			identityPayload := auditJSON(map[string]any{
+				"mode":               policy.Mode,
+				"reasons":            identityViolation.Reasons,
+				"hardwareId":         identityViolation.HardwareID,
+				"storedHardwareId":   identityViolation.StoredHardwareID,
+				"conflictDeviceId":   identityViolation.ConflictDeviceID,
+				"sourceIp":           sourceIP,
+				"suspectedByCheckin": true,
+			})
+			emitRuntimeEvent(logger, st, hub, events.Event{
+				Type:     events.TypeDeviceIdentityConflict,
+				DeviceID: req.DeviceID,
+				At:       now,
+				Payload:  identityPayload,
+			})
+			auditEvent := buildAuditEvent(r, trustProxy, actorDevice(req.DeviceID), "device.identity_violation", "device", req.DeviceID)
+			auditEvent.MetadataJSON = identityPayload
+			if policy.Mode == deviceIdentityModeEnforce {
+				auditEvent.Status = "denied"
+				auditEvent.Error = "device_identity_conflict"
+			}
+			writeAudit(logger, st, auditEvent, nil)
+			if policy.Mode == deviceIdentityModeEnforce {
+				logger.Printf("checkin denied device=%s reasons=%v hardware_id=%s conflict_device=%s", req.DeviceID, identityViolation.Reasons, identityViolation.HardwareID, identityViolation.ConflictDeviceID)
+				recordCheckin("error", "identity_conflict")
+				http.Error(w, "device identity conflict", http.StatusConflict)
+				return
+			}
 		}
 		prevState, _, _ := st.GetDeviceState(req.DeviceID)
 		prevComponents := decodeDeviceComponents(prevState.ComponentsJSON)

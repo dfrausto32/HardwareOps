@@ -5,21 +5,27 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/hardwareops/control-plane/internal/artifactingest"
+	"github.com/hardwareops/control-plane/internal/lifecycle"
 	"github.com/hardwareops/control-plane/internal/metrics"
 	"github.com/hardwareops/control-plane/internal/store"
 )
 
 type CreateArtifactRequest struct {
+	ArtifactID     string          `json:"artifactId"`
 	Name           string          `json:"name"`
 	Version        string          `json:"version"`
 	Type           string          `json:"type"`
@@ -32,16 +38,20 @@ type CreateArtifactRequest struct {
 }
 
 type ArtifactResponse struct {
-	ArtifactID string          `json:"artifactId"`
-	Name       string          `json:"name"`
-	Version    string          `json:"version"`
-	Type       string          `json:"type"`
-	ObjectKey  string          `json:"objectKey"`
-	SHA256     string          `json:"sha256"`
-	Signature  string          `json:"signature,omitempty"`
-	SizeBytes  int64           `json:"sizeBytes"`
-	Metadata   json.RawMessage `json:"metadata,omitempty"`
-	CreatedAt  time.Time       `json:"createdAt"`
+	ArtifactID     string          `json:"artifactId"`
+	Name           string          `json:"name"`
+	Version        string          `json:"version"`
+	Type           string          `json:"type"`
+	Status         string          `json:"status"`
+	ObjectKey      string          `json:"objectKey"`
+	SHA256         string          `json:"sha256"`
+	Signature      string          `json:"signature,omitempty"`
+	SizeBytes      int64           `json:"sizeBytes"`
+	Metadata       json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt      time.Time       `json:"createdAt"`
+	DeprecatedAt   *time.Time      `json:"deprecatedAt,omitempty"`
+	DeleteAfter    *time.Time      `json:"deleteAfter,omitempty"`
+	ReferenceCount int             `json:"referenceCount"`
 }
 
 type ArtifactListResponse struct {
@@ -57,9 +67,12 @@ type PresignResponse struct {
 
 type ObjectStore interface {
 	PresignGet(ctx context.Context, bucket, key string, expires time.Duration) (string, error)
+	PresignPut(ctx context.Context, bucket, key string, expires time.Duration, contentType string) (string, error)
 	PutObject(ctx context.Context, bucket, key string, body io.Reader, size int64, contentType string) (int64, error)
 	EnsureBucket(ctx context.Context, bucket string) error
 	DeleteObject(ctx context.Context, bucket, key string) error
+	StatObject(ctx context.Context, bucket, key string) (int64, error)
+	GetObject(ctx context.Context, bucket, key string) (io.ReadCloser, error)
 }
 
 type UploadArtifactResponse struct {
@@ -70,6 +83,79 @@ type UploadArtifactResponse struct {
 	Name       string `json:"name"`
 	Version    string `json:"version"`
 	Type       string `json:"type"`
+}
+
+type PresignUploadRequest struct {
+	Filename       string `json:"filename"`
+	ContentType    string `json:"contentType"`
+	ExpiresSeconds int    `json:"expiresSeconds"`
+}
+
+type PresignUploadResponse struct {
+	ArtifactID string    `json:"artifactId"`
+	ObjectKey  string    `json:"objectKey"`
+	UploadURL  string    `json:"uploadUrl"`
+	ExpiresAt  time.Time `json:"expiresAt"`
+}
+
+type PullArtifactRequest struct {
+	Name           string          `json:"name"`
+	Version        string          `json:"version"`
+	Type           string          `json:"type"`
+	SourceURL      string          `json:"sourceUrl"`
+	Source         *PullSourceSpec `json:"source,omitempty"`
+	SHA256         string          `json:"sha256"`
+	Signature      string          `json:"signature"`
+	SignatureKeyID string          `json:"signatureKeyId"`
+	SizeBytes      int64           `json:"sizeBytes"`
+	Metadata       json.RawMessage `json:"metadata"`
+}
+
+type PullSourceSpec struct {
+	Kind          string `json:"kind"`
+	URI           string `json:"uri"`
+	CredentialRef string `json:"credentialRef"`
+}
+
+type DeprecateArtifactRequest struct {
+	DeleteAfterDays int `json:"deleteAfterDays"`
+}
+
+type ArtifactLifecyclePolicyRequest struct {
+	DeprecatedDeleteAfterDays int `json:"deprecatedDeleteAfterDays"`
+}
+
+type ArtifactLifecyclePolicyResponse struct {
+	DeprecatedDeleteAfterDays int       `json:"deprecatedDeleteAfterDays"`
+	UpdatedAt                 time.Time `json:"updatedAt"`
+}
+
+type PruneArtifactsResponse struct {
+	Trigger    string                   `json:"trigger,omitempty"`
+	StartedAt  time.Time                `json:"startedAt,omitempty"`
+	FinishedAt time.Time                `json:"finishedAt,omitempty"`
+	CutoffUTC  time.Time                `json:"cutoffUtc"`
+	Limit      int                      `json:"limit"`
+	Deleted    []string                 `json:"deleted"`
+	Skipped    []PruneArtifactSkipEntry `json:"skipped"`
+	DeletedNum int                      `json:"deletedNum"`
+	SkippedNum int                      `json:"skippedNum"`
+	Error      string                   `json:"error,omitempty"`
+}
+
+type PruneArtifactSkipEntry struct {
+	ArtifactID string `json:"artifactId"`
+	Reason     string `json:"reason"`
+}
+
+type ArtifactLifecycleStatusResponse struct {
+	Enabled                 bool                    `json:"enabled"`
+	Running                 bool                    `json:"running"`
+	IntervalSeconds         int64                   `json:"intervalSeconds"`
+	BatchLimit              int                     `json:"batchLimit"`
+	AlertReferenceThreshold int                     `json:"alertReferenceThreshold"`
+	LastRun                 *PruneArtifactsResponse `json:"lastRun,omitempty"`
+	Alerts                  []lifecycle.Alert       `json:"alerts,omitempty"`
 }
 
 func CreateArtifact(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
@@ -98,12 +184,20 @@ func CreateArtifact(logger *log.Logger, st store.Store, trustProxy bool) http.Ha
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		artifactID := strings.TrimSpace(req.ArtifactID)
+		if artifactID == "" {
+			artifactID = uuid.NewString()
+		} else if _, err := uuid.Parse(artifactID); err != nil {
+			http.Error(w, "artifactId must be uuid", http.StatusBadRequest)
+			return
+		}
 
 		artifact := store.Artifact{
-			ArtifactID:   uuid.NewString(),
+			ArtifactID:   artifactID,
 			Name:         req.Name,
 			Version:      req.Version,
 			Type:         atype,
+			Status:       "active",
 			ObjectKey:    req.ObjectKey,
 			SHA256:       req.SHA256,
 			Signature:    req.Signature,
@@ -129,18 +223,7 @@ func CreateArtifact(logger *log.Logger, st store.Store, trustProxy bool) http.Ha
 		})
 		writeAudit(logger, st, event, nil)
 
-		resp := ArtifactResponse{
-			ArtifactID: artifact.ArtifactID,
-			Name:       artifact.Name,
-			Version:    artifact.Version,
-			Type:       artifact.Type,
-			ObjectKey:  artifact.ObjectKey,
-			SHA256:     artifact.SHA256,
-			Signature:  artifact.Signature,
-			SizeBytes:  artifact.SizeBytes,
-			Metadata:   json.RawMessage(artifact.MetadataJSON),
-			CreatedAt:  artifact.CreatedAt,
-		}
+		resp := artifactToResponse(artifact, 0)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	}
@@ -234,6 +317,7 @@ func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 			Name:         name,
 			Version:      version,
 			Type:         atype,
+			Status:       "active",
 			ObjectKey:    objectKey,
 			SHA256:       sha,
 			Signature:    signature,
@@ -275,6 +359,475 @@ func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 	}
 }
 
+func PullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, allowedHosts []string, maxBytes int64, timeout time.Duration, credentialResolver artifactingest.CredentialResolver, trustProxy bool, metricsCollector *metrics.Metrics) http.HandlerFunc {
+	adapterRegistry := artifactingest.NewPullAdapterRegistry(
+		artifactingest.NewHTTPPullAdapter(allowedHosts, timeout),
+		artifactingest.NewArtifactoryPullAdapter(allowedHosts, timeout),
+	)
+	if credentialResolver == nil {
+		credentialResolver = artifactingest.NoopCredentialResolver{}
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		record := func(status string) {
+			if metricsCollector != nil {
+				metricsCollector.IncArtifactUpload(status)
+			}
+		}
+		if objStore == nil || bucket == "" {
+			record("error")
+			http.Error(w, "object store not configured", http.StatusInternalServerError)
+			return
+		}
+		if maxBytes <= 0 {
+			maxBytes = 1024 * 1024 * 1024 // 1 GiB default safety limit
+		}
+
+		var req PullArtifactRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			record("error")
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		req.Name = strings.TrimSpace(req.Name)
+		req.Version = strings.TrimSpace(req.Version)
+		req.SourceURL = strings.TrimSpace(req.SourceURL)
+		req.SHA256 = strings.TrimSpace(strings.ToLower(req.SHA256))
+		if req.Name == "" || req.Version == "" || req.SHA256 == "" {
+			record("error")
+			http.Error(w, "name, version, sha256 required", http.StatusBadRequest)
+			return
+		}
+		var sourceInput *artifactingest.PullSource
+		if req.Source != nil {
+			sourceInput = &artifactingest.PullSource{
+				Kind:          req.Source.Kind,
+				URI:           req.Source.URI,
+				CredentialRef: req.Source.CredentialRef,
+			}
+		}
+		sourceSpec, err := artifactingest.ResolvePullSource(sourceInput, req.SourceURL)
+		if err != nil {
+			record("error")
+			http.Error(w, "invalid source specification", http.StatusBadRequest)
+			return
+		}
+		adapter, ok := adapterRegistry.Get(sourceSpec.Kind)
+		if !ok {
+			record("error")
+			http.Error(w, fmt.Sprintf("source kind %q not supported", sourceSpec.Kind), http.StatusBadRequest)
+			return
+		}
+		parsedSourceURL, _ := url.Parse(sourceSpec.URI)
+
+		atype, err := normalizeArtifactType(req.Type)
+		if err != nil {
+			record("error")
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		meta, err := normalizeMetadata(req.Metadata)
+		if err != nil {
+			record("error")
+			http.Error(w, "metadata must be valid json", http.StatusBadRequest)
+			return
+		}
+		meta, err = mergeSignatureKeyID(meta, req.SignatureKeyID)
+		if err != nil {
+			record("error")
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		credentials := artifactingest.Credentials{}
+		if sourceSpec.CredentialRef != "" {
+			resolved, err := credentialResolver.Resolve(r.Context(), sourceSpec.CredentialRef)
+			if err != nil {
+				record("error")
+				if errors.Is(err, artifactingest.ErrCredentialNotFound) {
+					http.Error(w, "credentialRef not found", http.StatusBadRequest)
+					return
+				}
+				if errors.Is(err, artifactingest.ErrCredentialResolverUnavailable) {
+					http.Error(w, "credentialRef unsupported", http.StatusBadRequest)
+					return
+				}
+				logger.Printf("resolve pull credentials error: %v", err)
+				http.Error(w, "credential resolution error", http.StatusInternalServerError)
+				return
+			}
+			credentials = resolved
+		}
+
+		pulled, err := adapter.Pull(r.Context(), artifactingest.PullRequest{
+			URI:           sourceSpec.URI,
+			CredentialRef: sourceSpec.CredentialRef,
+			Credentials:   credentials,
+		})
+		if err != nil {
+			record("error")
+			if errors.Is(err, artifactingest.ErrSourceNotAllowed) {
+				http.Error(w, "sourceUrl host not allowed", http.StatusForbidden)
+				return
+			}
+			if errors.Is(err, artifactingest.ErrInvalidSource) {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			logger.Printf("pull artifact request error: %v", err)
+			http.Error(w, "pull source error", http.StatusBadGateway)
+			return
+		}
+		defer pulled.Body.Close()
+		if pulled.ContentLength > 0 && pulled.ContentLength > maxBytes {
+			record("error")
+			http.Error(w, "artifact exceeds pull size limit", http.StatusBadRequest)
+			return
+		}
+
+		tmpFile, err := os.CreateTemp("", "hardwareops-artifact-pull-*.tar.gz")
+		if err != nil {
+			logger.Printf("create temp artifact file error: %v", err)
+			record("error")
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		tmpPath := tmpFile.Name()
+		defer os.Remove(tmpPath)
+		defer tmpFile.Close()
+
+		h := sha256.New()
+		limited := io.LimitReader(pulled.Body, maxBytes+1)
+		written, err := io.Copy(io.MultiWriter(tmpFile, h), limited)
+		if err != nil {
+			logger.Printf("pull artifact copy error: %v", err)
+			record("error")
+			http.Error(w, "pull source read error", http.StatusBadGateway)
+			return
+		}
+		if written > maxBytes {
+			record("error")
+			http.Error(w, "artifact exceeds pull size limit", http.StatusBadRequest)
+			return
+		}
+		computedSHA := hex.EncodeToString(h.Sum(nil))
+		if computedSHA != req.SHA256 {
+			record("error")
+			http.Error(w, "sha256 mismatch", http.StatusBadRequest)
+			return
+		}
+		if req.SizeBytes > 0 && req.SizeBytes != written {
+			record("error")
+			http.Error(w, "size mismatch", http.StatusBadRequest)
+			return
+		}
+
+		artifactID := uuid.NewString()
+		ext := ""
+		if parsedSourceURL != nil {
+			ext = filepath.Ext(parsedSourceURL.Path)
+		}
+		if ext == "" {
+			ext = ".tar.gz"
+		}
+		objectKey := "artifacts/" + artifactID + ext
+
+		if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
+			logger.Printf("seek temp artifact file error: %v", err)
+			record("error")
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if err := objStore.EnsureBucket(r.Context(), bucket); err != nil {
+			logger.Printf("ensure bucket error: %v", err)
+			record("error")
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		contentType := pulled.ContentType
+		if contentType == "" {
+			contentType = "application/gzip"
+		}
+		size, err := objStore.PutObject(r.Context(), bucket, objectKey, tmpFile, written, contentType)
+		if err != nil {
+			logger.Printf("put pulled object error: %v", err)
+			record("error")
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+
+		artifact := store.Artifact{
+			ArtifactID:   artifactID,
+			Name:         req.Name,
+			Version:      req.Version,
+			Type:         atype,
+			Status:       "active",
+			ObjectKey:    objectKey,
+			SHA256:       req.SHA256,
+			Signature:    strings.TrimSpace(req.Signature),
+			SizeBytes:    size,
+			MetadataJSON: meta,
+			CreatedAt:    time.Now().UTC(),
+		}
+		if err := st.CreateArtifact(artifact); err != nil {
+			logger.Printf("create pulled artifact error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.pull", "artifact", artifactID), err)
+			record("error")
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		record("success")
+
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.pull", "artifact", artifactID)
+		event.AfterJSON = auditJSON(map[string]any{
+			"artifactId":    artifactID,
+			"name":          req.Name,
+			"version":       req.Version,
+			"type":          atype,
+			"objectKey":     objectKey,
+			"sha256":        req.SHA256,
+			"sizeBytes":     size,
+			"sourceKind":    sourceSpec.Kind,
+			"source":        scrubSourceURL(sourceSpec.URI),
+			"credentialRef": sourceSpec.CredentialRef,
+		})
+		writeAudit(logger, st, event, nil)
+
+		out := UploadArtifactResponse{
+			ArtifactID: artifactID,
+			ObjectKey:  objectKey,
+			SHA256:     req.SHA256,
+			SizeBytes:  size,
+			Name:       req.Name,
+			Version:    req.Version,
+			Type:       atype,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
+	}
+}
+
+func PresignArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, defaultExpires time.Duration, trustProxy bool, metricsCollector *metrics.Metrics) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		record := func(status string) {
+			if metricsCollector != nil {
+				metricsCollector.IncArtifactPresign(status)
+			}
+		}
+		if objStore == nil || bucket == "" {
+			record("error")
+			http.Error(w, "object store not configured", http.StatusInternalServerError)
+			return
+		}
+		var req PresignUploadRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			record("error")
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		artifactID := uuid.NewString()
+		ext := filepath.Ext(strings.TrimSpace(req.Filename))
+		if ext == "" {
+			ext = ".tar.gz"
+		}
+		objectKey := "artifacts/" + artifactID + ext
+		contentType := strings.TrimSpace(req.ContentType)
+		if contentType == "" {
+			contentType = "application/gzip"
+		}
+		expires := defaultExpires
+		if expires <= 0 {
+			expires = 15 * time.Minute
+		}
+		if req.ExpiresSeconds > 0 {
+			expires = time.Duration(req.ExpiresSeconds) * time.Second
+		}
+		if expires < 60*time.Second {
+			expires = 60 * time.Second
+		}
+		if expires > time.Hour {
+			expires = time.Hour
+		}
+
+		if err := objStore.EnsureBucket(r.Context(), bucket); err != nil {
+			logger.Printf("ensure bucket error: %v", err)
+			record("error")
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+
+		uploadURL, err := objStore.PresignPut(r.Context(), bucket, objectKey, expires, contentType)
+		if err != nil {
+			logger.Printf("presign upload error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("system"), "artifact.upload.presign", "artifact", artifactID), err)
+			record("error")
+			http.Error(w, "presign error", http.StatusInternalServerError)
+			return
+		}
+		record("success")
+
+		event := buildAuditEvent(r, trustProxy, actorUser("system"), "artifact.upload.presign", "artifact", artifactID)
+		event.MetadataJSON = auditJSON(map[string]any{
+			"objectKey": objectKey,
+			"expiresAt": time.Now().UTC().Add(expires),
+		})
+		writeAudit(logger, st, event, nil)
+
+		resp := PresignUploadResponse{
+			ArtifactID: artifactID,
+			ObjectKey:  objectKey,
+			UploadURL:  uploadURL,
+			ExpiresAt:  time.Now().UTC().Add(expires),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}
+}
+
+func CompleteArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		record := func(status string) {
+			if metricsCollector != nil {
+				metricsCollector.IncArtifactUpload(status)
+			}
+		}
+		if objStore == nil || bucket == "" {
+			record("error")
+			http.Error(w, "object store not configured", http.StatusInternalServerError)
+			return
+		}
+		var req CreateArtifactRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			record("error")
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		req.ArtifactID = strings.TrimSpace(req.ArtifactID)
+		req.Name = strings.TrimSpace(req.Name)
+		req.Version = strings.TrimSpace(req.Version)
+		req.ObjectKey = strings.TrimSpace(req.ObjectKey)
+		req.SHA256 = strings.TrimSpace(strings.ToLower(req.SHA256))
+		if req.ArtifactID == "" || req.Name == "" || req.Version == "" || req.ObjectKey == "" || req.SHA256 == "" {
+			record("error")
+			http.Error(w, "artifactId, name, version, objectKey, sha256 required", http.StatusBadRequest)
+			return
+		}
+		if _, err := uuid.Parse(req.ArtifactID); err != nil {
+			record("error")
+			http.Error(w, "artifactId must be uuid", http.StatusBadRequest)
+			return
+		}
+		if !strings.HasPrefix(req.ObjectKey, "artifacts/"+req.ArtifactID) {
+			record("error")
+			http.Error(w, "objectKey does not match artifactId", http.StatusBadRequest)
+			return
+		}
+		atype, err := normalizeArtifactType(req.Type)
+		if err != nil {
+			record("error")
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		meta, err := normalizeMetadata(req.Metadata)
+		if err != nil {
+			record("error")
+			http.Error(w, "metadata must be valid json", http.StatusBadRequest)
+			return
+		}
+		meta, err = mergeSignatureKeyID(meta, req.SignatureKeyID)
+		if err != nil {
+			record("error")
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if err := objStore.EnsureBucket(r.Context(), bucket); err != nil {
+			logger.Printf("ensure bucket error: %v", err)
+			record("error")
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		size, err := objStore.StatObject(r.Context(), bucket, req.ObjectKey)
+		if err != nil {
+			logger.Printf("stat object error: %v", err)
+			record("error")
+			http.Error(w, "object not found", http.StatusBadRequest)
+			return
+		}
+		if req.SizeBytes > 0 && req.SizeBytes != size {
+			record("error")
+			http.Error(w, "size mismatch", http.StatusBadRequest)
+			return
+		}
+		reader, err := objStore.GetObject(r.Context(), bucket, req.ObjectKey)
+		if err != nil {
+			logger.Printf("get object error: %v", err)
+			record("error")
+			http.Error(w, "object read error", http.StatusBadRequest)
+			return
+		}
+		defer reader.Close()
+		h := sha256.New()
+		if _, err := io.Copy(h, reader); err != nil {
+			logger.Printf("hash object error: %v", err)
+			record("error")
+			http.Error(w, "object read error", http.StatusBadRequest)
+			return
+		}
+		computedSHA := hex.EncodeToString(h.Sum(nil))
+		if computedSHA != req.SHA256 {
+			record("error")
+			http.Error(w, "sha256 mismatch", http.StatusBadRequest)
+			return
+		}
+
+		artifact := store.Artifact{
+			ArtifactID:   req.ArtifactID,
+			Name:         req.Name,
+			Version:      req.Version,
+			Type:         atype,
+			Status:       "active",
+			ObjectKey:    req.ObjectKey,
+			SHA256:       req.SHA256,
+			Signature:    strings.TrimSpace(req.Signature),
+			SizeBytes:    size,
+			MetadataJSON: meta,
+			CreatedAt:    time.Now().UTC(),
+		}
+		if err := st.CreateArtifact(artifact); err != nil {
+			logger.Printf("create artifact error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.upload.complete", "artifact", req.ArtifactID), err)
+			record("error")
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		record("success")
+
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.upload.complete", "artifact", req.ArtifactID)
+		event.AfterJSON = auditJSON(map[string]any{
+			"artifactId": req.ArtifactID,
+			"name":       req.Name,
+			"version":    req.Version,
+			"type":       atype,
+			"objectKey":  req.ObjectKey,
+			"sha256":     req.SHA256,
+			"sizeBytes":  size,
+		})
+		writeAudit(logger, st, event, nil)
+
+		resp := UploadArtifactResponse{
+			ArtifactID: req.ArtifactID,
+			ObjectKey:  req.ObjectKey,
+			SHA256:     req.SHA256,
+			SizeBytes:  size,
+			Name:       req.Name,
+			Version:    req.Version,
+			Type:       atype,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}
+}
+
 func ListArtifacts(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := r.URL.Query().Get("name")
@@ -291,18 +844,13 @@ func ListArtifacts(logger *log.Logger, st store.Store, trustProxy bool) http.Han
 
 		resp := ArtifactListResponse{Items: make([]ArtifactResponse, 0, len(items)), Limit: limit, Offset: offset}
 		for _, a := range items {
-			resp.Items = append(resp.Items, ArtifactResponse{
-				ArtifactID: a.ArtifactID,
-				Name:       a.Name,
-				Version:    a.Version,
-				Type:       a.Type,
-				ObjectKey:  a.ObjectKey,
-				SHA256:     a.SHA256,
-				Signature:  a.Signature,
-				SizeBytes:  a.SizeBytes,
-				Metadata:   json.RawMessage(a.MetadataJSON),
-				CreatedAt:  a.CreatedAt,
-			})
+			refs, err := st.CountArtifactReferences(a.ArtifactID)
+			if err != nil {
+				logger.Printf("count artifact refs error: %v", err)
+				http.Error(w, "storage error", http.StatusInternalServerError)
+				return
+			}
+			resp.Items = append(resp.Items, artifactToResponse(a, refs))
 		}
 
 		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.list", "artifact", "")
@@ -343,18 +891,13 @@ func GetArtifact(logger *log.Logger, st store.Store, trustProxy bool) http.Handl
 			return
 		}
 
-		resp := ArtifactResponse{
-			ArtifactID: artifact.ArtifactID,
-			Name:       artifact.Name,
-			Version:    artifact.Version,
-			Type:       artifact.Type,
-			ObjectKey:  artifact.ObjectKey,
-			SHA256:     artifact.SHA256,
-			Signature:  artifact.Signature,
-			SizeBytes:  artifact.SizeBytes,
-			Metadata:   json.RawMessage(artifact.MetadataJSON),
-			CreatedAt:  artifact.CreatedAt,
+		refs, err := st.CountArtifactReferences(artifactID)
+		if err != nil {
+			logger.Printf("count artifact refs error: %v", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
 		}
+		resp := artifactToResponse(artifact, refs)
 		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.read", "artifact", artifactID)
 		event.MetadataJSON = auditJSON(map[string]any{
 			"name":    artifact.Name,
@@ -449,6 +992,21 @@ func DeleteArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
+		force := parseBool(r.URL.Query().Get("force"))
+		refs, err := st.CountArtifactReferences(artifactID)
+		if err != nil {
+			logger.Printf("count artifact refs error: %v", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		if refs > 0 && !force {
+			http.Error(w, fmt.Sprintf("artifact is still referenced by desired state (%d references)", refs), http.StatusConflict)
+			return
+		}
+		if artifact.Status != "deprecated" && !force {
+			http.Error(w, "artifact must be deprecated before delete", http.StatusConflict)
+			return
+		}
 
 		if objStore != nil && bucket != "" && artifact.ObjectKey != "" {
 			if err := objStore.DeleteObject(r.Context(), bucket, artifact.ObjectKey); err != nil {
@@ -471,13 +1029,362 @@ func DeleteArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 			"name":       artifact.Name,
 			"version":    artifact.Version,
 			"type":       artifact.Type,
+			"status":     artifact.Status,
+			"force":      force,
+			"references": refs,
 		})
 		writeAudit(logger, st, event, nil)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
+func GetArtifactLifecyclePolicy(logger *log.Logger, st store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		policy, err := st.GetArtifactLifecyclePolicy()
+		if err != nil {
+			logger.Printf("get artifact lifecycle policy error: %v", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		resp := ArtifactLifecyclePolicyResponse{
+			DeprecatedDeleteAfterDays: policy.DeprecatedDeleteAfterDays,
+			UpdatedAt:                 policy.UpdatedAt,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}
+}
+
+func GetArtifactLifecycleStatus(manager *lifecycle.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		status := ArtifactLifecycleStatusResponse{
+			Enabled: false,
+		}
+		if manager != nil {
+			st := manager.Status()
+			status.Enabled = st.Enabled
+			status.Running = st.Running
+			status.IntervalSeconds = st.IntervalSeconds
+			status.BatchLimit = st.BatchLimit
+			status.AlertReferenceThreshold = st.AlertReferenceThreshold
+			status.Alerts = st.Alerts
+			if st.LastRun != nil {
+				status.LastRun = &PruneArtifactsResponse{
+					Trigger:    st.LastRun.Trigger,
+					StartedAt:  st.LastRun.StartedAt,
+					FinishedAt: st.LastRun.FinishedAt,
+					CutoffUTC:  st.LastRun.CutoffUTC,
+					Limit:      st.LastRun.Limit,
+					Deleted:    append([]string(nil), st.LastRun.Deleted...),
+					Skipped:    convertLifecycleSkips(st.LastRun.Skipped),
+					DeletedNum: st.LastRun.DeletedNum,
+					SkippedNum: st.LastRun.SkippedNum,
+					Error:      st.LastRun.Error,
+				}
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(status)
+	}
+}
+
+func SetArtifactLifecyclePolicy(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req ArtifactLifecyclePolicyRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		if req.DeprecatedDeleteAfterDays < 1 {
+			http.Error(w, "deprecatedDeleteAfterDays must be >= 1", http.StatusBadRequest)
+			return
+		}
+		policy, err := st.SetArtifactLifecyclePolicy(req.DeprecatedDeleteAfterDays)
+		if err != nil {
+			logger.Printf("set artifact lifecycle policy error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.lifecycle.policy.set", "artifact", ""), err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.lifecycle.policy.set", "artifact", "")
+		event.AfterJSON = auditJSON(map[string]any{
+			"deprecatedDeleteAfterDays": policy.DeprecatedDeleteAfterDays,
+		})
+		writeAudit(logger, st, event, nil)
+
+		resp := ArtifactLifecyclePolicyResponse{
+			DeprecatedDeleteAfterDays: policy.DeprecatedDeleteAfterDays,
+			UpdatedAt:                 policy.UpdatedAt,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}
+}
+
+func DeprecateArtifact(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		artifactID := chi.URLParam(r, "artifactId")
+		if artifactID == "" {
+			http.Error(w, "artifactId required", http.StatusBadRequest)
+			return
+		}
+		if _, err := uuid.Parse(artifactID); err != nil {
+			http.Error(w, "artifactId must be uuid", http.StatusBadRequest)
+			return
+		}
+
+		var req DeprecateArtifactRequest
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&req)
+		}
+
+		artifact, ok, err := st.GetArtifact(artifactID)
+		if err != nil {
+			logger.Printf("get artifact error: %v", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		if !ok {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+
+		policy, err := st.GetArtifactLifecyclePolicy()
+		if err != nil {
+			logger.Printf("get artifact lifecycle policy error: %v", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		deleteAfterDays := req.DeleteAfterDays
+		if deleteAfterDays < 1 {
+			deleteAfterDays = policy.DeprecatedDeleteAfterDays
+		}
+		now := time.Now().UTC()
+		deleteAfter := now.Add(time.Duration(deleteAfterDays) * 24 * time.Hour)
+		if err := st.DeprecateArtifact(artifactID, now, deleteAfter); err != nil {
+			logger.Printf("deprecate artifact error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.deprecate", "artifact", artifactID), err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		updated, _, _ := st.GetArtifact(artifactID)
+		refs, _ := st.CountArtifactReferences(artifactID)
+
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.deprecate", "artifact", artifactID)
+		event.BeforeJSON = auditJSON(map[string]any{
+			"artifactId": artifact.ArtifactID,
+			"status":     artifact.Status,
+		})
+		event.AfterJSON = auditJSON(map[string]any{
+			"artifactId":      updated.ArtifactID,
+			"status":          updated.Status,
+			"deleteAfterDays": deleteAfterDays,
+			"deleteAfter":     deleteAfter,
+		})
+		writeAudit(logger, st, event, nil)
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(artifactToResponse(updated, refs))
+	}
+}
+
+func RestoreArtifact(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		artifactID := chi.URLParam(r, "artifactId")
+		if artifactID == "" {
+			http.Error(w, "artifactId required", http.StatusBadRequest)
+			return
+		}
+		if _, err := uuid.Parse(artifactID); err != nil {
+			http.Error(w, "artifactId must be uuid", http.StatusBadRequest)
+			return
+		}
+
+		artifact, ok, err := st.GetArtifact(artifactID)
+		if err != nil {
+			logger.Printf("get artifact error: %v", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		if !ok {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if err := st.RestoreArtifact(artifactID); err != nil {
+			logger.Printf("restore artifact error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.restore", "artifact", artifactID), err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		updated, _, _ := st.GetArtifact(artifactID)
+		refs, _ := st.CountArtifactReferences(artifactID)
+
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.restore", "artifact", artifactID)
+		event.BeforeJSON = auditJSON(map[string]any{
+			"artifactId": artifact.ArtifactID,
+			"status":     artifact.Status,
+		})
+		event.AfterJSON = auditJSON(map[string]any{
+			"artifactId": updated.ArtifactID,
+			"status":     updated.Status,
+		})
+		writeAudit(logger, st, event, nil)
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(artifactToResponse(updated, refs))
+	}
+}
+
+func PruneArtifacts(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, manager *lifecycle.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		limit := parseInt(r.URL.Query().Get("limit"), 100)
+		if manager != nil {
+			run, err := manager.RunNow(limit)
+			if err != nil {
+				if logger != nil {
+					logger.Printf("manual artifact prune error: %v", err)
+				}
+				writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("system"), "artifact.prune", "artifact", ""), err)
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+			resp := PruneArtifactsResponse{
+				Trigger:    run.Trigger,
+				StartedAt:  run.StartedAt,
+				FinishedAt: run.FinishedAt,
+				CutoffUTC:  run.CutoffUTC,
+				Limit:      run.Limit,
+				Deleted:    run.Deleted,
+				Skipped:    convertLifecycleSkips(run.Skipped),
+				DeletedNum: run.DeletedNum,
+				SkippedNum: run.SkippedNum,
+				Error:      run.Error,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		cutoff := time.Now().UTC()
+		resp, err := pruneArtifactsOnce(r.Context(), st, objStore, bucket, cutoff, limit)
+		if err != nil {
+			logger.Printf("list artifacts for prune error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("system"), "artifact.prune", "artifact", ""), err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		event := buildAuditEvent(r, trustProxy, actorUser("system"), "artifact.prune", "artifact", "")
+		event.MetadataJSON = auditJSON(map[string]any{
+			"cutoffUtc": resp.CutoffUTC,
+			"limit":     resp.Limit,
+			"deleted":   resp.Deleted,
+			"skipped":   resp.Skipped,
+		})
+		writeAudit(logger, st, event, nil)
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}
+}
+
 // parseInt lives in devices.go
+
+func parseBool(val string) bool {
+	switch strings.TrimSpace(strings.ToLower(val)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func scrubSourceURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u == nil {
+		return ""
+	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.Redacted()
+}
+
+func pruneArtifactsOnce(ctx context.Context, st store.Store, objStore ObjectStore, bucket string, cutoff time.Time, limit int) (PruneArtifactsResponse, error) {
+	candidates, err := st.ListArtifactsForPrune(cutoff, limit)
+	if err != nil {
+		return PruneArtifactsResponse{}, err
+	}
+	resp := PruneArtifactsResponse{
+		Trigger:   "manual",
+		StartedAt: time.Now().UTC(),
+		CutoffUTC: cutoff,
+		Limit:     limit,
+		Deleted:   make([]string, 0, len(candidates)),
+		Skipped:   []PruneArtifactSkipEntry{},
+	}
+	for _, artifact := range candidates {
+		refs, err := st.CountArtifactReferences(artifact.ArtifactID)
+		if err != nil {
+			resp.Skipped = append(resp.Skipped, PruneArtifactSkipEntry{ArtifactID: artifact.ArtifactID, Reason: "failed to count references"})
+			continue
+		}
+		if refs > 0 {
+			resp.Skipped = append(resp.Skipped, PruneArtifactSkipEntry{ArtifactID: artifact.ArtifactID, Reason: fmt.Sprintf("still referenced (%d)", refs)})
+			continue
+		}
+		if objStore != nil && bucket != "" && artifact.ObjectKey != "" {
+			if err := objStore.DeleteObject(ctx, bucket, artifact.ObjectKey); err != nil {
+				resp.Skipped = append(resp.Skipped, PruneArtifactSkipEntry{ArtifactID: artifact.ArtifactID, Reason: "failed to delete object"})
+				continue
+			}
+		}
+		if err := st.DeleteArtifact(artifact.ArtifactID); err != nil {
+			resp.Skipped = append(resp.Skipped, PruneArtifactSkipEntry{ArtifactID: artifact.ArtifactID, Reason: "failed to delete record"})
+			continue
+		}
+		resp.Deleted = append(resp.Deleted, artifact.ArtifactID)
+	}
+	resp.DeletedNum = len(resp.Deleted)
+	resp.SkippedNum = len(resp.Skipped)
+	resp.FinishedAt = time.Now().UTC()
+	return resp, nil
+}
+
+func convertLifecycleSkips(skips []lifecycle.PruneSkip) []PruneArtifactSkipEntry {
+	if len(skips) == 0 {
+		return []PruneArtifactSkipEntry{}
+	}
+	out := make([]PruneArtifactSkipEntry, 0, len(skips))
+	for _, s := range skips {
+		out = append(out, PruneArtifactSkipEntry{
+			ArtifactID: s.ArtifactID,
+			Reason:     s.Reason,
+		})
+	}
+	return out
+}
+
+func artifactToResponse(a store.Artifact, refs int) ArtifactResponse {
+	status := strings.TrimSpace(strings.ToLower(a.Status))
+	if status == "" {
+		status = "active"
+	}
+	return ArtifactResponse{
+		ArtifactID:     a.ArtifactID,
+		Name:           a.Name,
+		Version:        a.Version,
+		Type:           a.Type,
+		Status:         status,
+		ObjectKey:      a.ObjectKey,
+		SHA256:         a.SHA256,
+		Signature:      a.Signature,
+		SizeBytes:      a.SizeBytes,
+		Metadata:       json.RawMessage(a.MetadataJSON),
+		CreatedAt:      a.CreatedAt,
+		DeprecatedAt:   timePtr(a.DeprecatedAt),
+		DeleteAfter:    timePtr(a.DeleteAfter),
+		ReferenceCount: refs,
+	}
+}
 
 var allowedArtifactTypes = map[string]struct{}{
 	"app_bundle":      {},

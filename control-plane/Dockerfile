@@ -17,7 +17,14 @@ RUN set -eux; \
 FROM docker:25.0.5-cli
 
 WORKDIR /app
-RUN apk add --no-cache bash curl
+RUN apk add --no-cache bash curl openssl && \
+    mkdir -p /app/demo-certs && \
+    openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
+      -subj "/CN=HardwareOps Demo Device CA" \
+      -keyout /app/demo-certs/ca.key \
+      -out /app/demo-certs/ca.crt && \
+    chmod 0600 /app/demo-certs/ca.key && \
+    chmod 0644 /app/demo-certs/ca.crt
 COPY --from=build /out/control-plane /app/control-plane
 COPY control-plane/migrations /app/migrations
 COPY scripts/apply-upgrade.sh /app/scripts/apply-upgrade.sh

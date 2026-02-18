@@ -31,8 +31,9 @@ type CreateEnrollmentTokenResponse struct {
 }
 
 type DeviceEnrollRequest struct {
-	Token string `json:"token"`
-	CSR   string `json:"csr"`
+	Token        string          `json:"token"`
+	CSR          string          `json:"csr"`
+	Capabilities json.RawMessage `json:"capabilities,omitempty"`
 }
 
 type DeviceEnrollResponse struct {
@@ -128,8 +129,9 @@ func CreateEnrollmentToken(logger *log.Logger, st store.Store, lic *license.Mana
 func DeviceEnroll(logger *log.Logger, st store.Store, lic *license.Manager, signer interface {
 	SignDeviceCert(csrPEM []byte, deviceID string, validity time.Duration) ([]byte, string, error)
 	CACertPEM() []byte
-}, trustProxy bool, metricsCollector *metrics.Metrics) http.HandlerFunc {
+}, identityPolicy DeviceIdentityPolicy, trustProxy bool, metricsCollector *metrics.Metrics) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		policy := identityPolicy.normalized()
 		record := func(status, reason string) {
 			if metricsCollector != nil {
 				metricsCollector.IncEnroll(status, reason)
@@ -169,6 +171,34 @@ func DeviceEnroll(logger *log.Logger, st store.Store, lic *license.Manager, sign
 			http.Error(w, "csr invalid", http.StatusBadRequest)
 			return
 		}
+		hardware := parseHardwareIdentity(req.Capabilities)
+		if policy.Mode == deviceIdentityModeEnforce && policy.RequireOnEnroll && hardware.ID == "" {
+			record("error", "hardware_identity_required")
+			http.Error(w, "hardware identity required", http.StatusBadRequest)
+			return
+		}
+		if hardware.ID != "" {
+			existing, ok, err := st.GetDeviceByHardwareID(hardware.ID)
+			if err != nil {
+				logger.Printf("enroll hardware lookup error: %v", err)
+				record("error", "storage_error")
+				http.Error(w, "storage error", http.StatusInternalServerError)
+				return
+			}
+			if ok {
+				event := buildAuditEvent(r, trustProxy, actorUser("token"), "device.enroll_rejected", "device", existing.DeviceID)
+				event.Status = "denied"
+				event.Error = "hardware_identity_already_enrolled"
+				event.MetadataJSON = auditJSON(map[string]any{
+					"hardwareId":       hardware.ID,
+					"existingDeviceId": existing.DeviceID,
+				})
+				writeAudit(logger, st, event, nil)
+				record("error", "hardware_identity_conflict")
+				http.Error(w, "hardware identity already enrolled", http.StatusConflict)
+				return
+			}
+		}
 
 		deviceID := uuid.NewString()
 		certPEM, fingerprint, err := signer.SignDeviceCert([]byte(req.CSR), deviceID, 365*24*time.Hour)
@@ -186,6 +216,9 @@ func DeviceEnroll(logger *log.Logger, st store.Store, lic *license.Manager, sign
 				"caFingerprint": caFingerprint,
 				"checkedAt":     time.Now().UTC().Format(time.RFC3339),
 			})
+		}
+		if next, changed := upsertHardwareIdentityMeta(meta, hardware, time.Now().UTC()); changed {
+			meta = next
 		}
 		hash := hashToken(req.Token)
 		if err := st.EnrollDeviceWithToken(hash, store.Device{
@@ -219,7 +252,10 @@ func DeviceEnroll(logger *log.Logger, st store.Store, lic *license.Manager, sign
 			CACertPEM: string(signer.CACertPEM()),
 		}
 		event := buildAuditEvent(r, trustProxy, AuditActor{Type: "device", ID: deviceID, AuthMethod: "enrollment_token"}, "device.enroll", "device", deviceID)
-		event.MetadataJSON = auditJSON(map[string]any{"fingerprint": fingerprint})
+		event.MetadataJSON = auditJSON(map[string]any{
+			"fingerprint": fingerprint,
+			"hardwareId":  hardware.ID,
+		})
 		writeAudit(logger, st, event, nil)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)

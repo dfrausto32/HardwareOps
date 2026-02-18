@@ -25,7 +25,7 @@ func TestCheckIn(t *testing.T) {
 
 	c := New(srv.URL)
 	st := state.State{DeviceID: "dev-1", AgentVersion: "0.1.0"}
-	if _, err := c.CheckIn(st); err != nil {
+	if _, err := c.CheckIn(st, nil); err != nil {
 		t.Fatalf("checkin failed: %v", err)
 	}
 }

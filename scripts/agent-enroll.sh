@@ -46,8 +46,39 @@ if [ -z "$TOKEN" ]; then
 fi
 
 ENROLL_PAYLOAD=$(python3 - <<'PY' "$TOKEN" "$DEVICE_CSR"
-import json, sys
-print(json.dumps({"token": sys.argv[1], "csr": open(sys.argv[2]).read()}))
+import hashlib
+import json
+import os
+import socket
+import sys
+
+with open(sys.argv[2], "r", encoding="utf-8") as fh:
+    csr = fh.read()
+
+raw = os.environ.get("HARDWARE_IDENTITY", "").strip()
+source = "env"
+if not raw:
+    for path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                raw = fh.read().strip()
+                if raw:
+                    source = "machine-id"
+                    break
+        except Exception:
+            pass
+if not raw:
+    raw = socket.gethostname().strip()
+    source = "hostname"
+salt = os.environ.get("HARDWARE_IDENTITY_SALT", "").strip()
+payload = raw if not salt else f"{raw}|{salt}"
+hardware = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+print(json.dumps({
+    "token": sys.argv[1],
+    "csr": csr,
+    "capabilities": {"hw": {"identity": {"id": hardware, "source": source}}},
+}))
 PY
 )
 

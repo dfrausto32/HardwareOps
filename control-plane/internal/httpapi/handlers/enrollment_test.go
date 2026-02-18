@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hardwareops/control-plane/internal/store"
 	"github.com/hardwareops/control-plane/internal/store/memory"
 )
 
@@ -71,7 +72,7 @@ func TestDeviceEnroll_Valid(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/enroll", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
-	DeviceEnroll(logger, mem, nil, signer, false, nil).ServeHTTP(w, req)
+	DeviceEnroll(logger, mem, nil, signer, DeviceIdentityPolicy{}, false, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -99,7 +100,7 @@ func TestDeviceEnroll_InvalidToken(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/enroll", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
-	DeviceEnroll(logger, mem, nil, signer, false, nil).ServeHTTP(w, req)
+	DeviceEnroll(logger, mem, nil, signer, DeviceIdentityPolicy{}, false, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", w.Code)
@@ -119,7 +120,7 @@ func TestDeviceEnroll_InvalidCSR(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/enroll", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
-	DeviceEnroll(logger, mem, nil, signer, false, nil).ServeHTTP(w, req)
+	DeviceEnroll(logger, mem, nil, signer, DeviceIdentityPolicy{}, false, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
@@ -136,7 +137,7 @@ func TestDeviceEnroll_SignerMissing(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/enroll", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
-	DeviceEnroll(logger, mem, nil, nil, false, nil).ServeHTTP(w, req)
+	DeviceEnroll(logger, mem, nil, nil, DeviceIdentityPolicy{}, false, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d", w.Code)
@@ -205,7 +206,7 @@ func TestDeviceEnroll_RejectsEmptyCN(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/enroll", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
-	DeviceEnroll(logger, mem, nil, signer, false, nil).ServeHTTP(w, req)
+	DeviceEnroll(logger, mem, nil, signer, DeviceIdentityPolicy{}, false, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
@@ -227,9 +228,64 @@ func TestDeviceEnroll_RejectsWildcardSAN(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/enroll", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
-	DeviceEnroll(logger, mem, nil, signer, false, nil).ServeHTTP(w, req)
+	DeviceEnroll(logger, mem, nil, signer, DeviceIdentityPolicy{}, false, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestDeviceEnroll_RequiresHardwareIdentityWhenConfigured(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+
+	token := "test-token"
+	_ = mem.CreateEnrollmentToken(hashToken(token), time.Now().UTC().Add(1*time.Hour))
+	csrPEM := mustCSR(t)
+	payload := DeviceEnrollRequest{Token: token, CSR: string(csrPEM)}
+	body, _ := json.Marshal(payload)
+
+	signer := &fakeSigner{certPEM: []byte("CERT"), caPEM: []byte("CA")}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/enroll", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	DeviceEnroll(logger, mem, nil, signer, DeviceIdentityPolicy{Mode: "enforce", RequireOnEnroll: true}, false, nil).ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestDeviceEnroll_RejectsHardwareIdentityReuse(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+	hardwareID := "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+	if err := mem.CreateDevice(store.Device{
+		DeviceID:     "existing-device",
+		Status:       "active",
+		LastSeen:     time.Now().UTC(),
+		MetadataJSON: []byte(`{"hwops":{"identity":{"hardwareId":"` + hardwareID + `"}}}`),
+	}); err != nil {
+		t.Fatalf("seed device failed: %v", err)
+	}
+
+	token := "test-token"
+	_ = mem.CreateEnrollmentToken(hashToken(token), time.Now().UTC().Add(1*time.Hour))
+	csrPEM := mustCSR(t)
+	payload := DeviceEnrollRequest{
+		Token: token,
+		CSR:   string(csrPEM),
+		Capabilities: json.RawMessage(`{
+			"hw": {"identity": {"id": "` + hardwareID + `", "source": "machine-id"}}
+		}`),
+	}
+	body, _ := json.Marshal(payload)
+
+	signer := &fakeSigner{certPEM: []byte("CERT"), caPEM: []byte("CA")}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/enroll", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	DeviceEnroll(logger, mem, nil, signer, DeviceIdentityPolicy{Mode: "enforce"}, false, nil).ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", w.Code)
 	}
 }
