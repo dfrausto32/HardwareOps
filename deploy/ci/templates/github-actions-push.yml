@@ -1,0 +1,51 @@
+name: hwops-artifact-push
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_name:
+        description: Artifact name
+        required: true
+      artifact_version:
+        description: Artifact version
+        required: true
+      artifact_type:
+        description: Artifact type
+        required: true
+        default: app_bundle
+      input_dir:
+        description: Directory containing artifact files
+        required: true
+        default: ./dist/artifact
+      metadata_json:
+        description: Optional metadata JSON
+        required: false
+        default: "{}"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Write optional CA certificate
+        if: ${{ secrets.HWOPS_CA_CERT_B64 != '' }}
+        run: echo "${{ secrets.HWOPS_CA_CERT_B64 }}" | base64 -d > /tmp/hwops-ca.crt
+
+      - name: Upload artifact via HardwareOps API
+        env:
+          BASE_URL: ${{ secrets.HWOPS_BASE_URL }}
+          CI_SERVICE_TOKEN: ${{ secrets.HWOPS_CI_SERVICE_TOKEN }}
+          CA_CERT_PATH: /tmp/hwops-ca.crt
+          ARTIFACT_NAME: ${{ inputs.artifact_name }}
+          ARTIFACT_VERSION: ${{ inputs.artifact_version }}
+          ARTIFACT_TYPE: ${{ inputs.artifact_type }}
+          INPUT_DIR: ${{ inputs.input_dir }}
+          METADATA_JSON: ${{ inputs.metadata_json }}
+        run: ./scripts/ci-upload-artifact.sh

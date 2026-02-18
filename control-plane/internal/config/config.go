@@ -19,6 +19,7 @@ type Config struct {
 	TLSKeyPath                           string
 	TLSClientCA                          string
 	TrustProxy                           bool
+	TrustedProxyCIDRs                    []string
 	ClientCertHeader                     string
 	AutoMigrate                          bool
 	MigrationsDir                        string
@@ -127,6 +128,7 @@ func FromEnv() Config {
 		TLSKeyPath:                           os.Getenv("TLS_KEY_PATH"),
 		TLSClientCA:                          os.Getenv("TLS_CLIENT_CA_PATH"),
 		TrustProxy:                           os.Getenv("TRUST_PROXY") == "1",
+		TrustedProxyCIDRs:                    parseCSV(getenvDefault("TRUST_PROXY_CIDRS", "127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fc00::/7,fe80::/10")),
 		ClientCertHeader:                     getenvDefault("CLIENT_CERT_HEADER", "X-Client-Cert"),
 		AutoMigrate:                          os.Getenv("AUTO_MIGRATE") == "1",
 		MigrationsDir:                        getenvDefault("MIGRATIONS_DIR", "./migrations"),

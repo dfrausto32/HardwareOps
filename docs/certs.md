@@ -1,5 +1,8 @@
 # TLS + CA Setup (On‑Prem)
 
+Canonical operations guide: `operations.md`  
+Use this file for CA/TLS and rotation detail.
+
 This uses a local internal CA to issue the server certificate for `hardwareops.internal`
 and the agent endpoint host `agent.hardwareops.internal` (SAN).
 
@@ -107,32 +110,6 @@ CONTROL_PLANE_CA_CERT_PATH=/etc/hardwareops/agent/certs/ca.crt
 
 ---
 
-## Certificate Rotation (Phase A)
-Rotation is supported by trusting **multiple CAs** on the control‑plane and automatically re‑issuing device certs.
-
-### Control‑plane settings
-```
-# Trust both old + new for device mTLS
-CA_BUNDLE_PATH=/opt/hardwareops/certs/ca-bundle.crt
-
-# Sign new device certs with the active CA
-ACTIVE_CA_CERT_PATH=/opt/hardwareops/certs/ca-active.crt
-ACTIVE_CA_KEY_PATH=/opt/hardwareops/certs/ca-active.key
-```
-
-Create the bundle:
-```
-cat /opt/hardwareops/certs/ca.crt /opt/hardwareops/certs/ca-active.crt > /opt/hardwareops/certs/ca-bundle.crt
-```
-
-### Agent behavior (automatic)
-If the device cert is **not signed by the active CA**, the control‑plane returns a `device.reenroll` action.
-The agent automatically re‑enrolls and replaces its device cert.
-
-> Note: This does **not** rotate the server TLS cert. Keep server TLS on the existing CA until you explicitly rotate it.
-
----
-
 ## CA Rotation Runbook + Verification
 
 **Goal:** introduce a new device‑signing CA without breaking mTLS. Device limits are not affected because re‑enroll updates the existing device record (no new enrollment).
@@ -162,14 +139,14 @@ Restart the control‑plane.
 ### Optional: reload without restart (admin)
 If you want to rotate without restarting, use the reload endpoint or the UI button:
 ```
-curl --cacert /opt/hardwareops/certs/ca.crt -X POST \\
+curl --cacert /opt/hardwareops/certs/ca.crt -X POST \
   https://hardwareops.internal/api/v1/cert-rotation/reload
 ```
 This reloads the active CA + client bundle in‑process.
 
 ### Rotate (admin, generates new CA + bundle + reload)
 ```
-curl --cacert /opt/hardwareops/certs/ca.crt -X POST \\
+curl --cacert /opt/hardwareops/certs/ca.crt -X POST \
   https://hardwareops.internal/api/v1/cert-rotation/rotate
 ```
 This generates a new active CA, rebuilds the bundle, and reloads without restart.
@@ -219,7 +196,7 @@ After all devices are active on the new CA (or after the grace window), prune th
 
 **UI / API (hybrid cleanup)**
 ```
-curl --cacert /opt/hardwareops/certs/ca.crt -X POST \\
+curl --cacert /opt/hardwareops/certs/ca.crt -X POST \
   https://hardwareops.internal/api/v1/cert-rotation/cleanup
 ```
 

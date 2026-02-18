@@ -1,0 +1,53 @@
+pipeline {
+  agent any
+
+  parameters {
+    string(name: 'ARTIFACT_NAME', defaultValue: 'demo-artifact', description: 'Artifact name')
+    string(name: 'ARTIFACT_VERSION', defaultValue: '0.1.0', description: 'Artifact version')
+    string(name: 'ARTIFACT_TYPE', defaultValue: 'app_bundle', description: 'Artifact type')
+    string(name: 'ARTIFACT_SHA256', defaultValue: '', description: 'Artifact SHA256')
+    string(name: 'SOURCE_KIND', defaultValue: 'http', description: 'Source kind (http|artifactory)')
+    string(name: 'SOURCE_URI', defaultValue: '', description: 'Source URI')
+    string(name: 'SOURCE_CREDENTIAL_REF', defaultValue: '', description: 'Optional credentialRef')
+    text(name: 'METADATA_JSON', defaultValue: '{}', description: 'Metadata JSON')
+  }
+
+  environment {
+    HWOPS_BASE_URL = credentials('hwops-base-url')
+    HWOPS_CI_SERVICE_TOKEN = credentials('hwops-ci-service-token')
+    // Optional: base64-encoded CA cert.
+    HWOPS_CA_CERT_B64 = credentials('hwops-ca-cert-b64')
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+      }
+    }
+
+    stage('Pull Artifact') {
+      steps {
+        sh '''
+          set -euo pipefail
+          if [ -n "${HWOPS_CA_CERT_B64:-}" ]; then
+            echo "$HWOPS_CA_CERT_B64" | base64 -d > /tmp/hwops-ca.crt
+          fi
+
+          BASE_URL="$HWOPS_BASE_URL" \
+          CI_SERVICE_TOKEN="$HWOPS_CI_SERVICE_TOKEN" \
+          CA_CERT_PATH=/tmp/hwops-ca.crt \
+          ARTIFACT_NAME="$ARTIFACT_NAME" \
+          ARTIFACT_VERSION="$ARTIFACT_VERSION" \
+          ARTIFACT_TYPE="$ARTIFACT_TYPE" \
+          ARTIFACT_SHA256="$ARTIFACT_SHA256" \
+          SOURCE_KIND="$SOURCE_KIND" \
+          SOURCE_URI="$SOURCE_URI" \
+          SOURCE_CREDENTIAL_REF="$SOURCE_CREDENTIAL_REF" \
+          METADATA_JSON="$METADATA_JSON" \
+          ./scripts/ci-pull-artifact.sh
+        '''
+      }
+    }
+  }
+}

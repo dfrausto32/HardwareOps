@@ -104,7 +104,7 @@ func clientIP(r *http.Request, trustProxy bool) string {
 	if r == nil {
 		return ""
 	}
-	if trustProxy {
+	if trustProxy && proxyHeadersAllowed(r) {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 			parts := strings.Split(xff, ",")
 			if len(parts) > 0 {

@@ -1,12 +1,15 @@
 # AWS Customer Deployment Runbook (Vendor-Hosted, One Stack per Customer)
 
+For the consolidated deployment path, start with `../deploy.md` and then use this file for AWS-specific depth.
+
 This runbook is the execution guide for deploying and operating **one isolated AWS stack per customer**.
 
 Use it with:
-- `docs/development/aws-cloud-setup-plan.md` (strategy)
-- `docs/development/security-hardening.md` (hardening tasks and exit criteria)
-- `deploy/aws/terraform/README.md` (Terraform scaffold)
-- `scripts/aws-customer.sh` (CLI wrapper for setup/deploy/status)
+- `aws-cloud-setup-plan.md` (strategy)
+- `security-hardening.md` (hardening tasks and exit criteria)
+- `../../deploy/aws/terraform/README.md` (Terraform scaffold)
+- `../deployment-hardening.md` (proxy trust allowlist + anti-tamper deployment controls)
+- `../../scripts/aws-customer.sh` (CLI wrapper for setup/deploy/status)
 
 ## CLI Wrapper
 
@@ -207,7 +210,7 @@ Per customer, provide a **device onboarding package** containing:
 
 - `CONTROL_PLANE_URL` (agent host URL, ex: `https://agent.customer-a.example.com:8443`)
 - Enrollment token(s) with short TTL
-- Agent install instructions (`docs/agent-systemd.md`)
+- Agent install instructions (`../agent-systemd.md`)
 - Optional CA file for server trust if using private TLS (not needed with public ACM trust)
 
 ### Token creation (operator side)
@@ -253,8 +256,8 @@ If customer asks "which certs do we install on devices?":
 
 - Rotate device CA on a controlled schedule.
 - Update ALB trust store bundle/object version when CA changes.
-- Use cert rotation endpoints/runbook from `docs/certs.md`.
-- Keep backups/restore drills customer-specific (`docs/backup-restore.md`).
+- Use cert rotation endpoints/runbook from `../certs.md`.
+- Keep backups/restore drills customer-specific (`../backup-restore.md`).
 
 ## 10) Current Gaps to Close Before Broad Production Rollout
 

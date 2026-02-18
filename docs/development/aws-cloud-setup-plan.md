@@ -2,8 +2,8 @@
 
 This document formalizes a production-grade AWS path for customer deployments while preserving the existing on-prem product model.
 
-Execution runbook: `docs/development/aws-customer-deployment-runbook.md`.  
-Security hardening tracker: `docs/development/security-hardening.md`.
+Execution runbook: `aws-customer-deployment-runbook.md`.  
+Security hardening tracker: `security-hardening.md`.
 
 ## Scope and Goals
 - Preserve current product behavior: artifacts, desired state, agent mTLS identity, audit logs, auth, and backup/restore workflows.

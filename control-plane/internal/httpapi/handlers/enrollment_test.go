@@ -289,3 +289,24 @@ func TestDeviceEnroll_RejectsHardwareIdentityReuse(t *testing.T) {
 		t.Fatalf("expected 409, got %d", w.Code)
 	}
 }
+
+func TestClientIP_TrustProxyRequiresAllowedRemote(t *testing.T) {
+	ConfigureTrustedProxyCIDRs([]string{"10.0.0.0/8"})
+	t.Cleanup(func() { ConfigureTrustedProxyCIDRs(nil) })
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req.RemoteAddr = "8.8.8.8:1234"
+	req.Header.Set("X-Forwarded-For", "1.2.3.4")
+	ip := clientIP(req, true)
+	if ip != "8.8.8.8" {
+		t.Fatalf("expected remote IP for untrusted proxy, got %s", ip)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req.RemoteAddr = "10.1.2.3:9999"
+	req.Header.Set("X-Forwarded-For", "1.2.3.4")
+	ip = clientIP(req, true)
+	if ip != "1.2.3.4" {
+		t.Fatalf("expected forwarded client IP for trusted proxy, got %s", ip)
+	}
+}

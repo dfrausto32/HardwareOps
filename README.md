@@ -2,14 +2,17 @@
 The platform acts as a control plane for safely deploying software and configuration to autonomous devices operating in unreliable, bandwidth-constrained, and sometimes offline environments.
 
 ## Documentation
-See `docs/README.md` for a map of all guides.
+Start with:
+- `docs/deploy.md` (on-prem + AWS deployment, plus baseline hardening)
+- `docs/operations.md` (backup/restore, upgrades, cert rotation, metrics checks)
+- `docs/local-dev-wsl.md` (local development flow)
+- `docs/README.md` (full documentation map)
 
 ## Development Roadmap
 Forward‑looking plans for deployments, ingest modes, and RBAC:
 - `docs/development/roadmap.md`
 - `docs/development/deployment-options.md`
 - `docs/development/artifact-ingest.md`
-- `docs/development/auth-rbac.md`
 - `docs/development/auth-secrets-v1.md`
 - `docs/development/artifact-signing.md`
 - `docs/development/upgrade-strategy.md`
@@ -225,9 +228,10 @@ This demo runs the control-plane normally, starts an agent container that serves
 For a full end-to-end walkthrough (including pre-apply), see `docs/preapply-demo.md`.
 
 ### On-Prem Deployment (v1)
-- `docs/installers.md` (build OS/arch installers)
+- `docs/deploy.md` (canonical deployment flow)
+- `docs/installers.md` (installer bundle details)
 - `docs/installer-flow.md` (fresh-machine installer flow)
-- `docs/onprem-deploy.md` (full on‑prem guide)
+- `docs/deployment-hardening.md` (proxy trust + anti-tamper controls)
 - `docs/dns-coredns.md` (local DNS)
 - `docs/certs.md` (internal CA + TLS)
 - `docs/agent-systemd.md` (agent systemd install)

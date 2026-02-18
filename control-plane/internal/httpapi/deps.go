@@ -46,6 +46,7 @@ type Dependencies struct {
 	S3Bucket                       string
 	PresignExpires                 time.Duration
 	TrustProxy                     bool
+	TrustedProxyCIDRs              []string
 	ClientCertHeader               string
 	RateLimits                     RateLimitConfig
 	LogDir                         string

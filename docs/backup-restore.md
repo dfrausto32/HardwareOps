@@ -1,5 +1,8 @@
 # Backup + Restore Runbook (Postgres + Object Store)
 
+Canonical operations guide: `operations.md`  
+Use this file for backup/restore command detail.
+
 This runbook covers **on‑prem** and **local dev** backups. It is intentionally simple and uses Docker‑native commands.
 
 ## Goals
@@ -23,16 +26,7 @@ curl --cacert /opt/hardwareops/certs/ca.crt -X POST \
   -d '{"enabled":true,"message":"Backup in progress"}'
 ```
 
----
-
-# Backup
-
-## UI (preferred)
-Settings → **Backups**
-- **Create backup** (runs Postgres dump + MinIO archive)
-- **Restore + wipe** (requires maintenance mode)
-
----
+## Backup commands
 
 ## 1) Postgres backup (consistent dump)
 **Local dev (compose):**
@@ -62,27 +56,23 @@ docker run --rm -v ${MINIO_VOL}:/data -v "$PWD:/backup" alpine \
 
 > If you’re using S3 (not MinIO), use your normal bucket backup policy instead.
 
----
+## Restore commands
 
-# Restore
-
-## 1) Restore Postgres
+## 3) Restore Postgres
 **Local dev / On‑prem:**
 ```
 cat hwops-postgres.dump | docker exec -i hardwareops-postgres-1 \
   pg_restore -U hardwareops -d hardwareops -c
 ```
 
-## 2) Restore MinIO volume
+## 4) Restore MinIO volume
 ```
 MINIO_VOL=<minio_volume_name>
 docker run --rm -v ${MINIO_VOL}:/data -v "$PWD:/backup" alpine \
   sh -c 'rm -rf /data/* && tar -xzf /backup/hwops-minio.tgz -C /data'
 ```
 
----
-
-# 3) Exit maintenance mode
+## 5) Exit maintenance mode
 ```
 curl --cacert /opt/hardwareops/certs/ca.crt -X POST \
   https://hardwareops.internal/api/v1/maintenance \
@@ -90,17 +80,13 @@ curl --cacert /opt/hardwareops/certs/ca.crt -X POST \
   -d '{"enabled":false,"message":""}'
 ```
 
----
-
-# Verification
+## Verification
 - `GET /healthz` returns `ok`.
 - UI loads devices/artifacts correctly.
 - Agents can check‑in.
 - Sample artifact download succeeds.
 
----
-
-# Notes / Pitfalls
+## Notes / Pitfalls
 - **Long‑running backups:** expect check‑ins to pause during maintenance.
 - **Retention:** keep multiple backups (e.g., daily for 7–14 days).
 - **Test restores:** perform a restore at least once to validate the process.

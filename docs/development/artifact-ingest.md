@@ -52,6 +52,9 @@ Cons: needs credentials + network access.
 Use:
 `scripts/ci-upload-artifact.sh`
 
+Provider scaffolds:
+`../../deploy/ci/README.md`
+
 Example:
 ```bash
 ARTIFACT_NAME=agent \
@@ -98,6 +101,9 @@ Pull safety controls:
 - `ARTIFACT_PULL_ALLOWED_HOSTS` (comma-separated host allowlist; empty allows any)
 - `ARTIFACT_PULL_MAX_BYTES` (default `1073741824`, 1 GiB)
 - `ARTIFACT_PULL_TIMEOUT` (default `15m`)
+
+Pull helper script:
+`scripts/ci-pull-artifact.sh`
 
 Credential resolver (adapter-ready):
 - `ARTIFACT_PULL_CREDENTIALS_FILE` (path to JSON file)

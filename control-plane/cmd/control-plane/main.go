@@ -251,13 +251,14 @@ func main() {
 		pullCredentialResolver = artifactingest.NewStaticCredentialResolver(mergedCreds)
 	}
 	deps := httpapi.Dependencies{
-		Store:            store,
-		Signer:           certManager,
-		ObjectStore:      objStore,
-		S3Bucket:         cfg.S3Bucket,
-		PresignExpires:   cfg.PresignTTL,
-		TrustProxy:       cfg.TrustProxy,
-		ClientCertHeader: cfg.ClientCertHeader,
+		Store:             store,
+		Signer:            certManager,
+		ObjectStore:       objStore,
+		S3Bucket:          cfg.S3Bucket,
+		PresignExpires:    cfg.PresignTTL,
+		TrustProxy:        cfg.TrustProxy,
+		TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
+		ClientCertHeader:  cfg.ClientCertHeader,
 		RateLimits: httpapi.RateLimitConfig{
 			EnrollmentTokenRPM: cfg.EnrollmentTokenRPM,
 			EnrollRPM:          cfg.EnrollRPM,

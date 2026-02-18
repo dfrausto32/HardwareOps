@@ -2,8 +2,11 @@
 
 This directory is a production-oriented Terraform scaffold for **vendor-hosted, per-customer** AWS deployments.
 
-Operational runbook: `docs/development/aws-customer-deployment-runbook.md`.
-CLI helper: `scripts/aws-customer.sh`.
+Canonical deployment guide: `../../../docs/deploy.md`  
+Canonical operations guide: `../../../docs/operations.md`
+
+Operational runbook: `../../../docs/development/aws-customer-deployment-runbook.md`.
+CLI helper: `../../../scripts/aws-customer.sh`.
 
 ## What this scaffold includes
 - `modules/network`: VPC, public/private subnets, IGW, NAT, route tables.
@@ -50,6 +53,7 @@ CLI helper: `scripts/aws-customer.sh`.
 - The app listener is `443`; the devices listener is `8443` to keep human/UI traffic separated from mTLS device traffic on ALB.
 - If you need both endpoints on port `443`, use separate ALBs or front-door routing pattern in a later iteration.
 - Secret values should come from Secrets Manager (`*_secret_arns` maps), not plaintext tfvars.
+- Proxy header trust is locked to trusted proxy CIDRs; by default this is set to the stack `vpc_cidr` via `TRUST_PROXY_CIDRS`.
 - `artifact_pull_credentials_aws_secret_id` can be set to a secret **name or ARN**, but ARN is recommended for least-privilege IAM policy generation.
 - For local auth mode, ensure `AUTH_JWT_SECRET` and bootstrap credentials are set in `control_plane_env`.
 - For token-based first-time enrollment, start with `device_mtls_mode = "passthrough"`, enroll devices, then switch to `device_mtls_mode = "verify"` and re-apply.

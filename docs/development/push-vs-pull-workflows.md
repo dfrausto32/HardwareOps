@@ -76,3 +76,11 @@ For pull workflow:
 ## Operational Recommendation
 - Use **Push** as the production default for steady-state releases.
 - Keep **Pull** enabled for migration/import and special cases.
+
+## CI templates
+- Provider scaffold templates (GitHub Actions, GitLab CI, Jenkins):
+  `../../deploy/ci/README.md`
+- Push helper script:
+  `scripts/ci-upload-artifact.sh`
+- Pull helper script:
+  `scripts/ci-pull-artifact.sh`

@@ -1,5 +1,8 @@
 # Pre-Apply Demo (Start → Finish)
 
+Canonical deployment and operations flows: `deploy.md`, `operations.md`  
+Use this file only for the pre-apply demo scenario.
+
 This walkthrough shows how to demo the **pre-apply hook** live with the UI and the demo agent.
 
 ## Prereqs

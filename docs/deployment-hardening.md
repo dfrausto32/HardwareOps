@@ -1,0 +1,139 @@
+# Deployment Hardening Guide (Proxy Trust + Anti-Tamper)
+
+Canonical deployment flow lives in `deploy.md`.  
+Use this file as the detailed hardening reference.
+
+This guide covers how to deploy with safe proxy-header trust settings in:
+- AWS (Terraform-based production stacks)
+- On-prem bundles
+
+It also covers how to make config tampering difficult for operators with host access.
+
+---
+
+## 1) Why this matters
+
+Control-plane now only trusts forwarded headers (`X-Forwarded-For`, `X-Real-IP`, `X-Client-Cert`) when the immediate remote peer is in `TRUST_PROXY_CIDRS`.
+
+If this is misconfigured, attackers can spoof source IP/cert headers and bypass identity/rate-limit assumptions.
+
+---
+
+## 2) AWS production deployment
+
+### What is already wired
+
+Terraform module default env for control-plane includes:
+- `TRUST_PROXY=1`
+- `TRUST_PROXY_CIDRS=<vpc_cidr>`
+
+Source: `deploy/aws/terraform/modules/customer_stack/main.tf`.
+
+That means only traffic forwarded by resources inside the stack VPC (ALB/gateway path) is trusted for forwarded headers.
+
+### Optional stricter override
+
+You can set `control_plane_env` in `terraform.tfvars` to narrower CIDRs (for example private ingress subnets only):
+
+```hcl
+control_plane_env = {
+  TRUST_PROXY_CIDRS = "10.40.64.0/20,10.40.80.0/20,10.40.96.0/20"
+}
+```
+
+### Verify after deploy
+
+1) Inspect effective task env in ECS task definition:
+
+```bash
+aws ecs describe-task-definition --task-definition <task-def-arn> \
+  --query 'taskDefinition.containerDefinitions[?name==`control-plane`].environment'
+```
+
+2) Confirm values include:
+- `TRUST_PROXY=1`
+- `TRUST_PROXY_CIDRS` matches expected network ranges
+
+3) Validate behavior:
+- Requests from untrusted remote IP with spoofed `X-Forwarded-For` must not change rate-limit/audit source IP.
+- Requests from trusted proxy IP should use forwarded value.
+
+---
+
+## 3) On-prem deployment hardening
+
+### Required runtime settings
+
+In `.env.onprem`:
+
+```env
+TRUST_PROXY=1
+TRUST_PROXY_CIDRS=<gateway-or-proxy-subnets>
+CLIENT_CERT_HEADER=X-Client-Cert
+```
+
+Do **not** use:
+- `TRUST_PROXY_CIDRS=0.0.0.0/0`
+- `TRUST_PROXY_CIDRS=::/0`
+
+Use only your reverse proxy host/subnet(s).
+
+### Verify running container values
+
+```bash
+docker exec -it hardwareops-control-plane-1 env | egrep 'TRUST_PROXY|TRUST_PROXY_CIDRS|CLIENT_CERT_HEADER'
+```
+
+---
+
+## 4) Make on-prem config hard to change
+
+If customers have root, tampering cannot be made impossible, but it can be made costly/noisy.
+
+### Baseline controls
+
+1) Restrict file ownership/permissions:
+
+```bash
+sudo chown root:root .env.onprem docker-compose.onprem.bundle.yml
+sudo chmod 0400 .env.onprem
+sudo chmod 0444 docker-compose.onprem.bundle.yml
+```
+
+2) Set immutable bit (Linux ext filesystems):
+
+```bash
+sudo chattr +i .env.onprem docker-compose.onprem.bundle.yml
+```
+
+3) Restrict Docker access:
+- Remove non-admin users from `docker` group.
+- Use sudo-only operational access.
+
+4) Keep deployment path root-owned (`/opt/hardwareops/stack`) and writable by admins only.
+
+### Operational controls (recommended)
+
+1) Store a known-good checksum for `.env.onprem`:
+
+```bash
+sha256sum .env.onprem > .env.onprem.sha256
+```
+
+2) During upgrades/restarts, verify checksum before `docker compose up`.
+
+3) Monitor container env drift:
+- Alert if `TRUST_PROXY`/`TRUST_PROXY_CIDRS` changes from baseline.
+
+---
+
+## 5) Recommendation profile
+
+For customer deployments:
+
+1. Enable `TRUST_PROXY=1`.
+2. Set `TRUST_PROXY_CIDRS` to exact proxy/gateway network ranges.
+3. Lock `.env.onprem` + compose file ownership/permissions and immutable bit.
+4. Add checksum verification in deployment SOP.
+
+This gives strong practical protection against header spoofing and casual tampering.

@@ -1,0 +1,33 @@
+stages:
+  - publish
+
+hwops_artifact_push:
+  stage: publish
+  image: python:3.12-slim
+  variables:
+    ARTIFACT_TYPE: app_bundle
+    INPUT_DIR: ./dist/artifact
+    METADATA_JSON: "{}"
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends bash ca-certificates curl && rm -rf /var/lib/apt/lists/*
+    - test -n "$HWOPS_BASE_URL"
+    - test -n "$HWOPS_CI_SERVICE_TOKEN"
+    - test -n "$ARTIFACT_NAME"
+    - test -n "$ARTIFACT_VERSION"
+    - |
+      if [ -n "${HWOPS_CA_CERT_B64:-}" ]; then
+        echo "$HWOPS_CA_CERT_B64" | base64 -d > /tmp/hwops-ca.crt
+      fi
+  script:
+    - |
+      BASE_URL="$HWOPS_BASE_URL" \
+      CI_SERVICE_TOKEN="$HWOPS_CI_SERVICE_TOKEN" \
+      CA_CERT_PATH=/tmp/hwops-ca.crt \
+      ARTIFACT_NAME="$ARTIFACT_NAME" \
+      ARTIFACT_VERSION="$ARTIFACT_VERSION" \
+      ARTIFACT_TYPE="$ARTIFACT_TYPE" \
+      INPUT_DIR="$INPUT_DIR" \
+      METADATA_JSON="$METADATA_JSON" \
+      ./scripts/ci-upload-artifact.sh
+  rules:
+    - when: manual

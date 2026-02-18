@@ -1,5 +1,8 @@
 # Artifact Apply Roadmap (Firmware + Container Image)
 
+Canonical roadmap: `development/roadmap.md`  
+Use this file for artifact-apply-specific planning detail.
+
 This document describes how we will evolve artifact apply beyond bundles (`app_bundle`, `config_bundle`, `data_bundle`) and the interfaces already scaffolded in the agent.
 
 ## Current v1 Behavior

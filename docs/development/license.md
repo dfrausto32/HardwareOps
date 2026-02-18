@@ -98,4 +98,4 @@ DEVICE_IDENTITY_REQUIRE_ON_ENROLL=1
 DEVICE_IDENTITY_REQUIRE_ON_CHECKIN=1
 ```
 
-Details and rollout strategy: `docs/development/device-identity-hardening.md`.
+Details and rollout strategy: `device-identity-hardening.md`.

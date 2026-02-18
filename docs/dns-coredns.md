@@ -1,5 +1,8 @@
 # CoreDNS (On‑Prem Local DNS)
 
+Canonical deployment flow: `deploy.md`  
+Use this file for DNS-specific setup details.
+
 This sets up a simple local DNS server so all clients can resolve `hardwareops.internal`.
 Avoid `.local` domains because most Linux distros treat them as **mDNS** and browsers/curl won’t query unicast DNS.
 For WSL + VirtualBox testing, **run CoreDNS on the control‑plane VM**, not inside WSL.

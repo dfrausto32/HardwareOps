@@ -4,7 +4,7 @@ This doc outlines **supported deployment shapes** and the recommended path forwa
 Assumption: single‑tenant per customer deployment (multi‑tenant can be added later).
 
 Detailed rollout steps and sequencing are documented in:
-`docs/development/aws-cloud-setup-plan.md`
+`aws-cloud-setup-plan.md`
 
 ## Recommendation (now)
 - **On‑prem** as the default production target.

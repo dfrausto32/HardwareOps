@@ -17,6 +17,9 @@ Defaults:
 - Pull request uses adapter-ready `source.kind=http` + `source.uri`.
 - Set `PULL_SOURCE_MODE=legacy` to validate backward-compatible `sourceUrl`.
 - For credentialRef coverage, set `ARTIFACT_PULL_CREDENTIALS_FILE` or `ARTIFACT_PULL_CREDENTIALS_JSON` before starting control-plane and call pull with `source.credentialRef`.
+- CI helper scripts:
+  - Push: `scripts/ci-upload-artifact.sh`
+  - Pull: `scripts/ci-pull-artifact.sh`
 
 Artifactory adapter local smoke:
 ```bash

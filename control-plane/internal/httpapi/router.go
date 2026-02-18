@@ -13,6 +13,8 @@ import (
 
 func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 	r := chi.NewRouter()
+	ConfigureTrustedProxyCIDRs(deps.TrustedProxyCIDRs)
+	handlers.ConfigureTrustedProxyCIDRs(deps.TrustedProxyCIDRs)
 
 	r.Use(RequestLogger(logger))
 	if len(deps.CORSAllowedOrigins) > 0 {

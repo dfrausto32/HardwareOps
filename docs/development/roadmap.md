@@ -53,7 +53,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
   - Ed25519 signatures stored alongside artifacts (signature + key ID).
   - Agents reject unsigned/invalid artifacts with clear error path.
   - Migration path documented for Cosign/Sigstore. 
-- **Notes:** See `docs/development/artifact-signing.md`.
+- **Notes:** See `artifact-signing.md`.
 
 #### Device status model
 - **Status:** 🟢 Complete
@@ -117,7 +117,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Dependencies:** CA tooling; device enrollment flow; writable cert paths.
 - **Risks:** Bricking agents during rotation if bundle missing or certs read-only.
 - **Acceptance:** Rotation can be executed without full fleet outage.
-- **Notes:** CA bundle trust + active signer + UI rotate/reload + agent auto‑reenroll implemented. Server‑TLS rotation runbook documented in `docs/certs.md`.
+- **Notes:** CA bundle trust + active signer + UI rotate/reload + agent auto‑reenroll implemented. Server‑TLS rotation runbook documented in `../certs.md`.
 
 #### Backup & restore runbooks
 - **Status:** 🟢 Complete
@@ -125,7 +125,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Dependencies:** Backup tooling; storage policy.
 - **Risks:** Incomplete restores.
 - **Acceptance:** Restore tested with documented RTO/RPO.
-- **Notes:** UI supports create/restore + wipe; scripts included for on‑prem and local dev. See `docs/backup-restore.md`.
+- **Notes:** UI supports create/restore + wipe; scripts included for on‑prem and local dev. See `../backup-restore.md`.
 
 ---
 
@@ -168,7 +168,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Dependencies:** Rotation status counts; scheduled task; UI warning/banners.
 - **Risks:** Offline devices stranded after grace expiry.
 - **Acceptance:** Old CA pruned safely; operators warned with clear counts and timestamps.
-- **Notes:** Cleanup endpoint + UI control + grace window in place (see `docs/certs.md`).
+- **Notes:** Cleanup endpoint + UI control + grace window in place (see `../certs.md`).
 
 #### Artifact lifecycle management
 - **Status:** 🟢 Complete
@@ -193,7 +193,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
   - Production guardrails prevent accidental insecure mode (`AUTH_MODE=disabled`, `LICENSE_ENFORCE=0`) in hardened profiles.
   - Trusted-proxy allowlist is enforced for forwarded client-cert headers.
   - Device slot reclaim/decommission path is explicit and auditable (no silent quota bypass by deletes).
-- **Notes:** Shipped now: transactional device cap enforcement, clone-suspicion runtime/audit events, and hardware identity audit/enforce checks (`docs/development/device-identity-hardening.md`). Remaining hardening items are scheduled in Phase B.
+- **Notes:** Shipped now: transactional device cap enforcement, clone-suspicion runtime/audit events, and hardware identity audit/enforce checks (`device-identity-hardening.md`). Remaining hardening items are scheduled in Phase B.
 
 #### Release channels
 - **Status:** ⬜ Planned
@@ -217,7 +217,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Dependencies:** Secrets management; ingest modes.
 - **Risks:** Credential leakage.
 - **Acceptance:** CI can publish artifacts without long‑lived creds.
-- **Notes:** Presigned CI push path implemented (`/artifacts/presign-upload` + `/artifacts/complete`) with scoped expiring service tokens (`artifact.publish`) and `scripts/ci-upload-artifact.sh`. Pull ingest API implemented (`/artifacts/pull`) with checksum validation + host/size/timeout guardrails. Adapter framework and backward-compatible source shape are in place (`sourceUrl` or `source.kind` + `source.uri`; current kinds=`http`,`artifactory`). Credential resolver abstraction is in place (`source.credentialRef`) with static map (`ARTIFACT_PULL_CREDENTIALS_FILE`/`ARTIFACT_PULL_CREDENTIALS_JSON`) plus AWS Secrets Manager-backed loading (`ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID`). Artifactory adapter shipped with local docker smoke scripts (`scripts/setup-artifactory-demo.sh`, `scripts/test-artifactory-adapter.sh`) and signed artifact demo flow. Test coverage/runbook added (`scripts/test-artifact-ingest.sh`, `docs/development/artifact-ingest-test-plan.md`). Remaining Phase B work: CI provider templates and operational rotation/reload workflow for pull credentials; Vault resolver backend is deferred to Phase C.
+- **Notes:** Presigned CI push path implemented (`/artifacts/presign-upload` + `/artifacts/complete`) with scoped expiring service tokens (`artifact.publish`) and `scripts/ci-upload-artifact.sh`. Pull ingest API implemented (`/artifacts/pull`) with checksum validation + host/size/timeout guardrails plus CI helper `scripts/ci-pull-artifact.sh`. Adapter framework and backward-compatible source shape are in place (`sourceUrl` or `source.kind` + `source.uri`; current kinds=`http`,`artifactory`). Credential resolver abstraction is in place (`source.credentialRef`) with static map (`ARTIFACT_PULL_CREDENTIALS_FILE`/`ARTIFACT_PULL_CREDENTIALS_JSON`) plus AWS Secrets Manager-backed loading (`ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID`). Artifactory adapter shipped with local docker smoke scripts (`scripts/setup-artifactory-demo.sh`, `scripts/test-artifactory-adapter.sh`) and signed artifact demo flow. Test coverage/runbook added (`scripts/test-artifact-ingest.sh`, `artifact-ingest-test-plan.md`). CI provider scaffold templates added for GitHub Actions/GitLab/Jenkins (`../../deploy/ci/README.md`). Remaining Phase B work: operational rotation/reload workflow for pull credentials; Vault resolver backend is deferred to Phase C.
 
 ### Recommended Next Sequence (Current)
 1. **CI integrations (finish Phase B):** Add CI provider templates (GitHub/GitLab/Jenkins) + operational credential-rotation runbook.
@@ -368,7 +368,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
   - IAM policy review passed with scoped permissions.
   - ECS exec disabled by default for production.
   - Security alarms routed to on-call channel.
-- **Notes:** Execution details tracked in `docs/development/security-hardening.md`.
+- **Notes:** Execution details tracked in `security-hardening.md`.
 
 #### Multi-tenant controls (optional)
 - **Status:** ⬜ Backlog

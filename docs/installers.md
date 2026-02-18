@@ -1,5 +1,8 @@
 # Installers (Multi‑OS Bundles)
 
+Canonical deployment guide: `deploy.md`  
+Use this file for bundle build/layout details.
+
 This repo ships a build script that creates **portable installer bundles** for common OS/arch targets.
 
 ## Build bundles
@@ -59,30 +62,10 @@ dist/installers/<version>/
 - `scripts/run-coredns.sh`
 - `scripts/set-dns.sh`
 
-## Quick cert + env setup (control‑plane bundle)
-Inside the control‑plane bundle:
-```
-./scripts/setup-control-plane.sh
-```
-This generates:
-- `/opt/hardwareops/certs/ca.crt`
-- `/opt/hardwareops/certs/ca.key`
-- `/opt/hardwareops/certs/server.crt`
-- `/opt/hardwareops/certs/server.key`
-
-It also writes `control-plane.env` with CA paths (and TLS paths if `ENABLE_TLS=1`).
-
-## Quick stack setup (stack bundle)
-```
-sudo ./scripts/install-docker-ubuntu.sh
-sudo ./scripts/run-stack.sh
-```
-
-### Double‑click installer (Linux desktop)
-Inside the stack bundle:
-1) Open `desktop/hardwareops-installer.desktop`
-2) Mark it as **Trusted** (first‑time prompt)
-3) It runs `hardwareops-installer.sh` in a terminal and starts the stack
+## Runtime install flow
+Installer runtime steps are documented in:
+- `installer-flow.md` (fresh machine flow)
+- `deploy.md` (canonical deployment path)
 
 ## Troubleshooting
 ### Bundle extracts with no top‑level directory

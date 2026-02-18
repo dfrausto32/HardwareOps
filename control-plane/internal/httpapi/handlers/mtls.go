@@ -41,7 +41,7 @@ func peerCertFromRequest(r *http.Request, trustProxy bool, header string) *x509.
 	if r != nil && r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
 		return r.TLS.PeerCertificates[0]
 	}
-	if !trustProxy || r == nil {
+	if !trustProxy || r == nil || !proxyHeadersAllowed(r) {
 		return nil
 	}
 	if header == "" {

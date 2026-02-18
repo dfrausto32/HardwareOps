@@ -1,0 +1,64 @@
+name: hwops-artifact-pull
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_name:
+        description: Artifact name
+        required: true
+      artifact_version:
+        description: Artifact version
+        required: true
+      artifact_sha256:
+        description: Artifact SHA256
+        required: true
+      source_kind:
+        description: Source kind (http or artifactory)
+        required: true
+        default: http
+      source_uri:
+        description: Source URI
+        required: true
+      source_credential_ref:
+        description: Optional credentialRef
+        required: false
+        default: ""
+      artifact_type:
+        description: Artifact type
+        required: true
+        default: app_bundle
+      metadata_json:
+        description: Optional metadata JSON
+        required: false
+        default: "{}"
+
+jobs:
+  pull:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Write optional CA certificate
+        if: ${{ secrets.HWOPS_CA_CERT_B64 != '' }}
+        run: echo "${{ secrets.HWOPS_CA_CERT_B64 }}" | base64 -d > /tmp/hwops-ca.crt
+
+      - name: Pull artifact via HardwareOps API
+        env:
+          BASE_URL: ${{ secrets.HWOPS_BASE_URL }}
+          CI_SERVICE_TOKEN: ${{ secrets.HWOPS_CI_SERVICE_TOKEN }}
+          CA_CERT_PATH: /tmp/hwops-ca.crt
+          ARTIFACT_NAME: ${{ inputs.artifact_name }}
+          ARTIFACT_VERSION: ${{ inputs.artifact_version }}
+          ARTIFACT_TYPE: ${{ inputs.artifact_type }}
+          ARTIFACT_SHA256: ${{ inputs.artifact_sha256 }}
+          SOURCE_KIND: ${{ inputs.source_kind }}
+          SOURCE_URI: ${{ inputs.source_uri }}
+          SOURCE_CREDENTIAL_REF: ${{ inputs.source_credential_ref }}
+          METADATA_JSON: ${{ inputs.metadata_json }}
+        run: ./scripts/ci-pull-artifact.sh

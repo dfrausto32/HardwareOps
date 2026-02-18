@@ -184,6 +184,7 @@ fi
 if [ "${USE_PROXY:-0}" = "1" ]; then
   export TRUST_PROXY=1
 fi
+export TRUST_PROXY_CIDRS=${TRUST_PROXY_CIDRS:-127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fc00::/7,fe80::/10}
 export AUTO_MIGRATE=${AUTO_MIGRATE:-1}
 export S3_ENDPOINT=${S3_ENDPOINT:-localhost:9000}
 export S3_BUCKET=${S3_BUCKET:-artifacts}

@@ -1,5 +1,8 @@
 # VM Test Setup (Control‑Plane + Agents)
 
+Canonical deployment flow: `deploy.md`  
+Use this file for VM-specific validation workflows.
+
 This guide shows how to validate the **on‑prem install flow** without fresh hardware by using VMs.
 
 ## VirtualBox Two‑VM Setup (Windows host + WSL build)
@@ -84,7 +87,7 @@ If you want a real DNS server instead of `/etc/hosts`, run CoreDNS on the contro
 ```
 DNS_IP=<CONTROL_PLANE_IP> ./scripts/run-coredns.sh
 ```
-Then set the **agent VM’s** DNS server to the control‑plane VM IP (see `docs/dns-coredns.md`).
+Then set the **agent VM’s** DNS server to the control‑plane VM IP (see `dns-coredns.md`).
 Example:
 ```
 DNS_SERVER=<CONTROL_PLANE_IP> ./scripts/set-dns.sh

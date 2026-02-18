@@ -1,11 +1,14 @@
 # Agent Deployment (systemd)
 
+Canonical deployment flow: `deploy.md`  
+Use this file for agent-specific install/enroll service details.
+
 This installs the agent as a systemd service.
 If you need the binary for a specific OS/arch, build the installer bundles first:
 ```
 ./scripts/build-installers.sh
 ```
-See `docs/installers.md`.
+See `installers.md`.
 
 ## 1) Install the binary
 Copy the compiled agent binary onto the device (example path: `/tmp/hardwareops-agent`).

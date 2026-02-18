@@ -1,49 +1,56 @@
 # Documentation Map
 
-This directory contains the guides referenced throughout the repo. Use this index to find the right doc quickly.
+Use these canonical docs first:
 
-## Install + Deploy
-- `installer-flow.md` — **Fresh machine install** using installer bundles (stack + agents).
-- `installers.md` — What each installer bundle contains and how to build them.
-- `vm-testing.md` — VM-based testing (VirtualBox two‑VM flow).
-- `backup-restore.md` — Postgres + MinIO backup/restore runbook.
+- `deploy.md` - end-to-end deployment guide (on-prem + AWS + hardening baseline).
+- `operations.md` - day-2 operations (backup/restore, upgrades, cert rotation, metrics checks).
+- `local-dev-wsl.md` - local WSL dev workflow.
+- `development/roadmap.md` - implementation roadmap and phase status.
 
-## Local Development
-- `local-dev-wsl.md` — WSL2 dev setup (control‑plane + UI + agent).
+Rule of thumb:
+- Start in the canonical docs.
+- Use deep dives only for topic-specific details.
+- Prefer linking to canonical docs instead of duplicating step-by-step flow.
 
-## Networking + TLS
-- `dns-coredns.md` — CoreDNS setup for local DNS and VM scenarios.
-- `certs.md` — CA + TLS certificate setup and trust instructions.
-  - Includes **CA rotation** explanation, runbook, and hot‑reload steps.
+---
 
-## Agents + Updates
-- `agent-systemd.md` — Agent install via systemd (with enrollment).
-- `artifact-apply-roadmap.md` — Artifact apply plan (firmware + container images).
-- `preapply-demo.md` — End‑to‑end demo including pre‑apply behavior.
-- `../scripts/multi-app-artifacts.sh` — Build/upload multiple app bundle artifacts for multi‑component testing.
-  - Writes `files/last_applied.txt` + `files/apply.log` on apply so you can verify updates without the demo web UI.
-  - Starts a heartbeat loop that appends timestamps to `files/heartbeat.log` every 10s.
-- `../scripts/aws-demo-image.sh` — Build/push AWS demo-agent image to ECR.
-- `../scripts/aws-demo-seed.sh` — Seed signed demo artifacts into an AWS customer stack (manual switching in UI).
-- `../scripts/test-artifact-ingest.sh` — Automated local push/pull ingest smoke test.
-- `../scripts/setup-artifactory-demo.sh` — Launch local Artifactory OSS container and generate/upload pull-test artifacts.
-- `../scripts/test-artifactory-adapter.sh` — End-to-end Artifactory pull adapter test against control-plane.
+## Deployment deep dives
 
-## UI
-- `../ui/README.md` — UI dev workflow and environment settings.
+- `installer-flow.md` - fresh machine install via installer bundles.
+- `installers.md` - installer bundle contents and build details.
+- `deployment-hardening.md` - proxy trust allowlist and on-prem anti-tamper controls.
+- `development/aws-customer-deployment-runbook.md` - expanded AWS per-customer runbook.
+- `development/aws-cloud-setup-plan.md` - AWS strategy and architecture decisions.
+- `../deploy/aws/terraform/README.md` - Terraform scaffold details.
+- `vm-testing.md` - VM testing flow.
 
-## Development (Roadmap)
-- `development/roadmap.md` — Phased roadmap for on‑prem, AWS, RBAC, and artifact ingest.
-- `development/deployment-options.md` — On‑prem vs AWS deployment shapes and recommendations.
-- `development/aws-cloud-setup-plan.md` — Phased AWS rollout plan (quick demo path + managed customer cloud path).
-- `development/aws-customer-deployment-runbook.md` — Step-by-step per-customer AWS deployment + device cert onboarding flow.
-- `development/artifact-ingest.md` — Manual, CI push, and repo pull ingest modes.
-- `development/push-vs-pull-workflows.md` — Decision guide for CI push vs control-plane pull workflows.
-- `development/artifact-ingest-test-plan.md` — End-to-end local validation plan for push + pull ingest.
-- `development/auth-secrets-v1.md` — V1 local users + JWT + secrets posture.
-- `development/artifact-signing.md` — Current Ed25519 flow and Cosign/Sigstore migration path.
-- `development/metrics-health.md` — Prometheus metrics + health summary API + UI panel.
-- `development/upgrade-strategy.md` — Safe upgrade/rollback process and compatibility rules.
-- `development/license.md` — Signed on‑prem license format + device cap enforcement.
-- `development/device-identity-hardening.md` — Hardware identity anti-clone policy (`audit`/`enforce`) for enroll/check-in.
-- `development/security-hardening.md` — Security hardening findings + execution order for production controls.
+## Operations deep dives
+
+- `backup-restore.md` - backup and restore runbook.
+- `certs.md` - CA/TLS setup and CA rotation details.
+- `development/upgrade-strategy.md` - staged apply and rollback strategy.
+- `development/metrics-health.md` - metrics catalog and health model.
+
+## Product + platform references
+
+- `agent-systemd.md` - systemd agent install/enrollment.
+- `artifact-apply-roadmap.md` - artifact apply scope by type.
+- `preapply-demo.md` - demo apply behavior and verification.
+- `development/artifact-ingest.md` - ingest model (push + pull).
+- `development/push-vs-pull-workflows.md` - workflow choice guidance.
+- `development/artifact-ingest-test-plan.md` - ingest test plan.
+- `../deploy/ci/README.md` - CI provider templates (GitHub/GitLab/Jenkins) for push/pull ingest.
+- `development/artifact-signing.md` - signing model and migration path.
+- `development/auth-secrets-v1.md` - local auth/secrets baseline.
+- `development/license.md` - signed license and device cap enforcement.
+- `development/device-identity-hardening.md` - anti-clone device identity policy.
+- `development/security-hardening.md` - security hardening plan.
+
+## Helpful scripts
+
+- `../scripts/multi-app-artifacts.sh` - build/upload multi-component demo artifacts.
+- `../scripts/aws-demo-image.sh` - build/push demo-agent image to ECR.
+- `../scripts/aws-demo-seed.sh` - seed signed demo artifacts in AWS stack.
+- `../scripts/test-artifact-ingest.sh` - push/pull ingest smoke test.
+- `../scripts/setup-artifactory-demo.sh` - local Artifactory setup for pull adapter tests.
+- `../scripts/test-artifactory-adapter.sh` - end-to-end Artifactory pull adapter test.
