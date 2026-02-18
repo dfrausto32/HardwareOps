@@ -128,6 +128,41 @@ func (s *Store) ConsumeEnrollmentToken(tokenHash string) (bool, error) {
 	return true, nil
 }
 
+func (s *Store) EnrollDeviceWithToken(tokenHash string, device store.Device, maxDevices int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if tokenHash == "" {
+		return errors.New("token_hash required")
+	}
+	if device.DeviceID == "" {
+		return errors.New("device_id required")
+	}
+	tok, ok := s.tokens[tokenHash]
+	if !ok {
+		return store.ErrEnrollmentTokenInvalid
+	}
+	if time.Now().UTC().After(tok.ExpiresAt) {
+		delete(s.tokens, tokenHash)
+		return store.ErrEnrollmentTokenInvalid
+	}
+	if maxDevices > 0 && len(s.devices) >= maxDevices {
+		return store.ErrDeviceLimitExceeded
+	}
+	if _, exists := s.devices[device.DeviceID]; exists {
+		return errors.New("device already exists")
+	}
+	if device.CertFingerprint != "" {
+		for _, d := range s.devices {
+			if d.CertFingerprint == device.CertFingerprint {
+				return errors.New("device cert already exists")
+			}
+		}
+	}
+	s.devices[device.DeviceID] = device
+	delete(s.tokens, tokenHash)
+	return nil
+}
+
 func (s *Store) CreateDevice(device store.Device) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -136,6 +171,13 @@ func (s *Store) CreateDevice(device store.Device) error {
 	}
 	if _, exists := s.devices[device.DeviceID]; exists {
 		return errors.New("device already exists")
+	}
+	if device.CertFingerprint != "" {
+		for _, d := range s.devices {
+			if d.CertFingerprint == device.CertFingerprint {
+				return errors.New("device cert already exists")
+			}
+		}
 	}
 	s.devices[device.DeviceID] = device
 	return nil

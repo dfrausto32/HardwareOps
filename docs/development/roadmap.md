@@ -24,6 +24,12 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - ✅ Backup + restore runbooks + UI workflows (Postgres + MinIO).
 - ✅ Metrics & health (Prometheus `/metrics` + health summary + UI charts).
 - ✅ Certificate rotation cleanup (hybrid grace/coverage + UI button).
+- ✅ Artifact lifecycle management (deprecate/restore, safe delete gating, retention policy, manual + scheduled prune).
+- ✅ Bulk group management (shift-select, modal multi-edit, modal multi-group desired-state apply, batch API + advanced CSV rollback flow).
+- ✅ AWS per-customer Terraform scaffold + CLI wrapper + deployment runbook + demo fleet baseline.
+- ✅ Artifact ingest validation harness (push + pull local smoke test + operator test runbook).
+- ✅ Artifactory pull adapter (provider plugin) + signed local demo workflow (`setup-artifactory-demo.sh` / `test-artifactory-adapter.sh`).
+- ✅ License anti-cheat hardening v1 (atomic enroll cap enforcement + clone-suspicion telemetry).
 
 ---
 
@@ -168,8 +174,24 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Scope:** Retain/deprecate/delete; policy-based cleanup.
 - **Dependencies:** Artifact metadata + policy engine.
 - **Risks:** Deleting in‑use artifacts.
-- **Acceptance:** Safe cleanup with explicit policies.
-- **Notes:** 
+- **Acceptance:** 
+  - Artifacts can be deprecated/restored without breaking desired state.
+  - Delete is blocked for active/in-use artifacts unless explicitly overridden.
+  - Lifecycle policy controls deprecation retention; prune only removes eligible, unreferenced artifacts.
+- **Notes:** API + UI support status, retention policy (Settings), deprecate/restore, reference counts, manual prune (Artifacts), and scheduled auto-prune with telemetry/alerts.
+
+#### License anti-cheat hardening
+- **Status:** 🟡 In progress
+- **Scope:** Make license-cap bypass and device-clone abuse painful/detectable in on-prem environments.
+- **Dependencies:** Enrollment transaction flow, mTLS identity metadata, audit/runtime events, deployment guardrails.
+- **Risks:** False positives on clone detection and operator friction on decommission workflows.
+- **Acceptance:**
+  - Enrollment cap enforcement is transactional and race-safe under concurrent enroll requests.
+  - Suspicious identity reuse patterns (rapid source-IP switch and capability drift) produce runtime/audit signals.
+  - Production guardrails prevent accidental insecure mode (`AUTH_MODE=disabled`, `LICENSE_ENFORCE=0`) in hardened profiles.
+  - Trusted-proxy allowlist is enforced for forwarded client-cert headers.
+  - Device slot reclaim/decommission path is explicit and auditable (no silent quota bypass by deletes).
+- **Notes:** Shipped now: transactional device cap enforcement + clone-suspicion runtime/audit events. Remaining hardening items are scheduled in Phase B.
 
 #### Release channels
 - **Status:** ⬜ Planned

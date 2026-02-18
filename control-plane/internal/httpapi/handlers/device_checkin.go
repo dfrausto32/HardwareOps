@@ -124,17 +124,32 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 		req.DeviceID = device.DeviceID
 
 		now := time.Now().UTC()
+		sourceIP := clientIP(r, trustProxy)
+		metadataValue := device.MetadataJSON
+		metadataChanged := false
+		var cloneSignal *cloneSuspicion
 		var certNeedsReenroll bool
-		var certMetaUpdate []byte
 		if activeCAPool != nil {
 			pool := activeCAPool()
 			if pool != nil {
 				cert := peerCertFromRequest(r, trustProxy, clientCertHeader)
 				if cert != nil {
 					certNeedsReenroll = needsReenroll(cert, pool)
-					certMetaUpdate = updateCertMetaIfNeeded(device.MetadataJSON, !certNeedsReenroll, now)
+					if certMetaUpdate := updateCertMetaIfNeeded(metadataValue, !certNeedsReenroll, now); certMetaUpdate != nil {
+						metadataValue = certMetaUpdate
+						metadataChanged = true
+					}
 				}
 			}
+		}
+		if identityMeta, changed, signal := updateIdentityMeta(metadataValue, sourceIP, req.Capabilities, device.LastSeen, now); changed {
+			metadataValue = identityMeta
+			metadataChanged = true
+			cloneSignal = signal
+		}
+		metadataPatch := []byte(nil)
+		if metadataChanged {
+			metadataPatch = metadataValue
 		}
 		prevState, _, _ := st.GetDeviceState(req.DeviceID)
 		prevComponents := decodeDeviceComponents(prevState.ComponentsJSON)
@@ -191,7 +206,7 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 			Status:       status,
 			LastSeen:     now,
 			LabelsJSON:   req.Labels,
-			MetadataJSON: certMetaUpdate,
+			MetadataJSON: metadataPatch,
 		}); err != nil {
 			logger.Printf("upsert device error: %v", err)
 			recordCheckin("error", "storage_error")
@@ -342,22 +357,40 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 			ServerTime:     now,
 		}
 
-		if hub != nil {
-			payload, _ := json.Marshal(map[string]any{
-				"agentVersion":       req.AgentVersion,
-				"currentVersion":     req.Current.SoftwareVersion,
-				"currentConfigRev":   req.Current.ConfigRev,
-				"artifactId":         desiredRespArtifactID(desiredResp),
-				"desiredVersion":     desiredRespSoftwareVersion(desiredResp),
-				"desiredConfigRev":   desiredRespConfigRev(desiredResp),
-				"checkinIntervalSec": desiredRespCheckinInterval(desiredResp),
+		payload, _ := json.Marshal(map[string]any{
+			"agentVersion":       req.AgentVersion,
+			"currentVersion":     req.Current.SoftwareVersion,
+			"currentConfigRev":   req.Current.ConfigRev,
+			"artifactId":         desiredRespArtifactID(desiredResp),
+			"desiredVersion":     desiredRespSoftwareVersion(desiredResp),
+			"desiredConfigRev":   desiredRespConfigRev(desiredResp),
+			"checkinIntervalSec": desiredRespCheckinInterval(desiredResp),
+		})
+		emitRuntimeEvent(logger, st, hub, events.Event{
+			Type:     events.TypeDeviceCheckin,
+			DeviceID: req.DeviceID,
+			At:       now,
+			Payload:  payload,
+		})
+		if cloneSignal != nil {
+			signalPayload := auditJSON(map[string]any{
+				"reasons":             cloneSignal.Reasons,
+				"previousSourceIp":    cloneSignal.PreviousSourceIP,
+				"currentSourceIp":     cloneSignal.CurrentSourceIP,
+				"previousCapHash":     cloneSignal.PreviousCapHash,
+				"currentCapHash":      cloneSignal.CurrentCapHash,
+				"suspectedCloneCount": cloneSignal.SuspectedCloneCount,
 			})
-			hub.Publish(events.Event{
-				Type:     events.TypeDeviceCheckin,
+			emitRuntimeEvent(logger, st, hub, events.Event{
+				Type:     events.TypeDeviceCloneSuspected,
 				DeviceID: req.DeviceID,
 				At:       now,
-				Payload:  payload,
+				Payload:  signalPayload,
 			})
+			auditEvent := buildAuditEvent(r, trustProxy, actorDevice(req.DeviceID), "device.clone_suspected", "device", req.DeviceID)
+			auditEvent.MetadataJSON = signalPayload
+			writeAudit(logger, st, auditEvent, nil)
+			logger.Printf("clone suspicion device=%s reasons=%v source_ip=%s", req.DeviceID, cloneSignal.Reasons, sourceIP)
 		}
 
 		w.Header().Set("Content-Type", "application/json")

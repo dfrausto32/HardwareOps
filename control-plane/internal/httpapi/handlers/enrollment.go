@@ -135,21 +135,10 @@ func DeviceEnroll(logger *log.Logger, st store.Store, lic *license.Manager, sign
 				metricsCollector.IncEnroll(status, reason)
 			}
 		}
-		if err := enforceLicense(st, lic); err != nil {
-			status := http.StatusForbidden
-			if errors.Is(err, errLicenseLimitExceeded) {
-				record("error", "license_limit")
-				http.Error(w, "device limit reached", status)
-				return
-			}
-			if errors.Is(err, errLicenseInvalid) {
-				record("error", "license_invalid")
-				http.Error(w, "license invalid", status)
-				return
-			}
-			logger.Printf("license enforcement error: %v", err)
-			record("error", "license_error")
-			http.Error(w, "license enforcement error", http.StatusInternalServerError)
+		maxDevices, err := enrollmentMaxDevices(lic)
+		if err != nil {
+			record("error", "license_invalid")
+			http.Error(w, "license invalid", http.StatusForbidden)
 			return
 		}
 		if signer == nil {
@@ -181,20 +170,6 @@ func DeviceEnroll(logger *log.Logger, st store.Store, lic *license.Manager, sign
 			return
 		}
 
-		hash := hashToken(req.Token)
-		ok, err := st.ConsumeEnrollmentToken(hash)
-		if err != nil {
-			logger.Printf("consume token error: %v", err)
-			record("error", "storage_error")
-			http.Error(w, "storage error", http.StatusInternalServerError)
-			return
-		}
-		if !ok {
-			record("error", "token_invalid")
-			http.Error(w, "invalid or expired token", http.StatusUnauthorized)
-			return
-		}
-
 		deviceID := uuid.NewString()
 		certPEM, fingerprint, err := signer.SignDeviceCert([]byte(req.CSR), deviceID, 365*24*time.Hour)
 		if err != nil {
@@ -212,14 +187,25 @@ func DeviceEnroll(logger *log.Logger, st store.Store, lic *license.Manager, sign
 				"checkedAt":     time.Now().UTC().Format(time.RFC3339),
 			})
 		}
-		if err := st.CreateDevice(store.Device{
+		hash := hashToken(req.Token)
+		if err := st.EnrollDeviceWithToken(hash, store.Device{
 			DeviceID:        deviceID,
 			CertFingerprint: fingerprint,
 			Status:          "active",
 			LastSeen:        time.Now().UTC(),
 			MetadataJSON:    meta,
-		}); err != nil {
-			logger.Printf("create device error: %v", err)
+		}, maxDevices); err != nil {
+			if errors.Is(err, store.ErrEnrollmentTokenInvalid) {
+				record("error", "token_invalid")
+				http.Error(w, "invalid or expired token", http.StatusUnauthorized)
+				return
+			}
+			if errors.Is(err, store.ErrDeviceLimitExceeded) {
+				record("error", "license_limit")
+				http.Error(w, "device limit reached", http.StatusForbidden)
+				return
+			}
+			logger.Printf("enroll device store error: %v", err)
 			record("error", "storage_error")
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return

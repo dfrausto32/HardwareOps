@@ -1,6 +1,14 @@
 package store
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+var (
+	ErrEnrollmentTokenInvalid = errors.New("enrollment token invalid or expired")
+	ErrDeviceLimitExceeded    = errors.New("device limit exceeded")
+)
 
 type Device struct {
 	DeviceID        string
@@ -191,6 +199,7 @@ type Store interface {
 	UpsertDeviceState(state DeviceState) error
 	CreateEnrollmentToken(tokenHash string, expiresAt time.Time) error
 	ConsumeEnrollmentToken(tokenHash string) (bool, error)
+	EnrollDeviceWithToken(tokenHash string, device Device, maxDevices int) error
 	CreateDevice(device Device) error
 	GetDevice(deviceID string) (Device, bool, error)
 	GetDeviceByFingerprint(fingerprint string) (Device, bool, error)

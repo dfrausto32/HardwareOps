@@ -97,3 +97,17 @@ func enforceLicense(st store.Store, mgr *license.Manager) error {
 	}
 	return nil
 }
+
+func enrollmentMaxDevices(mgr *license.Manager) (int, error) {
+	if mgr == nil || !mgr.Enabled() {
+		return 0, nil
+	}
+	info := mgr.Snapshot()
+	if !info.Valid {
+		return 0, errLicenseInvalid
+	}
+	if info.Payload.MaxDevices <= 0 {
+		return 0, errLicenseInvalid
+	}
+	return info.Payload.MaxDevices, nil
+}

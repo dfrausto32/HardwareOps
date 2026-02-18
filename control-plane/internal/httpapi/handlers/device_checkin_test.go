@@ -7,8 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/hardwareops/control-plane/internal/events"
+	"github.com/hardwareops/control-plane/internal/store"
 	"github.com/hardwareops/control-plane/internal/store/memory"
 )
 
@@ -78,5 +81,61 @@ func TestDeviceCheckin_InvalidDeviceID(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestDeviceCheckin_CloneSignalOnRapidSourceIPSwitch(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+	deviceID := uuid.NewString()
+	reqBody := []byte(`{"deviceId":"` + deviceID + `","agentVersion":"0.1.0","current":{"softwareVersion":"v1","configRev":"c1"}}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/checkin", bytes.NewReader(reqBody))
+	req, deviceID = attachMTLSDevice(t, mem, req, deviceID)
+	req.RemoteAddr = "10.0.0.2:12345"
+
+	device, ok, err := mem.GetDevice(deviceID)
+	if err != nil || !ok {
+		t.Fatalf("seed device read failed: %v", err)
+	}
+	device.LastSeen = time.Now().UTC()
+	device.MetadataJSON = []byte(`{"hwops":{"identity":{"lastSourceIP":"10.0.0.1","suspectedCloneCount":1}}}`)
+	if err := mem.UpsertDevice(device); err != nil {
+		t.Fatalf("seed device update failed: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	DeviceCheckin(logger, mem, nil, false, "", nil, nil).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	eventsRows, err := mem.ListRuntimeEvents(store.RuntimeEventFilter{
+		Type:     events.TypeDeviceCloneSuspected,
+		DeviceID: deviceID,
+		Limit:    10,
+	})
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if len(eventsRows) != 1 {
+		t.Fatalf("expected one clone signal event, got %d", len(eventsRows))
+	}
+
+	updated, ok, err := mem.GetDevice(deviceID)
+	if err != nil || !ok {
+		t.Fatalf("read updated device failed: %v", err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(updated.MetadataJSON, &meta); err != nil {
+		t.Fatalf("metadata decode failed: %v", err)
+	}
+	hwops, _ := meta["hwops"].(map[string]any)
+	identity, _ := hwops["identity"].(map[string]any)
+	if identity["lastSourceIP"] != "10.0.0.2" {
+		t.Fatalf("expected lastSourceIP updated, got %#v", identity["lastSourceIP"])
+	}
+	if int(identity["suspectedCloneCount"].(float64)) != 2 {
+		t.Fatalf("expected suspectedCloneCount=2, got %#v", identity["suspectedCloneCount"])
 	}
 }

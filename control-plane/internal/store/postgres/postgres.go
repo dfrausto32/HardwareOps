@@ -92,6 +92,64 @@ func (s *Store) ConsumeEnrollmentToken(tokenHash string) (bool, error) {
 	return ok, nil
 }
 
+func (s *Store) EnrollDeviceWithToken(tokenHash string, device store.Device, maxDevices int) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if tokenHash == "" {
+		return errors.New("token_hash required")
+	}
+	if device.DeviceID == "" {
+		return errors.New("device_id required")
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var tokenID string
+	if err := tx.QueryRow(ctx, `
+		SELECT token_id::text
+		FROM enrollment_tokens
+		WHERE token_hash = $1 AND expires_at > now()
+		FOR UPDATE
+	`, tokenHash).Scan(&tokenID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return store.ErrEnrollmentTokenInvalid
+		}
+		return err
+	}
+
+	if maxDevices > 0 {
+		if _, err := tx.Exec(ctx, `LOCK TABLE devices IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+			return err
+		}
+		var count int
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM devices`).Scan(&count); err != nil {
+			return err
+		}
+		if count >= maxDevices {
+			return store.ErrDeviceLimitExceeded
+		}
+	}
+
+	cert := nullIfEmpty(device.CertFingerprint)
+	labels := nullIfEmptyBytes(device.LabelsJSON)
+	metadata := nullIfEmptyBytes(device.MetadataJSON)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO devices (device_id, cert_fingerprint, status, last_seen, labels, metadata)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, device.DeviceID, cert, device.Status, device.LastSeen, labels, metadata); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(ctx, `DELETE FROM enrollment_tokens WHERE token_id = $1::uuid`, tokenID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *Store) CreateDevice(device store.Device) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
