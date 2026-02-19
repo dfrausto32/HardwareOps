@@ -59,6 +59,8 @@ Implementation helper:
 - For pull with `credentialRef`, configure resolver sources in control-plane:
   - `ARTIFACT_PULL_CREDENTIALS_FILE` / `ARTIFACT_PULL_CREDENTIALS_JSON`
   - or AWS Secrets Manager (`ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID`)
+- Local smoke test (push + pull + resolver reload):
+  - `AUTH_EMAIL=admin@example.com AUTH_PASSWORD=change-me ./scripts/test-artifact-ingest.sh`
 - See:
   - `docs/development/artifact-ingest.md`
   - `docs/development/push-vs-pull-workflows.md`

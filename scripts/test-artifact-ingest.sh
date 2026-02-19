@@ -16,6 +16,7 @@ ARTIFACT_TYPE=${ARTIFACT_TYPE:-app_bundle}
 WORK_DIR=${WORK_DIR:-/tmp/hardwareops-ingest-test}
 HTTP_PORT=${HTTP_PORT:-18080}
 RUN_NEGATIVE_SHA_TEST=${RUN_NEGATIVE_SHA_TEST:-1}
+RUN_CREDENTIAL_RELOAD_TEST=${RUN_CREDENTIAL_RELOAD_TEST:-1}
 KEEP_WORK_DIR=${KEEP_WORK_DIR:-0}
 PULL_SOURCE_MODE=${PULL_SOURCE_MODE:-source}
 
@@ -280,6 +281,49 @@ PY
   if [ "$bad_code" != "400" ]; then
     fail "expected 400 for bad sha pull test, got $bad_code"
   fi
+fi
+
+if [ "$RUN_CREDENTIAL_RELOAD_TEST" = "1" ]; then
+  log "checking pull credential resolver status endpoint"
+  status_json=$(curl "${curl_opts[@]}" --fail \
+    "${verify_header[@]}" \
+    "$BASE_URL/api/v1/artifacts/pull-credentials")
+
+  python3 - <<'PY' "$status_json"
+import json, sys
+data = json.loads(sys.argv[1])
+required = ("configured", "resolverAvailable", "credentialRefCount")
+missing = [k for k in required if k not in data]
+if missing:
+    raise SystemExit(f"missing pull-credential status fields: {missing}")
+if not isinstance(data.get("credentialRefCount"), int):
+    raise SystemExit("credentialRefCount must be an integer")
+PY
+
+  log "reloading pull credential resolver"
+  reload_json=$(curl "${curl_opts[@]}" --fail \
+    -X POST "$BASE_URL/api/v1/artifacts/pull-credentials/reload" \
+    "${verify_header[@]}" \
+    -H "Content-Type: application/json")
+
+  python3 - <<'PY' "$reload_json"
+import json, sys
+data = json.loads(sys.argv[1])
+if "lastLoadedAt" not in data:
+    raise SystemExit("reload response missing lastLoadedAt")
+PY
+
+  log "verifying audit contains pull credential reload event"
+  reload_audit_json=$(curl "${curl_opts[@]}" --fail \
+    "${verify_header[@]}" \
+    "$BASE_URL/api/v1/audit?limit=250")
+
+  python3 - <<'PY' "$reload_audit_json"
+import json, sys
+items = json.loads(sys.argv[1]).get("items", [])
+if not any(i.get("action") == "artifact.pull_credentials.reload" for i in items):
+    raise SystemExit("missing artifact.pull_credentials.reload audit event")
+PY
 fi
 
 log "PASS"

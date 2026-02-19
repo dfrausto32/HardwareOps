@@ -20,6 +20,7 @@ Defaults:
 - CI helper scripts:
   - Push: `scripts/ci-upload-artifact.sh`
   - Pull: `scripts/ci-pull-artifact.sh`
+- Pull credential reload smoke is enabled by default in `scripts/test-artifact-ingest.sh` (`RUN_CREDENTIAL_RELOAD_TEST=1`).
 
 Artifactory adapter local smoke:
 ```bash
@@ -193,7 +194,31 @@ Run the pull call again with `localhost` source URL.
 
 Expected: `403` with `sourceUrl host not allowed`.
 
-## 8) Cleanup
+## 8) Pull credential resolver reload (operational smoke)
+
+Check resolver status:
+
+```bash
+curl -sS --fail --cacert "$CA_CERT_PATH" \
+  -H "Authorization: Bearer $ADMIN_JWT" \
+  "$BASE_URL/api/v1/artifacts/pull-credentials"
+```
+
+Reload resolver:
+
+```bash
+curl -sS --fail --cacert "$CA_CERT_PATH" \
+  -X POST "$BASE_URL/api/v1/artifacts/pull-credentials/reload" \
+  -H "Authorization: Bearer $ADMIN_JWT" \
+  -H "Content-Type: application/json"
+```
+
+Expected:
+- `200` response
+- `lastLoadedAt` present
+- audit includes `artifact.pull_credentials.reload`
+
+## 9) Cleanup
 
 ```bash
 pkill -f "python3 -m http.server 18080" || true
