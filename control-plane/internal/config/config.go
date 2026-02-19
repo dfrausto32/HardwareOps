@@ -101,6 +101,7 @@ type Config struct {
 	DeviceIdentityMode                   string
 	DeviceIdentityRequireOnEnroll        bool
 	DeviceIdentityRequireOnCheckin       bool
+	HardenedProfile                      bool
 }
 
 func FromEnv() Config {
@@ -210,6 +211,7 @@ func FromEnv() Config {
 		DeviceIdentityMode:                   getenvDefault("DEVICE_IDENTITY_MODE", "audit"),
 		DeviceIdentityRequireOnEnroll:        parseBoolEnvDefault("DEVICE_IDENTITY_REQUIRE_ON_ENROLL", false),
 		DeviceIdentityRequireOnCheckin:       parseBoolEnvDefault("DEVICE_IDENTITY_REQUIRE_ON_CHECKIN", false),
+		HardenedProfile:                      parseBoolEnvDefault("HARDENED_PROFILE", false),
 	}
 }
 

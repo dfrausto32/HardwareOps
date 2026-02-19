@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -50,6 +51,23 @@ type DeviceListResponse struct {
 type DeviceUpdateRequest struct {
 	Labels   *json.RawMessage `json:"labels,omitempty"`
 	Metadata *json.RawMessage `json:"metadata,omitempty"`
+}
+
+type DeviceDecommissionRequest struct {
+	Reason   string `json:"reason"`
+	TicketID string `json:"ticketId,omitempty"`
+	Notes    string `json:"notes,omitempty"`
+}
+
+type DeviceDecommissionResponse struct {
+	DeviceID         string     `json:"deviceId"`
+	Reason           string     `json:"reason"`
+	TicketID         string     `json:"ticketId,omitempty"`
+	Notes            string     `json:"notes,omitempty"`
+	SlotBefore       int        `json:"slotBefore"`
+	SlotAfter        int        `json:"slotAfter"`
+	ReleasedSlot     bool       `json:"releasedSlot"`
+	DecommissionedAt *time.Time `json:"decommissionedAt,omitempty"`
 }
 
 func ListDevices(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
@@ -251,6 +269,12 @@ func GetDevice(logger *log.Logger, st store.Store, trustProxy bool) http.Handler
 
 func DeleteDevice(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "device delete disabled: use POST /api/v1/devices/{deviceId}/decommission", http.StatusBadRequest)
+	}
+}
+
+func DecommissionDevice(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		deviceID := chi.URLParam(r, "deviceId")
 		if deviceID == "" {
 			http.Error(w, "deviceId required", http.StatusBadRequest)
@@ -261,23 +285,91 @@ func DeleteDevice(logger *log.Logger, st store.Store, trustProxy bool) http.Hand
 			return
 		}
 
-		if _, ok, err := st.GetDevice(deviceID); err != nil {
+		var req DeviceDecommissionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		req.Reason = strings.TrimSpace(req.Reason)
+		req.TicketID = strings.TrimSpace(req.TicketID)
+		req.Notes = strings.TrimSpace(req.Notes)
+		if req.Reason == "" {
+			http.Error(w, "reason required", http.StatusBadRequest)
+			return
+		}
+
+		device, ok, err := st.GetDevice(deviceID)
+		if err != nil {
 			logger.Printf("get device error: %v", err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
-		} else if !ok {
+		}
+		if !ok {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
 
-		if err := st.DeleteDevice(deviceID); err != nil {
-			logger.Printf("delete device error: %v", err)
-			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "device.delete", "device", deviceID), err)
+		slotBefore, err := st.CountDevices()
+		if err != nil {
+			logger.Printf("count devices before decommission error: %v", err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
-		writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "device.delete", "device", deviceID), nil)
-		w.WriteHeader(http.StatusNoContent)
+
+		if err := st.DeleteDevice(deviceID); err != nil {
+			logger.Printf("decommission device error: %v", err)
+			event := buildAuditEvent(r, trustProxy, actorUser("ui"), "device.decommission", "device", deviceID)
+			event.MetadataJSON = auditJSON(map[string]any{
+				"reason":     req.Reason,
+				"ticketId":   req.TicketID,
+				"notes":      req.Notes,
+				"slotBefore": slotBefore,
+			})
+			writeAudit(logger, st, event, err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+
+		slotAfter, err := st.CountDevices()
+		if err != nil {
+			logger.Printf("count devices after decommission error: %v", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+
+		now := time.Now().UTC()
+		resp := DeviceDecommissionResponse{
+			DeviceID:         deviceID,
+			Reason:           req.Reason,
+			TicketID:         req.TicketID,
+			Notes:            req.Notes,
+			SlotBefore:       slotBefore,
+			SlotAfter:        slotAfter,
+			ReleasedSlot:     slotAfter < slotBefore,
+			DecommissionedAt: &now,
+		}
+
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "device.decommission", "device", deviceID)
+		event.BeforeJSON = auditJSON(map[string]any{
+			"status":   device.Status,
+			"lastSeen": timePtr(device.LastSeen),
+			"labels":   json.RawMessage(device.LabelsJSON),
+			"metadata": json.RawMessage(device.MetadataJSON),
+		})
+		event.AfterJSON = auditJSON(map[string]any{
+			"decommissioned": true,
+			"slotBefore":     slotBefore,
+			"slotAfter":      slotAfter,
+		})
+		event.MetadataJSON = auditJSON(map[string]any{
+			"reason":       req.Reason,
+			"ticketId":     req.TicketID,
+			"notes":        req.Notes,
+			"releasedSlot": resp.ReleasedSlot,
+		})
+		writeAudit(logger, st, event, nil)
+
+		writeJSON(w, resp)
 	}
 }
 

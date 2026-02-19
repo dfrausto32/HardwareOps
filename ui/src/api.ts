@@ -90,9 +90,10 @@ export async function getDevice(deviceId: string) {
   return requestJson(`/api/v1/devices/${encodeURIComponent(deviceId)}`)
 }
 
-export async function deleteDevice(deviceId: string) {
-  return requestNoContent(`/api/v1/devices/${encodeURIComponent(deviceId)}`, {
-    method: 'DELETE',
+export async function decommissionDevice(deviceId: string, payload: Record<string, unknown>) {
+  return requestJson(`/api/v1/devices/${encodeURIComponent(deviceId)}/decommission`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
   })
 }
 

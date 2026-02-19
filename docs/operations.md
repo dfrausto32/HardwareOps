@@ -84,6 +84,23 @@ After rotation is complete:
 - run cleanup in UI/API
 - or follow `certs.md` manual cleanup
 
+### 3.4 Device decommission (license slot reclaim)
+
+Use decommission instead of raw delete so slot reclaim has an explicit audit trail.
+
+```bash
+curl --cacert /opt/hardwareops/certs/ca.crt \
+  -H "Authorization: Bearer <admin-jwt>" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  https://hardwareops.internal/api/v1/devices/<device-id>/decommission \
+  -d '{"reason":"device retired","ticketId":"OPS-123"}'
+```
+
+Expect:
+- response with `slotBefore` and `slotAfter`
+- audit action `device.decommission`
+
 ---
 
 ## 4) Pull credential rotation/reload
@@ -127,6 +144,7 @@ Audit action emitted:
 ## 5) Security checks (periodic)
 
 - Confirm auth is enabled and bootstrap secrets rotated.
+- Confirm `HARDENED_PROFILE=1` in production on-prem.
 - Confirm `TRUST_PROXY_CIDRS` is restricted (not `0.0.0.0/0`).
 - Confirm audit retention policy is set as intended.
 - Confirm backups are restorable by doing restore drills.

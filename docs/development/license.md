@@ -88,6 +88,23 @@ LICENSE_EMBED_PUBKEY_PATH=./license-keys/ed25519.pub \
 ## Enforcement Behavior
 - **Enrollments** are blocked when cap is exceeded.
 - Existing devices can continue to check in.
+- Re-enroll updates an existing device record and does not consume a new slot.
+
+## Explicit Slot Reclaim (Decommission)
+Device-slot reclaim now uses an explicit decommission API (admin-only) so slot release is auditable.
+
+```bash
+curl --cacert /opt/hardwareops/certs/ca.crt \
+  -H "Authorization: Bearer <admin-jwt>" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  https://hardwareops.internal/api/v1/devices/<device-id>/decommission \
+  -d '{"reason":"device retired","ticketId":"OPS-123"}'
+```
+
+Response includes slot counts (`slotBefore`, `slotAfter`) and whether a slot was released.
+Audit action emitted:
+- `device.decommission`
 
 ## Optional Duplicate-Device Hardening (Phase B)
 To make cloning/reuse more painful, enable hardware identity checks:
@@ -99,3 +116,17 @@ DEVICE_IDENTITY_REQUIRE_ON_CHECKIN=1
 ```
 
 Details and rollout strategy: `device-identity-hardening.md`.
+
+## Hardened Runtime Profile (recommended for production on-prem)
+Use this to block accidental insecure startup combinations:
+
+```env
+HARDENED_PROFILE=1
+AUTH_MODE=local
+LICENSE_ENFORCE=1
+DEVICE_IDENTITY_MODE=enforce
+DEVICE_IDENTITY_REQUIRE_ON_ENROLL=1
+DEVICE_IDENTITY_REQUIRE_ON_CHECKIN=1
+```
+
+When `HARDENED_PROFILE=1`, startup fails if these requirements are not met.

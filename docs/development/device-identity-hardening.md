@@ -22,6 +22,12 @@ DEVICE_IDENTITY_REQUIRE_ON_ENROLL=0
 DEVICE_IDENTITY_REQUIRE_ON_CHECKIN=0
 ```
 
+For production-style anti-cheat defaults, combine with:
+
+```env
+HARDENED_PROFILE=1
+```
+
 Modes:
 - `disabled`: no hardware-identity checks.
 - `audit`: detect and emit telemetry/audit without blocking traffic.

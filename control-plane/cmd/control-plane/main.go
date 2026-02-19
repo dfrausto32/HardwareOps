@@ -32,6 +32,10 @@ func main() {
 	cfg := config.FromEnv()
 	logger := log.New(os.Stdout, "", log.LstdFlags)
 
+	if err := config.ValidateHardening(cfg); err != nil {
+		logger.Fatalf("hardened profile validation failed: %v", err)
+	}
+
 	if cfg.DatabaseURL == "" {
 		logger.Fatal("DATABASE_URL is required")
 	}

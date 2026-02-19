@@ -70,6 +70,12 @@ In `.env.onprem`:
 TRUST_PROXY=1
 TRUST_PROXY_CIDRS=<gateway-or-proxy-subnets>
 CLIENT_CERT_HEADER=X-Client-Cert
+HARDENED_PROFILE=1
+AUTH_MODE=local
+LICENSE_ENFORCE=1
+DEVICE_IDENTITY_MODE=enforce
+DEVICE_IDENTITY_REQUIRE_ON_ENROLL=1
+DEVICE_IDENTITY_REQUIRE_ON_CHECKIN=1
 ```
 
 Do **not** use:
@@ -82,6 +88,12 @@ Use only your reverse proxy host/subnet(s).
 
 ```bash
 docker exec -it hardwareops-control-plane-1 env | egrep 'TRUST_PROXY|TRUST_PROXY_CIDRS|CLIENT_CERT_HEADER'
+```
+
+And verify hardening profile variables:
+
+```bash
+docker exec -it hardwareops-control-plane-1 env | egrep 'HARDENED_PROFILE|AUTH_MODE|LICENSE_ENFORCE|DEVICE_IDENTITY_MODE|DEVICE_IDENTITY_REQUIRE_ON_ENROLL|DEVICE_IDENTITY_REQUIRE_ON_CHECKIN'
 ```
 
 ---

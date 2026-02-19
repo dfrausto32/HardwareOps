@@ -21,7 +21,7 @@ import {
   setDesiredStateGroup,
   clearDesiredStateGroup,
   getDeviceLogs,
-  deleteDevice,
+  decommissionDevice,
   deleteArtifact,
   getMaintenance,
   setMaintenance,
@@ -1746,12 +1746,28 @@ export default function App() {
   }
 
   async function handleDeleteDevice(deviceId) {
-    const ok = window.confirm(`Delete device ${deviceId}? This will remove desired state and apply history.`)
-    if (!ok) return
-    setDevicesStatus('Deleting device...')
+    if (authStatus.enabled && !isAdmin) {
+      setDevicesError('Admin role required to decommission devices')
+      return
+    }
+    const reasonInput = window.prompt(
+      `Decommission device ${deviceId}.\nThis releases a license slot and removes desired state/apply history.\nEnter reason:`,
+      '',
+    )
+    if (reasonInput === null) return
+    const reason = reasonInput.trim()
+    if (!reason) {
+      setDevicesError('Decommission reason is required')
+      return
+    }
+    setDevicesStatus('Decommissioning device...')
     try {
-      await deleteDevice(deviceId)
-      setDevicesStatus(`Deleted device ${deviceId}`)
+      const resp = await decommissionDevice(deviceId, { reason })
+      if (resp?.slotBefore !== undefined && resp?.slotAfter !== undefined) {
+        setDevicesStatus(`Decommissioned device ${deviceId} (slots ${resp.slotBefore} -> ${resp.slotAfter})`)
+      } else {
+        setDevicesStatus(`Decommissioned device ${deviceId}`)
+      }
       if (selectedDeviceId === deviceId) {
         setSelectedDeviceId('')
         setDeviceDetail(null)
@@ -5084,8 +5100,9 @@ export default function App() {
                   <button
                     className="button ghost"
                     onClick={() => handleDeleteDevice(selectedDeviceId)}
+                    disabled={authStatus.enabled && !isAdmin}
                   >
-                    Delete Device
+                    Decommission Device
                   </button>
                 </div>
               </div>

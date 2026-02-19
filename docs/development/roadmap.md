@@ -182,7 +182,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Notes:** API + UI support status, retention policy (Settings), deprecate/restore, reference counts, manual prune (Artifacts), and scheduled auto-prune with telemetry/alerts.
 
 #### License anti-cheat hardening
-- **Status:** 🟡 In progress
+- **Status:** 🟢 Complete
 - **Scope:** Make license-cap bypass and device-clone abuse painful/detectable in on-prem environments.
 - **Dependencies:** Enrollment transaction flow, mTLS identity metadata, audit/runtime events, deployment guardrails.
 - **Risks:** False positives on clone detection and operator friction on decommission workflows.
@@ -194,6 +194,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
   - Trusted-proxy allowlist is enforced for forwarded client-cert headers.
   - Device slot reclaim/decommission path is explicit and auditable (no silent quota bypass by deletes).
 - **Notes:** Shipped now: transactional device cap enforcement, clone-suspicion runtime/audit events, and hardware identity audit/enforce checks (`device-identity-hardening.md`). Remaining hardening items are scheduled in Phase B.
+- **Notes:** Shipped: transactional cap enforcement, clone-suspicion runtime/audit events, hardware identity audit/enforce checks (`device-identity-hardening.md`), hardened startup profile guardrails (`HARDENED_PROFILE`), and explicit admin decommission endpoint for auditable slot reclaim (`POST /api/v1/devices/{deviceId}/decommission`).
 
 #### Release channels
 - **Status:** ⬜ Planned
@@ -221,8 +222,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 
 ### Recommended Next Sequence (Current)
 1. **Release channels:** Add stable/canary promotion and staged rollout targeting.
-2. **License anti-cheat hardening:** Complete remaining guardrails and decommission/reclaim workflow validation.
-3. **Phase B closeout:** Run end-to-end validation + docs cleanup for CI/release workflow handoff.
+2. **Phase B closeout:** Run end-to-end validation + docs cleanup for CI/release workflow handoff.
 
 ---
 

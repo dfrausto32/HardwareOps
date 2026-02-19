@@ -127,3 +127,67 @@ func TestPatchDevice_InvalidLabels(t *testing.T) {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
+
+func TestDecommissionDevice(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+
+	id := uuid.NewString()
+	if err := mem.UpsertDevice(store.Device{DeviceID: id, Status: "active", LastSeen: time.Now().UTC()}); err != nil {
+		t.Fatalf("upsert device: %v", err)
+	}
+	if err := mem.UpsertDesiredStateDevice(store.DesiredStateDevice{DeviceID: id, Source: "manual"}); err != nil {
+		t.Fatalf("upsert desired state: %v", err)
+	}
+
+	body := []byte(`{"reason":"device retired","ticketId":"OPS-123","notes":"customer returned unit"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+id+"/decommission", bytes.NewReader(body))
+	req = withURLParam(req, "deviceId", id)
+	w := httptest.NewRecorder()
+
+	DecommissionDevice(logger, mem, false).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+
+	var resp DeviceDecommissionResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid response json: %v", err)
+	}
+	if resp.DeviceID != id {
+		t.Fatalf("unexpected deviceId: %s", resp.DeviceID)
+	}
+	if !resp.ReleasedSlot {
+		t.Fatalf("expected released slot")
+	}
+	if resp.SlotBefore != 1 || resp.SlotAfter != 0 {
+		t.Fatalf("expected slot transition 1->0, got %d->%d", resp.SlotBefore, resp.SlotAfter)
+	}
+
+	if _, ok, err := mem.GetDevice(id); err != nil {
+		t.Fatalf("get device: %v", err)
+	} else if ok {
+		t.Fatalf("expected device deleted")
+	}
+	if _, ok, err := mem.GetDesiredStateDevice(id); err != nil {
+		t.Fatalf("get desired state: %v", err)
+	} else if ok {
+		t.Fatalf("expected desired state deleted")
+	}
+}
+
+func TestDeleteDeviceRejected(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+	id := uuid.NewString()
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/devices/"+id, nil)
+	req = withURLParam(req, "deviceId", id)
+	w := httptest.NewRecorder()
+
+	DeleteDevice(logger, mem, false).ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}

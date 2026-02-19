@@ -131,6 +131,7 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(viewer).Get("/devices", handlers.ListDevices(logger, deps.Store, deps.TrustProxy))
 		r.With(viewer).Get("/devices/{deviceId}", handlers.GetDevice(logger, deps.Store, deps.TrustProxy))
 		r.With(operator).Delete("/devices/{deviceId}", handlers.DeleteDevice(logger, deps.Store, deps.TrustProxy))
+		r.With(admin).Post("/devices/{deviceId}/decommission", handlers.DecommissionDevice(logger, deps.Store, deps.TrustProxy))
 		r.With(operator).Patch("/devices/{deviceId}", handlers.PatchDevice(logger, deps.Store, deps.TrustProxy))
 		r.With(applyLimiter.Middleware).Post("/devices/{deviceId}/apply-result", handlers.PostApplyResult(logger, deps.Store, deps.Events, deps.TrustProxy, deps.ClientCertHeader, deps.Metrics))
 		var activeCAPool func() *x509.CertPool
