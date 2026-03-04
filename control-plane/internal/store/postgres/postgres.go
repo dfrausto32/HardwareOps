@@ -150,6 +150,1095 @@ func (s *Store) EnrollDeviceWithToken(tokenHash string, device store.Device, max
 	return tx.Commit(ctx)
 }
 
+func (s *Store) CreateEnrollmentProfile(profile store.EnrollmentProfile) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if profile.ProfileID == "" {
+		return errors.New("profile_id required")
+	}
+	if profile.Name == "" {
+		return errors.New("name required")
+	}
+	if profile.TokenHash == "" {
+		return errors.New("token_hash required")
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO enrollment_profiles (
+			profile_id, name, token_hash, previous_token_hash, previous_token_expires_at, token_rotated_at, require_approval, allow_untrusted_hw,
+			challenge_hash, challenge_hint, approval_delay_seconds,
+			max_uses, uses, expires_at, default_labels, created_at, created_by, disabled
+		)
+		VALUES (
+			$1::uuid, $2, $3, NULLIF($4, ''), $5, $6, $7, $8,
+			$9, $10, $11,
+			$12, $13, $14, $15, COALESCE($16, now()), $17, $18
+		)
+	`, profile.ProfileID, profile.Name, profile.TokenHash, nullIfEmpty(profile.PreviousTokenHash), nullIfZeroTime(profile.PreviousTokenExpiresAt), nullIfZeroTime(profile.TokenRotatedAt), profile.RequireApproval, profile.AllowUntrustedHW,
+		nullIfEmpty(profile.ChallengeHash), nullIfEmpty(profile.ChallengeHint), profile.ApprovalDelaySec,
+		profile.MaxUses, profile.Uses, nullIfZeroTime(profile.ExpiresAt), nullIfEmptyBytes(profile.DefaultLabelsJSON),
+		nullIfZeroTime(profile.CreatedAt), nullIfEmpty(profile.CreatedBy), profile.Disabled)
+	return err
+}
+
+func (s *Store) ListEnrollmentProfiles() ([]store.EnrollmentProfile, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			profile_id::text,
+			name,
+			token_hash,
+			COALESCE(previous_token_hash, ''),
+			previous_token_expires_at,
+			token_rotated_at,
+			require_approval,
+			allow_untrusted_hw,
+			COALESCE(challenge_hash, ''),
+			COALESCE(challenge_hint, ''),
+			approval_delay_seconds,
+			max_uses,
+			uses,
+			expires_at,
+			created_at,
+			created_by,
+			disabled,
+			default_labels
+		FROM enrollment_profiles
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []store.EnrollmentProfile{}
+	for rows.Next() {
+		profile, err := scanEnrollmentProfile(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, profile)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) GetEnrollmentProfile(profileID string) (store.EnrollmentProfile, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	row := s.pool.QueryRow(ctx, `
+		SELECT
+			profile_id::text,
+			name,
+			token_hash,
+			COALESCE(previous_token_hash, ''),
+			previous_token_expires_at,
+			token_rotated_at,
+			require_approval,
+			allow_untrusted_hw,
+			COALESCE(challenge_hash, ''),
+			COALESCE(challenge_hint, ''),
+			approval_delay_seconds,
+			max_uses,
+			uses,
+			expires_at,
+			created_at,
+			created_by,
+			disabled,
+			default_labels
+		FROM enrollment_profiles
+		WHERE profile_id = $1::uuid
+	`, profileID)
+	profile, err := scanEnrollmentProfile(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileNotFound
+	}
+	if err != nil {
+		return store.EnrollmentProfile{}, err
+	}
+	return profile, nil
+}
+
+func (s *Store) UpdateEnrollmentProfile(profileID string, update store.EnrollmentProfileUpdate) (store.EnrollmentProfile, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	row := s.pool.QueryRow(ctx, `
+		UPDATE enrollment_profiles
+		SET
+			name = $2,
+			require_approval = $3,
+			allow_untrusted_hw = $4,
+			challenge_hash = NULLIF($5, ''),
+			challenge_hint = NULLIF($6, ''),
+			approval_delay_seconds = $7,
+			max_uses = $8,
+			default_labels = $9
+		WHERE profile_id = $1::uuid
+		RETURNING
+			profile_id::text,
+			name,
+			token_hash,
+			COALESCE(previous_token_hash, ''),
+			previous_token_expires_at,
+			token_rotated_at,
+			require_approval,
+			allow_untrusted_hw,
+			COALESCE(challenge_hash, ''),
+			COALESCE(challenge_hint, ''),
+			approval_delay_seconds,
+			max_uses,
+			uses,
+			expires_at,
+			created_at,
+			created_by,
+			disabled,
+			default_labels
+	`, profileID, update.Name, update.RequireApproval, update.AllowUntrustedHW, update.ChallengeHash, update.ChallengeHint, update.ApprovalDelaySec, update.MaxUses, nullIfEmptyBytes(update.DefaultLabelsJSON))
+	profile, err := scanEnrollmentProfile(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileNotFound
+	}
+	if err != nil {
+		return store.EnrollmentProfile{}, err
+	}
+	return profile, nil
+}
+
+func (s *Store) SetEnrollmentProfileDisabled(profileID string, disabled bool) (store.EnrollmentProfile, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	row := s.pool.QueryRow(ctx, `
+		UPDATE enrollment_profiles
+		SET disabled = $2
+		WHERE profile_id = $1::uuid
+		RETURNING
+			profile_id::text,
+			name,
+			token_hash,
+			COALESCE(previous_token_hash, ''),
+			previous_token_expires_at,
+			token_rotated_at,
+			require_approval,
+			allow_untrusted_hw,
+			COALESCE(challenge_hash, ''),
+			COALESCE(challenge_hint, ''),
+			approval_delay_seconds,
+			max_uses,
+			uses,
+			expires_at,
+			created_at,
+			created_by,
+			disabled,
+			default_labels
+	`, profileID, disabled)
+	profile, err := scanEnrollmentProfile(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileNotFound
+	}
+	if err != nil {
+		return store.EnrollmentProfile{}, err
+	}
+	return profile, nil
+}
+
+func (s *Store) RotateEnrollmentProfileToken(profileID, tokenHash string, previousTokenValidUntil time.Time) (store.EnrollmentProfile, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if tokenHash == "" {
+		return store.EnrollmentProfile{}, errors.New("token_hash required")
+	}
+	prevUntil := nullIfZeroTime(previousTokenValidUntil)
+	row := s.pool.QueryRow(ctx, `
+		UPDATE enrollment_profiles
+		SET
+			previous_token_hash = CASE WHEN $3 IS NULL THEN NULL ELSE token_hash END,
+			previous_token_expires_at = $3,
+			token_hash = $2,
+			token_rotated_at = now()
+		WHERE profile_id = $1::uuid
+		RETURNING
+			profile_id::text,
+			name,
+			token_hash,
+			COALESCE(previous_token_hash, ''),
+			previous_token_expires_at,
+			token_rotated_at,
+			require_approval,
+			allow_untrusted_hw,
+			COALESCE(challenge_hash, ''),
+			COALESCE(challenge_hint, ''),
+			approval_delay_seconds,
+			max_uses,
+			uses,
+			expires_at,
+			created_at,
+			created_by,
+			disabled,
+			default_labels
+	`, profileID, tokenHash, prevUntil)
+	profile, err := scanEnrollmentProfile(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileNotFound
+	}
+	if err != nil {
+		return store.EnrollmentProfile{}, err
+	}
+	return profile, nil
+}
+
+func (s *Store) GetEnrollmentProfileByTokenHash(profileTokenHash string) (store.EnrollmentProfile, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if profileTokenHash == "" {
+		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileInvalid
+	}
+	row := s.pool.QueryRow(ctx, `
+		SELECT
+			profile_id::text,
+			name,
+			token_hash,
+			COALESCE(previous_token_hash, ''),
+			previous_token_expires_at,
+			token_rotated_at,
+			require_approval,
+			allow_untrusted_hw,
+			COALESCE(challenge_hash, ''),
+			COALESCE(challenge_hint, ''),
+			approval_delay_seconds,
+			max_uses,
+			uses,
+			expires_at,
+			created_at,
+			created_by,
+			disabled,
+			default_labels
+		FROM enrollment_profiles
+		WHERE token_hash = $1
+			OR previous_token_hash = $1
+	`, profileTokenHash)
+	profile, err := scanEnrollmentProfile(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileInvalid
+	}
+	if err != nil {
+		return store.EnrollmentProfile{}, err
+	}
+	now := time.Now().UTC()
+	if profile.Disabled || (!profile.ExpiresAt.IsZero() && now.After(profile.ExpiresAt)) {
+		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileInvalid
+	}
+	if profile.PreviousTokenHash == profileTokenHash && (profile.PreviousTokenExpiresAt.IsZero() || now.After(profile.PreviousTokenExpiresAt)) {
+		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileInvalid
+	}
+	if profile.MaxUses > 0 && profile.Uses >= profile.MaxUses {
+		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileExhausted
+	}
+	return profile, nil
+}
+
+func (s *Store) CreatePendingEnrollmentForProfileToken(profileTokenHash string, pending store.PendingEnrollment) (store.EnrollmentProfile, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if profileTokenHash == "" {
+		return store.EnrollmentProfile{}, errors.New("profile_token_hash required")
+	}
+	if pending.RequestID == "" {
+		return store.EnrollmentProfile{}, errors.New("request_id required")
+	}
+	if pending.ClaimTokenHash == "" {
+		return store.EnrollmentProfile{}, errors.New("claim_token_hash required")
+	}
+	if pending.CSR == "" {
+		return store.EnrollmentProfile{}, errors.New("csr required")
+	}
+	if pending.ExpiresAt.IsZero() {
+		return store.EnrollmentProfile{}, errors.New("expires_at required")
+	}
+	if pending.Status == "" {
+		pending.Status = "pending"
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return store.EnrollmentProfile{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	profileRow := tx.QueryRow(ctx, `
+		SELECT
+			profile_id::text,
+			name,
+			token_hash,
+			COALESCE(previous_token_hash, ''),
+			previous_token_expires_at,
+			token_rotated_at,
+			require_approval,
+			allow_untrusted_hw,
+			COALESCE(challenge_hash, ''),
+			COALESCE(challenge_hint, ''),
+			approval_delay_seconds,
+			max_uses,
+			uses,
+			expires_at,
+			created_at,
+			created_by,
+			disabled,
+			default_labels
+		FROM enrollment_profiles
+		WHERE token_hash = $1
+			OR previous_token_hash = $1
+		FOR UPDATE
+	`, profileTokenHash)
+	profile, err := scanEnrollmentProfile(profileRow)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileInvalid
+	}
+	if err != nil {
+		return store.EnrollmentProfile{}, err
+	}
+	now := time.Now().UTC()
+	if profile.Disabled || (!profile.ExpiresAt.IsZero() && now.After(profile.ExpiresAt)) {
+		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileInvalid
+	}
+	if profile.PreviousTokenHash == profileTokenHash && (profile.PreviousTokenExpiresAt.IsZero() || now.After(profile.PreviousTokenExpiresAt)) {
+		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileInvalid
+	}
+	if profile.MaxUses > 0 && profile.Uses >= profile.MaxUses {
+		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileExhausted
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO pending_enrollments (
+			request_id,
+			profile_id,
+			status,
+			csr,
+			claim_token_hash,
+			capabilities,
+			metadata,
+			source_ip,
+			user_agent,
+			agent_version,
+			hardware_id,
+			denied_reason,
+			expires_at,
+			approval_available_at,
+			approved_at,
+			approved_by_user_id,
+			denied_at,
+			denied_by_user_id,
+			issued_at,
+			issued_device_id,
+			created_at
+		)
+		VALUES (
+			$1::uuid,
+			$2::uuid,
+			$3,
+			$4,
+			$5,
+			$6,
+			$7,
+			$8,
+			$9,
+			$10,
+			$11,
+			$12,
+			$13,
+			$14,
+			$15,
+			$16::uuid,
+			$17,
+			$18::uuid,
+			$19,
+			$20::uuid,
+			COALESCE($21, now())
+		)
+	`, pending.RequestID, profile.ProfileID, pending.Status, pending.CSR, pending.ClaimTokenHash,
+		nullIfEmptyBytes(pending.CapabilitiesJSON), nullIfEmptyBytes(pending.MetadataJSON),
+		nullIfEmpty(pending.SourceIP), nullIfEmpty(pending.UserAgent), nullIfEmpty(pending.AgentVersion),
+		nullIfEmpty(pending.HardwareID), nullIfEmpty(pending.DeniedReason),
+		pending.ExpiresAt, nullIfZeroTime(pending.ApprovalAvailableAt), nullIfZeroTime(pending.ApprovedAt), nullIfEmpty(pending.ApprovedByUserID),
+		nullIfZeroTime(pending.DeniedAt), nullIfEmpty(pending.DeniedByUserID),
+		nullIfZeroTime(pending.IssuedAt), nullIfEmpty(pending.IssuedDeviceID),
+		nullIfZeroTime(pending.CreatedAt))
+	if err != nil {
+		return store.EnrollmentProfile{}, err
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE enrollment_profiles
+		SET uses = uses + 1
+		WHERE profile_id = $1::uuid
+	`, profile.ProfileID); err != nil {
+		return store.EnrollmentProfile{}, err
+	}
+	profile.Uses += 1
+
+	if err := tx.Commit(ctx); err != nil {
+		return store.EnrollmentProfile{}, err
+	}
+	return profile, nil
+}
+
+func (s *Store) ListPendingEnrollments(filter store.PendingEnrollmentFilter) ([]store.PendingEnrollment, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			request_id::text,
+			profile_id::text,
+			status,
+			csr,
+			COALESCE(claim_token_hash, ''),
+			capabilities,
+			metadata,
+			COALESCE(source_ip, ''),
+			COALESCE(user_agent, ''),
+			COALESCE(agent_version, ''),
+			COALESCE(hardware_id, ''),
+			COALESCE(denied_reason, ''),
+			expires_at,
+			COALESCE(approval_available_at, created_at),
+			COALESCE(approved_at, 'epoch'::timestamptz),
+			COALESCE(approved_by_user_id::text, ''),
+			COALESCE(denied_at, 'epoch'::timestamptz),
+			COALESCE(denied_by_user_id::text, ''),
+			COALESCE(issued_at, 'epoch'::timestamptz),
+			COALESCE(issued_device_id::text, ''),
+			created_at
+		FROM pending_enrollments
+		WHERE ($1 = '' OR status = $1)
+		ORDER BY created_at DESC
+		LIMIT $2 OFFSET $3
+	`, filter.Status, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]store.PendingEnrollment, 0, limit)
+	for rows.Next() {
+		var row store.PendingEnrollment
+		if err := rows.Scan(
+			&row.RequestID,
+			&row.ProfileID,
+			&row.Status,
+			&row.CSR,
+			&row.ClaimTokenHash,
+			&row.CapabilitiesJSON,
+			&row.MetadataJSON,
+			&row.SourceIP,
+			&row.UserAgent,
+			&row.AgentVersion,
+			&row.HardwareID,
+			&row.DeniedReason,
+			&row.ExpiresAt,
+			&row.ApprovalAvailableAt,
+			&row.ApprovedAt,
+			&row.ApprovedByUserID,
+			&row.DeniedAt,
+			&row.DeniedByUserID,
+			&row.IssuedAt,
+			&row.IssuedDeviceID,
+			&row.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) ApprovePendingEnrollment(requestID, approvedByUserID string, at time.Time) (store.PendingEnrollment, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if requestID == "" {
+		return store.PendingEnrollment{}, errors.New("request_id required")
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	row := s.pool.QueryRow(ctx, `
+		UPDATE pending_enrollments
+		SET
+			status = 'approved',
+			approved_at = $2,
+			approved_by_user_id = NULLIF($3, '')::uuid
+		WHERE request_id = $1::uuid
+		  AND status = 'pending'
+		  AND COALESCE(approval_available_at, created_at) <= $2
+		  AND expires_at > now()
+		RETURNING
+			request_id::text,
+			profile_id::text,
+			status,
+			csr,
+			COALESCE(claim_token_hash, ''),
+			capabilities,
+			metadata,
+			COALESCE(source_ip, ''),
+			COALESCE(user_agent, ''),
+			COALESCE(agent_version, ''),
+			COALESCE(hardware_id, ''),
+			COALESCE(denied_reason, ''),
+			expires_at,
+			COALESCE(approval_available_at, created_at),
+			COALESCE(approved_at, 'epoch'::timestamptz),
+			COALESCE(approved_by_user_id::text, ''),
+			COALESCE(denied_at, 'epoch'::timestamptz),
+			COALESCE(denied_by_user_id::text, ''),
+			COALESCE(issued_at, 'epoch'::timestamptz),
+			COALESCE(issued_device_id::text, ''),
+			created_at
+	`, requestID, at, approvedByUserID)
+	pending, err := scanPendingEnrollment(row)
+	if err == nil {
+		return pending, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return store.PendingEnrollment{}, err
+	}
+	current, ok, err := s.pendingEnrollmentByID(ctx, requestID)
+	if err != nil {
+		return store.PendingEnrollment{}, err
+	}
+	if !ok {
+		return store.PendingEnrollment{}, store.ErrPendingEnrollmentNotFound
+	}
+	if current.Status == "pending" && !current.ApprovalAvailableAt.IsZero() && current.ApprovalAvailableAt.After(at) {
+		return current, store.ErrPendingEnrollmentThrottled
+	}
+	return store.PendingEnrollment{}, store.ErrPendingEnrollmentState
+}
+
+func (s *Store) DenyPendingEnrollment(requestID, reason, deniedByUserID string, at time.Time) (store.PendingEnrollment, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if requestID == "" {
+		return store.PendingEnrollment{}, errors.New("request_id required")
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	row := s.pool.QueryRow(ctx, `
+		UPDATE pending_enrollments
+		SET
+			status = 'denied',
+			denied_reason = NULLIF($2, ''),
+			denied_at = $3,
+			denied_by_user_id = NULLIF($4, '')::uuid
+		WHERE request_id = $1::uuid
+		  AND status IN ('pending', 'approved')
+		RETURNING
+			request_id::text,
+			profile_id::text,
+			status,
+			csr,
+			COALESCE(claim_token_hash, ''),
+			capabilities,
+			metadata,
+			COALESCE(source_ip, ''),
+			COALESCE(user_agent, ''),
+			COALESCE(agent_version, ''),
+			COALESCE(hardware_id, ''),
+			COALESCE(denied_reason, ''),
+			expires_at,
+			COALESCE(approval_available_at, created_at),
+			COALESCE(approved_at, 'epoch'::timestamptz),
+			COALESCE(approved_by_user_id::text, ''),
+			COALESCE(denied_at, 'epoch'::timestamptz),
+			COALESCE(denied_by_user_id::text, ''),
+			COALESCE(issued_at, 'epoch'::timestamptz),
+			COALESCE(issued_device_id::text, ''),
+			created_at
+	`, requestID, reason, at, deniedByUserID)
+	pending, err := scanPendingEnrollment(row)
+	if err == nil {
+		return pending, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return store.PendingEnrollment{}, err
+	}
+	_, ok, err := s.pendingEnrollmentByID(ctx, requestID)
+	if err != nil {
+		return store.PendingEnrollment{}, err
+	}
+	if !ok {
+		return store.PendingEnrollment{}, store.ErrPendingEnrollmentNotFound
+	}
+	return store.PendingEnrollment{}, store.ErrPendingEnrollmentState
+}
+
+func (s *Store) ConflictPendingEnrollment(requestID, reason string, at time.Time) (store.PendingEnrollment, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if requestID == "" {
+		return store.PendingEnrollment{}, errors.New("request_id required")
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	row := s.pool.QueryRow(ctx, `
+		UPDATE pending_enrollments
+		SET
+			status = 'conflict',
+			denied_reason = NULLIF($2, ''),
+			denied_at = $3
+		WHERE request_id = $1::uuid
+		  AND status IN ('pending', 'approved')
+		RETURNING
+			request_id::text,
+			profile_id::text,
+			status,
+			csr,
+			COALESCE(claim_token_hash, ''),
+			capabilities,
+			metadata,
+			COALESCE(source_ip, ''),
+			COALESCE(user_agent, ''),
+			COALESCE(agent_version, ''),
+			COALESCE(hardware_id, ''),
+			COALESCE(denied_reason, ''),
+			expires_at,
+			COALESCE(approval_available_at, created_at),
+			COALESCE(approved_at, 'epoch'::timestamptz),
+			COALESCE(approved_by_user_id::text, ''),
+			COALESCE(denied_at, 'epoch'::timestamptz),
+			COALESCE(denied_by_user_id::text, ''),
+			COALESCE(issued_at, 'epoch'::timestamptz),
+			COALESCE(issued_device_id::text, ''),
+			created_at
+	`, requestID, reason, at)
+	pending, err := scanPendingEnrollment(row)
+	if err == nil {
+		return pending, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return store.PendingEnrollment{}, err
+	}
+	_, ok, err := s.pendingEnrollmentByID(ctx, requestID)
+	if err != nil {
+		return store.PendingEnrollment{}, err
+	}
+	if !ok {
+		return store.PendingEnrollment{}, store.ErrPendingEnrollmentNotFound
+	}
+	return store.PendingEnrollment{}, store.ErrPendingEnrollmentState
+}
+
+func (s *Store) ResetPendingEnrollment(requestID string, expiresAt time.Time) (store.PendingEnrollment, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if requestID == "" {
+		return store.PendingEnrollment{}, errors.New("request_id required")
+	}
+	if expiresAt.IsZero() {
+		expiresAt = time.Now().UTC().Add(15 * time.Minute)
+	}
+	row := s.pool.QueryRow(ctx, `
+		UPDATE pending_enrollments
+		SET
+			status = 'pending',
+			expires_at = $2,
+			denied_reason = NULL,
+			approved_at = NULL,
+			approved_by_user_id = NULL,
+			denied_at = NULL,
+			denied_by_user_id = NULL,
+			issued_at = NULL,
+			issued_device_id = NULL
+		WHERE request_id = $1::uuid
+		  AND status IN ('denied', 'conflict', 'expired')
+		RETURNING
+			request_id::text,
+			profile_id::text,
+			status,
+			csr,
+			COALESCE(claim_token_hash, ''),
+			capabilities,
+			metadata,
+			COALESCE(source_ip, ''),
+			COALESCE(user_agent, ''),
+			COALESCE(agent_version, ''),
+			COALESCE(hardware_id, ''),
+			COALESCE(denied_reason, ''),
+			expires_at,
+			COALESCE(approval_available_at, created_at),
+			COALESCE(approved_at, 'epoch'::timestamptz),
+			COALESCE(approved_by_user_id::text, ''),
+			COALESCE(denied_at, 'epoch'::timestamptz),
+			COALESCE(denied_by_user_id::text, ''),
+			COALESCE(issued_at, 'epoch'::timestamptz),
+			COALESCE(issued_device_id::text, ''),
+			created_at
+	`, requestID, expiresAt)
+	pending, err := scanPendingEnrollment(row)
+	if err == nil {
+		return pending, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return store.PendingEnrollment{}, err
+	}
+	_, ok, err := s.pendingEnrollmentByID(ctx, requestID)
+	if err != nil {
+		return store.PendingEnrollment{}, err
+	}
+	if !ok {
+		return store.PendingEnrollment{}, store.ErrPendingEnrollmentNotFound
+	}
+	return store.PendingEnrollment{}, store.ErrPendingEnrollmentState
+}
+
+func (s *Store) ExpirePendingEnrollments(before time.Time) (int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE pending_enrollments
+		SET status = 'expired'
+		WHERE status IN ('pending', 'approved')
+		  AND expires_at <= $1
+	`, before)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}
+
+func (s *Store) CountActivePendingEnrollments(profileID, sourceIP string, now time.Time) (int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var count int
+	err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM pending_enrollments
+		WHERE status IN ('pending', 'approved')
+		  AND expires_at > $1
+		  AND ($2 = '' OR profile_id = $2::uuid)
+		  AND ($3 = '' OR source_ip = $3)
+	`, now, profileID, sourceIP).Scan(&count)
+	return count, err
+}
+
+func (s *Store) GetPendingEnrollmentForClaim(requestID, claimTokenHash string) (store.PendingEnrollment, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if requestID == "" || claimTokenHash == "" {
+		return store.PendingEnrollment{}, false, nil
+	}
+	row := s.pool.QueryRow(ctx, `
+		SELECT
+			request_id::text,
+			profile_id::text,
+			status,
+			csr,
+			COALESCE(claim_token_hash, ''),
+			capabilities,
+			metadata,
+			COALESCE(source_ip, ''),
+			COALESCE(user_agent, ''),
+			COALESCE(agent_version, ''),
+			COALESCE(hardware_id, ''),
+			COALESCE(denied_reason, ''),
+			expires_at,
+			COALESCE(approval_available_at, created_at),
+			COALESCE(approved_at, 'epoch'::timestamptz),
+			COALESCE(approved_by_user_id::text, ''),
+			COALESCE(denied_at, 'epoch'::timestamptz),
+			COALESCE(denied_by_user_id::text, ''),
+			COALESCE(issued_at, 'epoch'::timestamptz),
+			COALESCE(issued_device_id::text, ''),
+			created_at
+		FROM pending_enrollments
+		WHERE request_id = $1::uuid AND claim_token_hash = $2
+	`, requestID, claimTokenHash)
+	pending, err := scanPendingEnrollment(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.PendingEnrollment{}, false, nil
+	}
+	if err != nil {
+		return store.PendingEnrollment{}, false, err
+	}
+	if (pending.Status == "pending" || pending.Status == "approved") && time.Now().UTC().After(pending.ExpiresAt) {
+		if _, err := s.pool.Exec(ctx, `
+			UPDATE pending_enrollments
+			SET status = 'expired'
+			WHERE request_id = $1::uuid
+			  AND status IN ('pending', 'approved')
+			  AND expires_at <= now()
+		`, requestID); err != nil {
+			return store.PendingEnrollment{}, false, err
+		}
+		pending.Status = "expired"
+	}
+	return pending, true, nil
+}
+
+func (s *Store) MarkPendingEnrollmentIssued(requestID, claimTokenHash string, device store.Device, maxDevices int, issuedAt time.Time) (store.PendingEnrollment, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if requestID == "" {
+		return store.PendingEnrollment{}, errors.New("request_id required")
+	}
+	if claimTokenHash == "" {
+		return store.PendingEnrollment{}, errors.New("claim_token_hash required")
+	}
+	if device.DeviceID == "" {
+		return store.PendingEnrollment{}, errors.New("device_id required")
+	}
+	if issuedAt.IsZero() {
+		issuedAt = time.Now().UTC()
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return store.PendingEnrollment{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	row := tx.QueryRow(ctx, `
+		SELECT
+			request_id::text,
+			profile_id::text,
+			status,
+			csr,
+			COALESCE(claim_token_hash, ''),
+			capabilities,
+			metadata,
+			COALESCE(source_ip, ''),
+			COALESCE(user_agent, ''),
+			COALESCE(agent_version, ''),
+			COALESCE(hardware_id, ''),
+			COALESCE(denied_reason, ''),
+			expires_at,
+			COALESCE(approval_available_at, created_at),
+			COALESCE(approved_at, 'epoch'::timestamptz),
+			COALESCE(approved_by_user_id::text, ''),
+			COALESCE(denied_at, 'epoch'::timestamptz),
+			COALESCE(denied_by_user_id::text, ''),
+			COALESCE(issued_at, 'epoch'::timestamptz),
+			COALESCE(issued_device_id::text, ''),
+			created_at
+		FROM pending_enrollments
+		WHERE request_id = $1::uuid
+		FOR UPDATE
+	`, requestID)
+	pending, err := scanPendingEnrollment(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.PendingEnrollment{}, store.ErrPendingEnrollmentNotFound
+	}
+	if err != nil {
+		return store.PendingEnrollment{}, err
+	}
+	if pending.ClaimTokenHash != claimTokenHash {
+		return store.PendingEnrollment{}, store.ErrPendingEnrollmentToken
+	}
+	if (pending.Status == "pending" || pending.Status == "approved") && time.Now().UTC().After(pending.ExpiresAt) {
+		if _, err := tx.Exec(ctx, `
+			UPDATE pending_enrollments
+			SET status = 'expired'
+			WHERE request_id = $1::uuid
+		`, requestID); err != nil {
+			return store.PendingEnrollment{}, err
+		}
+		return store.PendingEnrollment{}, store.ErrPendingEnrollmentState
+	}
+	if pending.Status != "approved" {
+		return store.PendingEnrollment{}, store.ErrPendingEnrollmentState
+	}
+
+	if maxDevices > 0 {
+		if _, err := tx.Exec(ctx, `LOCK TABLE devices IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+			return store.PendingEnrollment{}, err
+		}
+		var count int
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM devices`).Scan(&count); err != nil {
+			return store.PendingEnrollment{}, err
+		}
+		if count >= maxDevices {
+			return store.PendingEnrollment{}, store.ErrDeviceLimitExceeded
+		}
+	}
+
+	cert := nullIfEmpty(device.CertFingerprint)
+	labels := nullIfEmptyBytes(device.LabelsJSON)
+	metadata := nullIfEmptyBytes(device.MetadataJSON)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO devices (device_id, cert_fingerprint, status, last_seen, labels, metadata)
+		VALUES ($1::uuid, $2, $3, $4, $5, $6)
+	`, device.DeviceID, cert, device.Status, device.LastSeen, labels, metadata); err != nil {
+		return store.PendingEnrollment{}, err
+	}
+
+	row = tx.QueryRow(ctx, `
+		UPDATE pending_enrollments
+		SET
+			status = 'issued',
+			issued_at = $2,
+			issued_device_id = $3::uuid
+		WHERE request_id = $1::uuid
+		RETURNING
+			request_id::text,
+			profile_id::text,
+			status,
+			csr,
+			COALESCE(claim_token_hash, ''),
+			capabilities,
+			metadata,
+			COALESCE(source_ip, ''),
+			COALESCE(user_agent, ''),
+			COALESCE(agent_version, ''),
+			COALESCE(hardware_id, ''),
+			COALESCE(denied_reason, ''),
+			expires_at,
+			COALESCE(approval_available_at, created_at),
+			COALESCE(approved_at, 'epoch'::timestamptz),
+			COALESCE(approved_by_user_id::text, ''),
+			COALESCE(denied_at, 'epoch'::timestamptz),
+			COALESCE(denied_by_user_id::text, ''),
+			COALESCE(issued_at, 'epoch'::timestamptz),
+			COALESCE(issued_device_id::text, ''),
+			created_at
+	`, requestID, issuedAt, device.DeviceID)
+	pending, err = scanPendingEnrollment(row)
+	if err != nil {
+		return store.PendingEnrollment{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return store.PendingEnrollment{}, err
+	}
+	return pending, nil
+}
+
+func scanPendingEnrollment(row pgx.Row) (store.PendingEnrollment, error) {
+	var pending store.PendingEnrollment
+	err := row.Scan(
+		&pending.RequestID,
+		&pending.ProfileID,
+		&pending.Status,
+		&pending.CSR,
+		&pending.ClaimTokenHash,
+		&pending.CapabilitiesJSON,
+		&pending.MetadataJSON,
+		&pending.SourceIP,
+		&pending.UserAgent,
+		&pending.AgentVersion,
+		&pending.HardwareID,
+		&pending.DeniedReason,
+		&pending.ExpiresAt,
+		&pending.ApprovalAvailableAt,
+		&pending.ApprovedAt,
+		&pending.ApprovedByUserID,
+		&pending.DeniedAt,
+		&pending.DeniedByUserID,
+		&pending.IssuedAt,
+		&pending.IssuedDeviceID,
+		&pending.CreatedAt,
+	)
+	return pending, err
+}
+
+func scanEnrollmentProfile(row interface {
+	Scan(dest ...any) error
+}) (store.EnrollmentProfile, error) {
+	var profile store.EnrollmentProfile
+	var previousTokenHash sql.NullString
+	var previousTokenExpiresAt sql.NullTime
+	var tokenRotatedAt sql.NullTime
+	var expiresAt sql.NullTime
+	var createdBy sql.NullString
+	err := row.Scan(
+		&profile.ProfileID,
+		&profile.Name,
+		&profile.TokenHash,
+		&previousTokenHash,
+		&previousTokenExpiresAt,
+		&tokenRotatedAt,
+		&profile.RequireApproval,
+		&profile.AllowUntrustedHW,
+		&profile.ChallengeHash,
+		&profile.ChallengeHint,
+		&profile.ApprovalDelaySec,
+		&profile.MaxUses,
+		&profile.Uses,
+		&expiresAt,
+		&profile.CreatedAt,
+		&createdBy,
+		&profile.Disabled,
+		&profile.DefaultLabelsJSON,
+	)
+	if err != nil {
+		return store.EnrollmentProfile{}, err
+	}
+	if previousTokenHash.Valid {
+		profile.PreviousTokenHash = previousTokenHash.String
+	}
+	if previousTokenExpiresAt.Valid {
+		profile.PreviousTokenExpiresAt = previousTokenExpiresAt.Time
+	}
+	if tokenRotatedAt.Valid {
+		profile.TokenRotatedAt = tokenRotatedAt.Time
+	}
+	if expiresAt.Valid {
+		profile.ExpiresAt = expiresAt.Time
+	}
+	if createdBy.Valid {
+		profile.CreatedBy = createdBy.String
+	}
+	return profile, nil
+}
+
+func (s *Store) pendingEnrollmentByID(ctx context.Context, requestID string) (store.PendingEnrollment, bool, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT
+			request_id::text,
+			profile_id::text,
+			status,
+			csr,
+			COALESCE(claim_token_hash, ''),
+			capabilities,
+			metadata,
+			COALESCE(source_ip, ''),
+			COALESCE(user_agent, ''),
+			COALESCE(agent_version, ''),
+			COALESCE(hardware_id, ''),
+			COALESCE(denied_reason, ''),
+			expires_at,
+			COALESCE(approval_available_at, created_at),
+			COALESCE(approved_at, 'epoch'::timestamptz),
+			COALESCE(approved_by_user_id::text, ''),
+			COALESCE(denied_at, 'epoch'::timestamptz),
+			COALESCE(denied_by_user_id::text, ''),
+			COALESCE(issued_at, 'epoch'::timestamptz),
+			COALESCE(issued_device_id::text, ''),
+			created_at
+		FROM pending_enrollments
+		WHERE request_id = $1::uuid
+	`, requestID)
+	pending, err := scanPendingEnrollment(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.PendingEnrollment{}, false, nil
+	}
+	if err != nil {
+		return store.PendingEnrollment{}, false, err
+	}
+	return pending, true, nil
+}
+
 func (s *Store) CreateDevice(device store.Device) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -891,6 +1980,57 @@ func (s *Store) SetArtifactLifecyclePolicy(days int) (store.ArtifactLifecyclePol
 		return store.ArtifactLifecyclePolicy{}, err
 	}
 	return policy, nil
+}
+
+func (s *Store) GetReleaseAutoUpdateSettings() (store.ReleaseAutoUpdateSettings, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var settings store.ReleaseAutoUpdateSettings
+	err := s.pool.QueryRow(ctx, `
+		SELECT enabled, allow_unsigned, updated_at, COALESCE(updated_by_user_id, '')
+		FROM release_auto_update_settings
+		WHERE settings_id = 1
+	`).Scan(&settings.Enabled, &settings.AllowUnsigned, &settings.UpdatedAt, &settings.UpdatedByUserID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		now := time.Now().UTC()
+		return store.ReleaseAutoUpdateSettings{
+			Enabled:       false,
+			AllowUnsigned: false,
+			UpdatedAt:     now,
+		}, nil
+	}
+	if err != nil {
+		return store.ReleaseAutoUpdateSettings{}, err
+	}
+	return settings, nil
+}
+
+func (s *Store) SetReleaseAutoUpdateSettings(settings store.ReleaseAutoUpdateSettings) (store.ReleaseAutoUpdateSettings, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var out store.ReleaseAutoUpdateSettings
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO release_auto_update_settings (settings_id, enabled, allow_unsigned, updated_at, updated_by_user_id)
+		VALUES (1, $1, $2, now(), NULLIF($3, ''))
+		ON CONFLICT (settings_id)
+		DO UPDATE SET
+			enabled = EXCLUDED.enabled,
+			allow_unsigned = EXCLUDED.allow_unsigned,
+			updated_at = now(),
+			updated_by_user_id = EXCLUDED.updated_by_user_id
+		RETURNING enabled, allow_unsigned, updated_at, COALESCE(updated_by_user_id, '')
+	`, settings.Enabled, settings.AllowUnsigned, settings.UpdatedByUserID).Scan(
+		&out.Enabled,
+		&out.AllowUnsigned,
+		&out.UpdatedAt,
+		&out.UpdatedByUserID,
+	)
+	if err != nil {
+		return store.ReleaseAutoUpdateSettings{}, err
+	}
+	return out, nil
 }
 
 func (s *Store) DeleteArtifact(artifactID string) error {

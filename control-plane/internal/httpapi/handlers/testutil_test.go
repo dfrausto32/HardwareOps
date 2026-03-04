@@ -51,6 +51,29 @@ func attachMTLSDevice(t *testing.T, mem *memory.Store, req *http.Request, device
 	return req, deviceID
 }
 
+func attachExistingMTLSDevice(t *testing.T, mem *memory.Store, req *http.Request, deviceID string) *http.Request {
+	t.Helper()
+
+	certDER, fingerprint := newTestCert(t, deviceID)
+	device, ok, err := mem.GetDevice(deviceID)
+	if err != nil {
+		t.Fatalf("get device: %v", err)
+	}
+	if !ok {
+		t.Fatalf("device %s not found", deviceID)
+	}
+	device.CertFingerprint = fingerprint
+	if err := mem.UpsertDevice(device); err != nil {
+		t.Fatalf("update device fingerprint: %v", err)
+	}
+
+	req.TLS = &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{certDER},
+	}
+
+	return req
+}
+
 func newTestCert(t *testing.T, commonName string) (*x509.Certificate, string) {
 	t.Helper()
 

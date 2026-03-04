@@ -72,17 +72,46 @@ TRUST_PROXY_CIDRS=<gateway-or-proxy-subnets>
 CLIENT_CERT_HEADER=X-Client-Cert
 HARDENED_PROFILE=1
 AUTH_MODE=local
+AUTH_JWT_SECRET=<32+ char random secret>
+AUTH_BOOTSTRAP_PASSWORD=<12+ char random password>
+AUTH_TOKEN_TTL=12h
+AUTH_LOGIN_RPM=30
+AUTH_LOGIN_BACKOFF_ENABLED=1
+AUTH_LOGIN_BACKOFF_THRESHOLD=3
+AUTH_LOGIN_BACKOFF_BASE=2s
+AUTH_LOGIN_BACKOFF_MAX=5m
+AUTH_LOGIN_BACKOFF_WINDOW=15m
 LICENSE_ENFORCE=1
 DEVICE_IDENTITY_MODE=enforce
 DEVICE_IDENTITY_REQUIRE_ON_ENROLL=1
 DEVICE_IDENTITY_REQUIRE_ON_CHECKIN=1
+ARTIFACT_PULL_ALLOWED_HOSTS=<comma-separated approved pull hosts>
+ARTIFACT_PULL_ALLOW_INSECURE_HTTP=0
+ARTIFACT_SIGNATURE_REQUIRE_DEFAULT=1
+ARTIFACT_SIGNATURE_ENFORCE_INGEST=1
+ARTIFACT_SIGNATURE_KEY_ID=<pinned signing key id>
+UPGRADE_RUNNER_MODE=remote
+UPGRADE_RUNNER_URL=http://maintenance-runner:8090
+UPGRADE_RUNNER_TOKEN=<16+ char random token>
+BACKUP_RUNNER_MODE=remote
+BACKUP_RUNNER_URL=http://maintenance-runner:8090
+BACKUP_RUNNER_TOKEN=<16+ char random token>
 ```
 
 Do **not** use:
 - `TRUST_PROXY_CIDRS=0.0.0.0/0`
 - `TRUST_PROXY_CIDRS=::/0`
+- Placeholder secrets/tokens such as `change-me`, `dev-token`, or `password`
 
 Use only your reverse proxy host/subnet(s).
+
+### Privilege boundary requirement
+
+Keep Docker socket privilege out of the control-plane container:
+
+- `control-plane` must run with `UPGRADE_RUNNER_MODE=remote` and `BACKUP_RUNNER_MODE=remote`.
+- Only `maintenance-runner` should mount `/var/run/docker.sock`.
+- Rotate `UPGRADE_RUNNER_TOKEN` / `BACKUP_RUNNER_TOKEN` like any other operational secret.
 
 ### Verify running container values
 
@@ -94,6 +123,13 @@ And verify hardening profile variables:
 
 ```bash
 docker exec -it hardwareops-control-plane-1 env | egrep 'HARDENED_PROFILE|AUTH_MODE|LICENSE_ENFORCE|DEVICE_IDENTITY_MODE|DEVICE_IDENTITY_REQUIRE_ON_ENROLL|DEVICE_IDENTITY_REQUIRE_ON_CHECKIN'
+```
+
+And verify remote runner wiring:
+
+```bash
+docker exec -it hardwareops-control-plane-1 env | egrep 'UPGRADE_RUNNER_MODE|UPGRADE_RUNNER_URL|BACKUP_RUNNER_MODE|BACKUP_RUNNER_URL'
+docker compose -f docker-compose.onprem.bundle.yml ps maintenance-runner
 ```
 
 ---

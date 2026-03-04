@@ -23,6 +23,7 @@ import (
 	"github.com/hardwareops/control-plane/internal/metrics"
 	"github.com/hardwareops/control-plane/internal/migrate"
 	"github.com/hardwareops/control-plane/internal/objectstore"
+	"github.com/hardwareops/control-plane/internal/releaseautoupdate"
 	"github.com/hardwareops/control-plane/internal/store/postgres"
 	"github.com/hardwareops/control-plane/internal/upgrade"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -123,34 +124,38 @@ func main() {
 		upgradeLogDir = cfg.LogDir
 	}
 	var upgradeRunner *upgrade.Runner
-	if strings.EqualFold(cfg.UpgradeRunnerMode, "docker") {
+	if strings.EqualFold(cfg.UpgradeRunnerMode, "docker") || strings.EqualFold(cfg.UpgradeRunnerMode, "remote") {
 		upgradeRunner = upgrade.NewRunner(cfg.UpgradeApplyCmd, cfg.UpgradeWorkDir, upgradeLogDir, logger.Printf)
-	} else if cfg.UpgradeRunnerMode != "" {
-		logger.Printf("upgrade runner disabled: mode %q not supported (docker only)", cfg.UpgradeRunnerMode)
+	} else if cfg.UpgradeRunnerMode != "" && !strings.EqualFold(cfg.UpgradeRunnerMode, "disabled") {
+		logger.Printf("upgrade runner disabled: mode %q not supported (docker/remote only)", cfg.UpgradeRunnerMode)
 	}
 	if upgradeRunner != nil {
-		env := map[string]string{
-			"STACK_DIR":           "/stack",
-			"UPGRADE_UPDATES_DIR": "/stack/updates",
-		}
-		if baseURL := os.Getenv("PUBLIC_BASE_URL"); baseURL != "" {
-			env["PUBLIC_BASE_URL"] = baseURL
-		}
-		if cfg.MaintenanceToken != "" {
-			env["MAINTENANCE_TOKEN"] = cfg.MaintenanceToken
-		}
-		if pull := os.Getenv("PULL_IMAGES"); pull != "" {
-			env["PULL_IMAGES"] = pull
-		}
-		if project := os.Getenv("PROJECT_NAME"); project != "" {
-			env["PROJECT_NAME"] = project
-		}
-		if certsDir := os.Getenv("CERTS_DIR"); certsDir != "" {
-			env["CERTS_DIR"] = "/certs"
-			env["CA_CERT_PATH"] = "/certs/ca.crt"
-			upgradeRunner.ConfigureDocker(cfg.UpgradeRunnerImage, certsDir, env)
+		if strings.EqualFold(cfg.UpgradeRunnerMode, "remote") {
+			upgradeRunner.ConfigureRemote(cfg.UpgradeRunnerURL, cfg.UpgradeRunnerToken)
 		} else {
-			upgradeRunner.ConfigureDocker(cfg.UpgradeRunnerImage, "", env)
+			env := map[string]string{
+				"STACK_DIR":           "/stack",
+				"UPGRADE_UPDATES_DIR": "/stack/updates",
+			}
+			if baseURL := os.Getenv("PUBLIC_BASE_URL"); baseURL != "" {
+				env["PUBLIC_BASE_URL"] = baseURL
+			}
+			if cfg.MaintenanceToken != "" {
+				env["MAINTENANCE_TOKEN"] = cfg.MaintenanceToken
+			}
+			if pull := os.Getenv("PULL_IMAGES"); pull != "" {
+				env["PULL_IMAGES"] = pull
+			}
+			if project := os.Getenv("PROJECT_NAME"); project != "" {
+				env["PROJECT_NAME"] = project
+			}
+			if certsDir := os.Getenv("CERTS_DIR"); certsDir != "" {
+				env["CERTS_DIR"] = "/certs"
+				env["CA_CERT_PATH"] = "/certs/ca.crt"
+				upgradeRunner.ConfigureDocker(cfg.UpgradeRunnerImage, certsDir, env)
+			} else {
+				upgradeRunner.ConfigureDocker(cfg.UpgradeRunnerImage, "", env)
+			}
 		}
 	}
 
@@ -159,12 +164,14 @@ func main() {
 		backupLogDir = cfg.LogDir
 	}
 	var backupRunner *backup.Runner
-	if strings.EqualFold(cfg.BackupRunnerMode, "docker") || strings.EqualFold(cfg.BackupRunnerMode, "local") {
+	if strings.EqualFold(cfg.BackupRunnerMode, "docker") || strings.EqualFold(cfg.BackupRunnerMode, "local") || strings.EqualFold(cfg.BackupRunnerMode, "remote") {
 		backupRunner = backup.NewRunner("backup", cfg.BackupCmd, cfg.BackupWorkDir, backupLogDir, logger.Printf)
 	} else if cfg.BackupRunnerMode != "" && !strings.EqualFold(cfg.BackupRunnerMode, "disabled") {
-		logger.Printf("backup runner disabled: mode %q not supported (docker/local only)", cfg.BackupRunnerMode)
+		logger.Printf("backup runner disabled: mode %q not supported (docker/local/remote only)", cfg.BackupRunnerMode)
 	}
-	if backupRunner != nil && strings.EqualFold(cfg.BackupRunnerMode, "docker") {
+	if backupRunner != nil && strings.EqualFold(cfg.BackupRunnerMode, "remote") {
+		backupRunner.ConfigureRemote(cfg.BackupRunnerURL, cfg.BackupRunnerToken)
+	} else if backupRunner != nil && strings.EqualFold(cfg.BackupRunnerMode, "docker") {
 		certsDir := ""
 		if cfg.CACertPath != "" {
 			certsDir = filepath.Dir(cfg.CACertPath)
@@ -180,10 +187,12 @@ func main() {
 	}
 
 	var restoreRunner *backup.Runner
-	if strings.EqualFold(cfg.BackupRunnerMode, "docker") || strings.EqualFold(cfg.BackupRunnerMode, "local") {
+	if strings.EqualFold(cfg.BackupRunnerMode, "docker") || strings.EqualFold(cfg.BackupRunnerMode, "local") || strings.EqualFold(cfg.BackupRunnerMode, "remote") {
 		restoreRunner = backup.NewRunner("restore", cfg.RestoreCmd, cfg.BackupWorkDir, backupLogDir, logger.Printf)
 	}
-	if restoreRunner != nil && strings.EqualFold(cfg.BackupRunnerMode, "docker") {
+	if restoreRunner != nil && strings.EqualFold(cfg.BackupRunnerMode, "remote") {
+		restoreRunner.ConfigureRemote(cfg.BackupRunnerURL, cfg.BackupRunnerToken)
+	} else if restoreRunner != nil && strings.EqualFold(cfg.BackupRunnerMode, "docker") {
 		certsDir := ""
 		if cfg.CACertPath != "" {
 			certsDir = filepath.Dir(cfg.CACertPath)
@@ -198,6 +207,7 @@ func main() {
 		restoreRunner.ConfigureDocker(cfg.BackupRunnerImage, certsDir, env)
 	}
 	var authManager *auth.Manager
+	var authLoginBackoff *auth.LoginBackoff
 	if cfg.AuthMode != "" && cfg.AuthMode != "disabled" {
 		manager, err := auth.NewManager(cfg.AuthMode, cfg.AuthJWTSecret, cfg.AuthTokenTTL, cfg.AuthIssuer, store)
 		if err != nil {
@@ -211,6 +221,13 @@ func main() {
 				logger.Printf("bootstrap admin created: %s", cfg.AuthBootstrapEmail)
 			}
 		}
+		authLoginBackoff = auth.NewLoginBackoff(auth.LoginBackoffConfig{
+			Enabled:   cfg.AuthLoginBackoffEnabled,
+			Threshold: cfg.AuthLoginBackoffThreshold,
+			BaseDelay: cfg.AuthLoginBackoffBase,
+			MaxDelay:  cfg.AuthLoginBackoffMax,
+			Window:    cfg.AuthLoginBackoffWindow,
+		})
 	}
 	artifactLifecycleManager := lifecycle.NewManager(lifecycle.ManagerConfig{
 		Enabled:                 cfg.ArtifactPruneEnabled,
@@ -225,6 +242,14 @@ func main() {
 	})
 	if artifactLifecycleManager != nil {
 		artifactLifecycleManager.Start(context.Background())
+	}
+	releaseAutoUpdateManager := releaseautoupdate.New(releaseautoupdate.Config{
+		Store:    store,
+		Interval: cfg.ReleaseAutoUpdateInterval,
+		Logger:   logger.Printf,
+	})
+	if releaseAutoUpdateManager != nil {
+		releaseAutoUpdateManager.Start(context.Background())
 	}
 	pullCredentialManager, err := artifactingest.NewPullCredentialManager(
 		cfg.ArtifactPullCredentialsFile,
@@ -258,33 +283,46 @@ func main() {
 			EnrollRPM:          cfg.EnrollRPM,
 			CheckinRPM:         cfg.CheckinRPM,
 			ApplyResultRPM:     cfg.ApplyResultRPM,
+			AuthLoginRPM:       cfg.AuthLoginRPM,
 		},
-		LogDir:                         cfg.LogDir,
-		Events:                         hub,
-		CORSAllowedOrigins:             cfg.CORSAllowedOrigins,
-		Maintenance:                    httpapi.NewMaintenanceState(cfg.MaintenanceEnabled, cfg.MaintenanceMessage),
-		MaintenanceToken:               cfg.MaintenanceToken,
-		Upgrade:                        upgradeRunner,
-		UpgradeUpdatesDir:              cfg.UpgradeUpdatesDir,
-		Backup:                         backupRunner,
-		Restore:                        restoreRunner,
-		BackupDir:                      cfg.BackupDir,
-		Metrics:                        metricsCollector,
-		MetricsPath:                    cfg.MetricsPath,
-		Auth:                           authManager,
-		BootstrapToken:                 cfg.BootstrapToken,
-		License:                        licenseManager,
-		CertManager:                    certManager,
-		CertRotationGrace:              cfg.CertRotationGracePeriod,
-		ArtifactLifecycle:              artifactLifecycleManager,
-		ArtifactPullHosts:              cfg.ArtifactPullAllowedHosts,
-		ArtifactPullMaxBytes:           cfg.ArtifactPullMaxBytes,
-		ArtifactPullTimeout:            cfg.ArtifactPullTimeout,
-		ArtifactPullCreds:              pullCredentialManager,
-		ArtifactPullCredsManager:       pullCredentialManager,
-		DeviceIdentityMode:             cfg.DeviceIdentityMode,
-		DeviceIdentityRequireOnEnroll:  cfg.DeviceIdentityRequireOnEnroll,
-		DeviceIdentityRequireOnCheckin: cfg.DeviceIdentityRequireOnCheckin,
+		PendingEnrollmentGuardrails: httpapi.PendingEnrollmentGuardrailConfig{
+			RequestRPMPerSource:  cfg.PendingEnrollRequestRPMPerSource,
+			RequestRPMPerProfile: cfg.PendingEnrollRequestRPMPerProfile,
+			MaxActive:            cfg.PendingEnrollMaxActive,
+			MaxActivePerProfile:  cfg.PendingEnrollMaxActivePerProfile,
+			MaxActivePerSource:   cfg.PendingEnrollMaxActivePerSource,
+		},
+		LogDir:                          cfg.LogDir,
+		Events:                          hub,
+		CORSAllowedOrigins:              cfg.CORSAllowedOrigins,
+		Maintenance:                     httpapi.NewMaintenanceState(cfg.MaintenanceEnabled, cfg.MaintenanceMessage),
+		Upgrade:                         upgradeRunner,
+		UpgradeUpdatesDir:               cfg.UpgradeUpdatesDir,
+		Backup:                          backupRunner,
+		Restore:                         restoreRunner,
+		BackupDir:                       cfg.BackupDir,
+		Metrics:                         metricsCollector,
+		MetricsPath:                     cfg.MetricsPath,
+		Auth:                            authManager,
+		AuthLoginBackoff:                authLoginBackoff,
+		BootstrapToken:                  cfg.BootstrapToken,
+		License:                         licenseManager,
+		CertManager:                     certManager,
+		CertRotationGrace:               cfg.CertRotationGracePeriod,
+		ArtifactLifecycle:               artifactLifecycleManager,
+		ArtifactPullHosts:               cfg.ArtifactPullAllowedHosts,
+		ArtifactPullMaxBytes:            cfg.ArtifactPullMaxBytes,
+		ArtifactPullTimeout:             cfg.ArtifactPullTimeout,
+		ArtifactPullAllowInsecureHTTP:   cfg.ArtifactPullAllowInsecureHTTP,
+		ArtifactSignatureRequireDefault: cfg.ArtifactSignatureRequireDefault,
+		ArtifactSignatureEnforceIngest:  cfg.ArtifactSignatureEnforceIngest,
+		ArtifactSignatureKeyID:          cfg.ArtifactSignatureKeyID,
+		ArtifactPullCreds:               pullCredentialManager,
+		ArtifactPullCredsManager:        pullCredentialManager,
+		ReleaseAutoUpdate:               releaseAutoUpdateManager,
+		DeviceIdentityMode:              cfg.DeviceIdentityMode,
+		DeviceIdentityRequireOnEnroll:   cfg.DeviceIdentityRequireOnEnroll,
+		DeviceIdentityRequireOnCheckin:  cfg.DeviceIdentityRequireOnCheckin,
 	}
 
 	updateMetricsCounts := func() {

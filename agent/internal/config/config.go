@@ -2,29 +2,36 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 )
 
 type Config struct {
-	ControlPlaneURL       string
-	StatePath             string
-	ArtifactRoot          string
-	CheckinInterval       time.Duration
-	CheckinJitterPercent  float64
-	CheckinJitterMax      time.Duration
-	CheckinStartupJitter  time.Duration
-	DeviceCertPath        string
-	DeviceKeyPath         string
-	CACertPath            string
-	LogExportAddr         string
-	LogLevel              string
-	AllowUnsupportedApply bool
-	SigningPubKeyPath     string
-	SigningKeyID          string
-	RequireSignature      bool
-	AutoReenroll          bool
+	ControlPlaneURL        string
+	EnrollmentMode         string
+	EnrollmentProfileToken string
+	StatePath              string
+	BootstrapStatePath     string
+	ArtifactRoot           string
+	CheckinInterval        time.Duration
+	CheckinJitterPercent   float64
+	CheckinJitterMax       time.Duration
+	CheckinStartupJitter   time.Duration
+	BootstrapPollInterval  time.Duration
+	BootstrapRetryInterval time.Duration
+	DeviceCertPath         string
+	DeviceKeyPath          string
+	DeviceIDPath           string
+	CACertPath             string
+	LogExportAddr          string
+	LogLevel               string
+	AllowUnsupportedApply  bool
+	SigningPubKeyPath      string
+	SigningKeyID           string
+	RequireSignature       bool
+	AutoReenroll           bool
 }
 
 func FromEnv() Config {
@@ -32,9 +39,14 @@ func FromEnv() Config {
 	if url == "" {
 		url = "http://localhost:8080"
 	}
+	enrollmentMode := strings.TrimSpace(strings.ToLower(os.Getenv("AGENT_ENROLL_MODE")))
 	statePath := os.Getenv("STATE_PATH")
 	if statePath == "" {
 		statePath = "./agent-state.json"
+	}
+	bootstrapStatePath := os.Getenv("BOOTSTRAP_STATE_PATH")
+	if bootstrapStatePath == "" {
+		bootstrapStatePath = filepath.Join(filepath.Dir(statePath), "bootstrap-state.json")
 	}
 	root := os.Getenv("ARTIFACT_ROOT")
 	if root == "" {
@@ -54,24 +66,44 @@ func FromEnv() Config {
 	if jitterPct < 0 {
 		jitterPct = 0
 	}
+	deviceCertPath := os.Getenv("DEVICE_CERT_PATH")
+	deviceKeyPath := os.Getenv("DEVICE_KEY_PATH")
+	deviceIDPath := os.Getenv("DEVICE_ID_PATH")
+	if enrollmentMode == "approval" {
+		if deviceCertPath == "" {
+			deviceCertPath = filepath.Join(filepath.Dir(statePath), "device.crt")
+		}
+		if deviceKeyPath == "" {
+			deviceKeyPath = filepath.Join(filepath.Dir(statePath), "device.key")
+		}
+		if deviceIDPath == "" {
+			deviceIDPath = filepath.Join(filepath.Dir(statePath), "device-id")
+		}
+	}
 	return Config{
-		ControlPlaneURL:       url,
-		StatePath:             statePath,
-		ArtifactRoot:          root,
-		CheckinInterval:       interval,
-		CheckinJitterPercent:  jitterPct,
-		CheckinJitterMax:      parseDurationEnv("CHECKIN_JITTER_MAX", 0),
-		CheckinStartupJitter:  parseDurationEnv("CHECKIN_STARTUP_JITTER", 0),
-		DeviceCertPath:        os.Getenv("DEVICE_CERT_PATH"),
-		DeviceKeyPath:         os.Getenv("DEVICE_KEY_PATH"),
-		CACertPath:            os.Getenv("CONTROL_PLANE_CA_CERT_PATH"),
-		LogExportAddr:         os.Getenv("LOG_EXPORT_ADDR"),
-		LogLevel:              os.Getenv("LOG_LEVEL"),
-		AllowUnsupportedApply: parseBoolEnv("ALLOW_UNSUPPORTED_APPLY"),
-		SigningPubKeyPath:     os.Getenv("SIGNING_PUB_KEY_PATH"),
-		SigningKeyID:          os.Getenv("SIGNING_KEY_ID"),
-		RequireSignature:      parseBoolEnv("REQUIRE_ARTIFACT_SIGNATURE"),
-		AutoReenroll:          parseBoolEnvDefault("AUTO_REENROLL", true),
+		ControlPlaneURL:        url,
+		EnrollmentMode:         enrollmentMode,
+		EnrollmentProfileToken: strings.TrimSpace(os.Getenv("ENROLLMENT_PROFILE_TOKEN")),
+		StatePath:              statePath,
+		BootstrapStatePath:     bootstrapStatePath,
+		ArtifactRoot:           root,
+		CheckinInterval:        interval,
+		CheckinJitterPercent:   jitterPct,
+		CheckinJitterMax:       parseDurationEnv("CHECKIN_JITTER_MAX", 0),
+		CheckinStartupJitter:   parseDurationEnv("CHECKIN_STARTUP_JITTER", 0),
+		BootstrapPollInterval:  parseDurationEnv("BOOTSTRAP_POLL_INTERVAL", 5*time.Second),
+		BootstrapRetryInterval: parseDurationEnv("BOOTSTRAP_RETRY_INTERVAL", 10*time.Second),
+		DeviceCertPath:         deviceCertPath,
+		DeviceKeyPath:          deviceKeyPath,
+		DeviceIDPath:           deviceIDPath,
+		CACertPath:             os.Getenv("CONTROL_PLANE_CA_CERT_PATH"),
+		LogExportAddr:          os.Getenv("LOG_EXPORT_ADDR"),
+		LogLevel:               os.Getenv("LOG_LEVEL"),
+		AllowUnsupportedApply:  parseBoolEnv("ALLOW_UNSUPPORTED_APPLY"),
+		SigningPubKeyPath:      os.Getenv("SIGNING_PUB_KEY_PATH"),
+		SigningKeyID:           os.Getenv("SIGNING_KEY_ID"),
+		RequireSignature:       parseBoolEnv("REQUIRE_ARTIFACT_SIGNATURE"),
+		AutoReenroll:           parseBoolEnvDefault("AUTO_REENROLL", true),
 	}
 }
 

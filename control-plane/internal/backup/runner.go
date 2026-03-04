@@ -1,8 +1,13 @@
 package backup
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,6 +43,13 @@ type Runner struct {
 	image    string
 	certsDir string
 	env      map[string]string
+	remote   remoteConfig
+}
+
+type remoteConfig struct {
+	baseURL string
+	token   string
+	client  *http.Client
 }
 
 func NewRunner(name, applyCmd, workDir, logDir string, logger func(string, ...interface{})) *Runner {
@@ -68,18 +80,43 @@ func NewRunner(name, applyCmd, workDir, logDir string, logger func(string, ...in
 }
 
 type RunnerConfig struct {
-	Mode     string
-	Image    string
-	CertsDir string
+	Mode      string
+	Image     string
+	CertsDir  string
+	RemoteURL string
 }
 
 func (r *Runner) Enabled() bool {
-	return r != nil && strings.TrimSpace(r.applyCmd) != ""
+	if r == nil {
+		return false
+	}
+	if strings.EqualFold(r.mode, "remote") {
+		return strings.TrimSpace(r.remote.baseURL) != ""
+	}
+	return strings.TrimSpace(r.applyCmd) != ""
 }
 
 func (r *Runner) Status() Status {
 	if r == nil {
 		return Status{Enabled: false, State: "disabled"}
+	}
+	if strings.EqualFold(r.mode, "remote") {
+		if status, err := r.remoteStatus(); err == nil {
+			r.mu.Lock()
+			r.status = status
+			r.mu.Unlock()
+			return status
+		} else {
+			r.mu.Lock()
+			r.status.Enabled = true
+			r.status.Running = false
+			r.status.State = "failed"
+			r.status.Error = err.Error()
+			r.status.FinishedAt = time.Now().UTC()
+			status := r.status
+			r.mu.Unlock()
+			return status
+		}
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -93,9 +130,10 @@ func (r *Runner) Config() RunnerConfig {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return RunnerConfig{
-		Mode:     r.mode,
-		Image:    r.image,
-		CertsDir: r.certsDir,
+		Mode:      r.mode,
+		Image:     r.image,
+		CertsDir:  r.certsDir,
+		RemoteURL: r.remote.baseURL,
 	}
 }
 
@@ -115,6 +153,23 @@ func (r *Runner) ConfigureDocker(image, certsDir string, env map[string]string) 
 	r.env = env
 }
 
+func (r *Runner) ConfigureRemote(baseURL, token string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.mode = "remote"
+	r.remote.baseURL = strings.TrimSpace(strings.TrimRight(baseURL, "/"))
+	r.remote.token = strings.TrimSpace(token)
+	r.remote.client = &http.Client{Timeout: 15 * time.Second}
+	r.status.Enabled = r.remote.baseURL != ""
+	r.status.State = "idle"
+	r.status.Command = "remote"
+	r.status.WorkingDir = ""
+	r.status.RunnerContainer = "maintenance-runner"
+}
+
 func (r *Runner) Start() (Status, error) {
 	return r.start(nil)
 }
@@ -126,6 +181,25 @@ func (r *Runner) StartWithEnv(extra map[string]string) (Status, error) {
 func (r *Runner) start(extra map[string]string) (Status, error) {
 	if r == nil || !r.Enabled() {
 		return Status{Enabled: false, State: "disabled"}, errors.New("backup runner not configured")
+	}
+	if strings.EqualFold(r.mode, "remote") {
+		status, err := r.remoteStart(extra)
+		if err != nil {
+			r.mu.Lock()
+			r.status.Enabled = true
+			r.status.Running = false
+			r.status.State = "failed"
+			r.status.Error = err.Error()
+			r.status.ExitCode = 1
+			r.status.FinishedAt = time.Now().UTC()
+			status = r.status
+			r.mu.Unlock()
+			return status, err
+		}
+		r.mu.Lock()
+		r.status = status
+		r.mu.Unlock()
+		return status, nil
 	}
 	if strings.EqualFold(r.mode, "docker") {
 		if err := r.validateDockerInputs(); err != nil {
@@ -168,6 +242,110 @@ func (r *Runner) start(extra map[string]string) (Status, error) {
 
 	go r.run(statusSnapshot.LogPath, statusSnapshot.RunnerContainer, extra)
 	return statusSnapshot, nil
+}
+
+type remoteStartRequest struct {
+	Env map[string]string `json:"env,omitempty"`
+}
+
+func (r *Runner) remoteStart(extra map[string]string) (Status, error) {
+	if r == nil {
+		return Status{}, errors.New("backup runner not configured")
+	}
+	r.mu.RLock()
+	baseURL := strings.TrimSpace(r.remote.baseURL)
+	token := r.remote.token
+	client := r.remote.client
+	name := strings.TrimSpace(r.name)
+	r.mu.RUnlock()
+	if baseURL == "" {
+		return Status{}, errors.New("backup remote runner URL not configured")
+	}
+	if name == "" {
+		name = "backup"
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second}
+	}
+	payload, err := json.Marshal(remoteStartRequest{Env: extra})
+	if err != nil {
+		return Status{}, err
+	}
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/v1/"+name+"/start", bytes.NewReader(payload))
+	if err != nil {
+		return Status{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if strings.TrimSpace(token) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return Status{}, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		msg := strings.TrimSpace(string(body))
+		if msg == "" {
+			msg = resp.Status
+		}
+		return Status{}, errors.New(msg)
+	}
+	var status Status
+	if err := json.Unmarshal(body, &status); err != nil {
+		return Status{}, err
+	}
+	return status, nil
+}
+
+func (r *Runner) remoteStatus() (Status, error) {
+	if r == nil {
+		return Status{}, errors.New("backup runner not configured")
+	}
+	r.mu.RLock()
+	baseURL := strings.TrimSpace(r.remote.baseURL)
+	token := r.remote.token
+	client := r.remote.client
+	name := strings.TrimSpace(r.name)
+	r.mu.RUnlock()
+	if baseURL == "" {
+		return Status{}, errors.New("backup remote runner URL not configured")
+	}
+	if _, err := url.ParseRequestURI(baseURL); err != nil {
+		return Status{}, fmt.Errorf("invalid remote runner URL: %w", err)
+	}
+	if name == "" {
+		name = "backup"
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second}
+	}
+	req, err := http.NewRequest(http.MethodGet, baseURL+"/v1/"+name+"/status", nil)
+	if err != nil {
+		return Status{}, err
+	}
+	if strings.TrimSpace(token) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return Status{}, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		msg := strings.TrimSpace(string(body))
+		if msg == "" {
+			msg = resp.Status
+		}
+		return Status{}, errors.New(msg)
+	}
+	var status Status
+	if err := json.Unmarshal(body, &status); err != nil {
+		return Status{}, err
+	}
+	return status, nil
 }
 
 func (r *Runner) nextLogPath(start time.Time) string {

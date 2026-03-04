@@ -6,6 +6,7 @@ Start with:
 - `docs/deploy.md` (on-prem + AWS deployment, plus baseline hardening)
 - `docs/operations.md` (backup/restore, upgrades, cert rotation, metrics checks)
 - `docs/local-dev-wsl.md` (local development flow)
+- `docs/testing/prod-docker-lab.md` (production-like Docker validation)
 - `docs/README.md` (full documentation map)
 
 ## Development Roadmap

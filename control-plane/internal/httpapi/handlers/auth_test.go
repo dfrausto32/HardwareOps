@@ -1,0 +1,107 @@
+package handlers
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"log"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/hardwareops/control-plane/internal/auth"
+	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/hardwareops/control-plane/internal/store/memory"
+)
+
+func TestLoginBackoffBlocksAndRecovers(t *testing.T) {
+	mem := memory.New()
+	passwordHash, err := auth.HashPassword("correct-password")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	err = mem.CreateUser(store.User{
+		UserID:       "user-1",
+		Email:        "admin@example.com",
+		PasswordHash: passwordHash,
+		RolesJSON:    []byte(`["admin"]`),
+		AuthProvider: "local",
+		CreatedAt:    time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	manager, err := auth.NewManager("local", "0123456789abcdef0123456789abcdef", 12*time.Hour, "hardwareops", mem)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	backoff := auth.NewLoginBackoff(auth.LoginBackoffConfig{
+		Enabled:   true,
+		Threshold: 2,
+		BaseDelay: 50 * time.Millisecond,
+		MaxDelay:  500 * time.Millisecond,
+		Window:    10 * time.Minute,
+	})
+	handler := Login(log.New(io.Discard, "", 0), manager, mem, false, backoff)
+
+	// First invalid login: unauthorized, no backoff header yet.
+	resp1 := doLoginRequest(t, handler, "admin@example.com", "bad-password")
+	if resp1.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 on first failure, got %d", resp1.Code)
+	}
+	if got := resp1.Header().Get("Retry-After"); got != "" {
+		t.Fatalf("unexpected retry header on first failure: %q", got)
+	}
+
+	// Second invalid login: still unauthorized, now backoff is armed.
+	resp2 := doLoginRequest(t, handler, "admin@example.com", "bad-password")
+	if resp2.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 on second failure, got %d", resp2.Code)
+	}
+	if got := resp2.Header().Get("Retry-After"); got == "" {
+		t.Fatalf("expected retry header on second failure")
+	}
+
+	// Immediate retry is blocked by backoff.
+	resp3 := doLoginRequest(t, handler, "admin@example.com", "correct-password")
+	if resp3.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 while backoff active, got %d", resp3.Code)
+	}
+
+	time.Sleep(70 * time.Millisecond)
+
+	// After delay, correct credentials succeed.
+	resp4 := doLoginRequest(t, handler, "admin@example.com", "correct-password")
+	if resp4.Code != http.StatusOK {
+		t.Fatalf("expected 200 after backoff window, got %d", resp4.Code)
+	}
+	var loginResp LoginResponse
+	if err := json.Unmarshal(resp4.Body.Bytes(), &loginResp); err != nil {
+		t.Fatalf("decode login response: %v", err)
+	}
+	if loginResp.Token == "" {
+		t.Fatalf("expected token in login response")
+	}
+
+	events, err := mem.ListAuditEvents(store.AuditEventFilter{Action: "auth.login", Limit: 20})
+	if err != nil {
+		t.Fatalf("list audit events: %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatalf("expected auth.login audit events")
+	}
+}
+
+func doLoginRequest(t *testing.T, handler http.HandlerFunc, email, password string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(LoginRequest{Email: email, Password: password})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
+}

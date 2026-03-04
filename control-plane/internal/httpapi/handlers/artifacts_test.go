@@ -28,10 +28,46 @@ func TestCreateArtifact(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
-	CreateArtifact(logger, mem, false).ServeHTTP(w, req)
+	CreateArtifact(logger, mem, false, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestCreateArtifact_RejectsUnsignedWhenSignaturePolicyEnforced(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+
+	body := []byte(`{"name":"agent","version":"1.0.0","objectKey":"artifacts/a.tar.gz","sha256":"abc","sizeBytes":10}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	CreateArtifact(logger, mem, false, ArtifactSignaturePolicy{
+		Require:       true,
+		EnforceIngest: true,
+	}).ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestCreateArtifact_RejectsWrongSignatureKeyIDWhenPolicyPinned(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+
+	body := []byte(`{"name":"agent","version":"1.0.0","objectKey":"artifacts/a.tar.gz","sha256":"abc","sizeBytes":10,"signature":"abc123","signatureKeyId":"sha256:wrong"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	CreateArtifact(logger, mem, false, ArtifactSignaturePolicy{
+		EnforceIngest: true,
+		KeyID:         "sha256:expected",
+	}).ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", w.Code, w.Body.String())
 	}
 }
 
@@ -52,7 +88,7 @@ func TestUploadArtifact(t *testing.T) {
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	w := httptest.NewRecorder()
 
-	UploadArtifact(logger, mem, obj, "artifacts", false, nil).ServeHTTP(w, req)
+	UploadArtifact(logger, mem, obj, "artifacts", false, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -129,7 +165,7 @@ func TestPresignAndCompleteArtifactUpload(t *testing.T) {
 	completeJSON, _ := json.Marshal(completePayload)
 	completeReq := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts/complete", bytes.NewReader(completeJSON))
 	completeW := httptest.NewRecorder()
-	CompleteArtifactUpload(logger, mem, obj, "artifacts", false, nil).ServeHTTP(completeW, completeReq)
+	CompleteArtifactUpload(logger, mem, obj, "artifacts", false, nil, ArtifactSignaturePolicy{}).ServeHTTP(completeW, completeReq)
 	if completeW.Code != http.StatusOK {
 		t.Fatalf("complete upload expected 200, got %d body=%s", completeW.Code, completeW.Body.String())
 	}
@@ -171,7 +207,7 @@ func TestPullArtifact(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts/pull", bytes.NewReader(reqJSON))
 	w := httptest.NewRecorder()
 
-	PullArtifact(logger, mem, obj, "artifacts", nil, 1024*1024, 10*time.Second, nil, false, nil).ServeHTTP(w, req)
+	PullArtifact(logger, mem, obj, "artifacts", []string{"127.0.0.1", "localhost"}, 1024*1024, 10*time.Second, true, nil, false, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("pull artifact expected 200, got %d body=%s", w.Code, w.Body.String())
 	}
@@ -212,7 +248,7 @@ func TestPullArtifactHostAllowlist(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	// Deliberately disallow test server host.
-	PullArtifact(logger, mem, obj, "artifacts", []string{"example.com"}, 1024*1024, 10*time.Second, nil, false, nil).ServeHTTP(w, req)
+	PullArtifact(logger, mem, obj, "artifacts", []string{"example.com"}, 1024*1024, 10*time.Second, true, nil, false, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("pull artifact expected 403 for disallowed host, got %d body=%s", w.Code, w.Body.String())
 	}
@@ -245,9 +281,39 @@ func TestPullArtifactSourceObject(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts/pull", bytes.NewReader(reqJSON))
 	w := httptest.NewRecorder()
 
-	PullArtifact(logger, mem, obj, "artifacts", nil, 1024*1024, 10*time.Second, nil, false, nil).ServeHTTP(w, req)
+	PullArtifact(logger, mem, obj, "artifacts", []string{"127.0.0.1", "localhost"}, 1024*1024, 10*time.Second, true, nil, false, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("pull artifact source object expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestPullArtifactRejectsInsecureHTTPWhenDisabled(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+	obj := newFakeObjectStore()
+
+	payload := []byte("pulled-artifact-http-disabled")
+	sum := sha256.Sum256(payload)
+	shaHex := hex.EncodeToString(sum[:])
+
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer source.Close()
+
+	reqJSON, _ := json.Marshal(map[string]any{
+		"name":      "http-disabled-app",
+		"version":   "0.1.0",
+		"type":      "app_bundle",
+		"sourceUrl": source.URL + "/artifact.tar.gz",
+		"sha256":    shaHex,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts/pull", bytes.NewReader(reqJSON))
+	w := httptest.NewRecorder()
+
+	PullArtifact(logger, mem, obj, "artifacts", []string{"127.0.0.1", "localhost"}, 1024*1024, 10*time.Second, false, nil, false, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("pull artifact expected 400 for insecure http, got %d body=%s", w.Code, w.Body.String())
 	}
 }
 
@@ -268,7 +334,7 @@ func TestPullArtifactUnsupportedSourceKind(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts/pull", bytes.NewReader(reqJSON))
 	w := httptest.NewRecorder()
 
-	PullArtifact(logger, mem, obj, "artifacts", nil, 1024*1024, 10*time.Second, nil, false, nil).ServeHTTP(w, req)
+	PullArtifact(logger, mem, obj, "artifacts", nil, 1024*1024, 10*time.Second, true, nil, false, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("pull artifact unsupported source kind expected 400, got %d body=%s", w.Code, w.Body.String())
 	}
@@ -308,7 +374,7 @@ func TestPullArtifactArtifactoryCredentialRef(t *testing.T) {
 	resolver := artifactingest.NewStaticCredentialResolver(map[string]map[string]string{
 		"art-1": {"artifactory_api_key": "jfrog-key-1"},
 	})
-	PullArtifact(logger, mem, obj, "artifacts", nil, 1024*1024, 10*time.Second, resolver, false, nil).ServeHTTP(w, req)
+	PullArtifact(logger, mem, obj, "artifacts", []string{"127.0.0.1", "localhost"}, 1024*1024, 10*time.Second, true, resolver, false, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("pull artifact artifactory expected 200, got %d body=%s", w.Code, w.Body.String())
 	}
@@ -348,7 +414,7 @@ func TestPullArtifactCredentialRef(t *testing.T) {
 	resolver := artifactingest.NewStaticCredentialResolver(map[string]map[string]string{
 		"repo-1": {"authorization": "Bearer secret-token"},
 	})
-	PullArtifact(logger, mem, obj, "artifacts", nil, 1024*1024, 10*time.Second, resolver, false, nil).ServeHTTP(w, req)
+	PullArtifact(logger, mem, obj, "artifacts", []string{"127.0.0.1", "localhost"}, 1024*1024, 10*time.Second, true, resolver, false, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("pull artifact credential ref expected 200, got %d body=%s", w.Code, w.Body.String())
 	}
@@ -373,7 +439,7 @@ func TestPullArtifactCredentialRefNotFound(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	resolver := artifactingest.NewStaticCredentialResolver(nil)
-	PullArtifact(logger, mem, obj, "artifacts", nil, 1024*1024, 10*time.Second, resolver, false, nil).ServeHTTP(w, req)
+	PullArtifact(logger, mem, obj, "artifacts", nil, 1024*1024, 10*time.Second, true, resolver, false, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("pull artifact missing credential ref expected 400, got %d body=%s", w.Code, w.Body.String())
 	}

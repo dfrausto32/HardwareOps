@@ -6,8 +6,15 @@ import (
 )
 
 var (
-	ErrEnrollmentTokenInvalid = errors.New("enrollment token invalid or expired")
-	ErrDeviceLimitExceeded    = errors.New("device limit exceeded")
+	ErrEnrollmentTokenInvalid     = errors.New("enrollment token invalid or expired")
+	ErrDeviceLimitExceeded        = errors.New("device limit exceeded")
+	ErrEnrollmentProfileNotFound  = errors.New("enrollment profile not found")
+	ErrEnrollmentProfileInvalid   = errors.New("enrollment profile invalid or expired")
+	ErrEnrollmentProfileExhausted = errors.New("enrollment profile max uses reached")
+	ErrPendingEnrollmentNotFound  = errors.New("pending enrollment not found")
+	ErrPendingEnrollmentToken     = errors.New("pending enrollment token invalid")
+	ErrPendingEnrollmentState     = errors.New("pending enrollment state invalid")
+	ErrPendingEnrollmentThrottled = errors.New("pending enrollment approval throttled")
 )
 
 type Device struct {
@@ -42,6 +49,68 @@ type EnrollmentToken struct {
 	CreatedAt time.Time
 }
 
+type EnrollmentProfile struct {
+	ProfileID              string
+	Name                   string
+	TokenHash              string
+	PreviousTokenHash      string
+	RequireApproval        bool
+	AllowUntrustedHW       bool
+	ChallengeHash          string
+	ChallengeHint          string
+	ApprovalDelaySec       int
+	MaxUses                int
+	Uses                   int
+	ExpiresAt              time.Time
+	PreviousTokenExpiresAt time.Time
+	TokenRotatedAt         time.Time
+	CreatedAt              time.Time
+	CreatedBy              string
+	Disabled               bool
+	DefaultLabelsJSON      []byte
+}
+
+type EnrollmentProfileUpdate struct {
+	Name              string
+	RequireApproval   bool
+	AllowUntrustedHW  bool
+	ChallengeHash     string
+	ChallengeHint     string
+	ApprovalDelaySec  int
+	MaxUses           int
+	DefaultLabelsJSON []byte
+}
+
+type PendingEnrollment struct {
+	RequestID           string
+	ProfileID           string
+	Status              string
+	CSR                 string
+	ClaimTokenHash      string
+	CapabilitiesJSON    []byte
+	MetadataJSON        []byte
+	SourceIP            string
+	UserAgent           string
+	AgentVersion        string
+	HardwareID          string
+	DeniedReason        string
+	ExpiresAt           time.Time
+	ApprovalAvailableAt time.Time
+	ApprovedAt          time.Time
+	ApprovedByUserID    string
+	DeniedAt            time.Time
+	DeniedByUserID      string
+	IssuedAt            time.Time
+	IssuedDeviceID      string
+	CreatedAt           time.Time
+}
+
+type PendingEnrollmentFilter struct {
+	Status string
+	Limit  int
+	Offset int
+}
+
 type Group struct {
 	GroupID      string
 	Name         string
@@ -73,6 +142,13 @@ type ArtifactStats struct {
 type ArtifactLifecyclePolicy struct {
 	DeprecatedDeleteAfterDays int
 	UpdatedAt                 time.Time
+}
+
+type ReleaseAutoUpdateSettings struct {
+	Enabled         bool
+	AllowUnsigned   bool
+	UpdatedAt       time.Time
+	UpdatedByUserID string
 }
 
 type ApplyResult struct {
@@ -243,6 +319,23 @@ type Store interface {
 	CreateEnrollmentToken(tokenHash string, expiresAt time.Time) error
 	ConsumeEnrollmentToken(tokenHash string) (bool, error)
 	EnrollDeviceWithToken(tokenHash string, device Device, maxDevices int) error
+	CreateEnrollmentProfile(profile EnrollmentProfile) error
+	ListEnrollmentProfiles() ([]EnrollmentProfile, error)
+	GetEnrollmentProfile(profileID string) (EnrollmentProfile, error)
+	UpdateEnrollmentProfile(profileID string, update EnrollmentProfileUpdate) (EnrollmentProfile, error)
+	GetEnrollmentProfileByTokenHash(profileTokenHash string) (EnrollmentProfile, error)
+	SetEnrollmentProfileDisabled(profileID string, disabled bool) (EnrollmentProfile, error)
+	RotateEnrollmentProfileToken(profileID, tokenHash string, previousTokenValidUntil time.Time) (EnrollmentProfile, error)
+	CreatePendingEnrollmentForProfileToken(profileTokenHash string, pending PendingEnrollment) (EnrollmentProfile, error)
+	ExpirePendingEnrollments(before time.Time) (int, error)
+	CountActivePendingEnrollments(profileID, sourceIP string, now time.Time) (int, error)
+	ListPendingEnrollments(filter PendingEnrollmentFilter) ([]PendingEnrollment, error)
+	ApprovePendingEnrollment(requestID, approvedByUserID string, at time.Time) (PendingEnrollment, error)
+	DenyPendingEnrollment(requestID, reason, deniedByUserID string, at time.Time) (PendingEnrollment, error)
+	ConflictPendingEnrollment(requestID, reason string, at time.Time) (PendingEnrollment, error)
+	ResetPendingEnrollment(requestID string, expiresAt time.Time) (PendingEnrollment, error)
+	GetPendingEnrollmentForClaim(requestID, claimTokenHash string) (PendingEnrollment, bool, error)
+	MarkPendingEnrollmentIssued(requestID, claimTokenHash string, device Device, maxDevices int, issuedAt time.Time) (PendingEnrollment, error)
 	CreateDevice(device Device) error
 	GetDevice(deviceID string) (Device, bool, error)
 	GetDeviceByFingerprint(fingerprint string) (Device, bool, error)
@@ -275,6 +368,8 @@ type Store interface {
 	CountArtifactReferences(artifactID string) (int, error)
 	GetArtifactLifecyclePolicy() (ArtifactLifecyclePolicy, error)
 	SetArtifactLifecyclePolicy(days int) (ArtifactLifecyclePolicy, error)
+	GetReleaseAutoUpdateSettings() (ReleaseAutoUpdateSettings, error)
+	SetReleaseAutoUpdateSettings(settings ReleaseAutoUpdateSettings) (ReleaseAutoUpdateSettings, error)
 	DeleteArtifact(artifactID string) error
 	GetArtifactStats() (ArtifactStats, error)
 	CreateApplyResult(result ApplyResult) error

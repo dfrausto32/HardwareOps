@@ -12,7 +12,8 @@ RUN set -eux; \
   else \
     LDFLAGS=""; \
   fi; \
-  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $LDFLAGS -o /out/control-plane ./cmd/control-plane
+  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $LDFLAGS -o /out/control-plane ./cmd/control-plane; \
+  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $LDFLAGS -o /out/maintenance-runner ./cmd/maintenance-runner
 
 FROM docker:25.0.5-cli
 
@@ -26,6 +27,7 @@ RUN apk add --no-cache bash curl openssl && \
     chmod 0600 /app/demo-certs/ca.key && \
     chmod 0644 /app/demo-certs/ca.crt
 COPY --from=build /out/control-plane /app/control-plane
+COPY --from=build /out/maintenance-runner /app/maintenance-runner
 COPY control-plane/migrations /app/migrations
 COPY scripts/apply-upgrade.sh /app/scripts/apply-upgrade.sh
 COPY scripts/backup-stack.sh /app/scripts/backup-stack.sh

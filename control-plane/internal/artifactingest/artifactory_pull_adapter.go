@@ -11,10 +11,11 @@ import (
 
 type ArtifactoryPullAdapter struct {
 	allowedHosts []string
+	allowHTTP    bool
 	client       *http.Client
 }
 
-func NewArtifactoryPullAdapter(allowedHosts []string, timeout time.Duration) *ArtifactoryPullAdapter {
+func NewArtifactoryPullAdapter(allowedHosts []string, timeout time.Duration, allowInsecureHTTP bool) *ArtifactoryPullAdapter {
 	normalizedHosts := make([]string, 0, len(allowedHosts))
 	for _, host := range allowedHosts {
 		host = strings.TrimSpace(strings.ToLower(host))
@@ -28,6 +29,7 @@ func NewArtifactoryPullAdapter(allowedHosts []string, timeout time.Duration) *Ar
 	}
 	return &ArtifactoryPullAdapter{
 		allowedHosts: normalizedHosts,
+		allowHTTP:    allowInsecureHTTP,
 		client: &http.Client{
 			Timeout: timeout,
 		},
@@ -50,7 +52,14 @@ func (a *ArtifactoryPullAdapter) Pull(ctx context.Context, req PullRequest) (Pul
 	if parsedURL.Scheme != "https" && parsedURL.Scheme != "http" {
 		return PullResponse{}, fmt.Errorf("%w: scheme must be http/https", ErrInvalidSource)
 	}
-	if len(a.allowedHosts) > 0 && !hostAllowed(parsedURL.Hostname(), a.allowedHosts) {
+	if parsedURL.Scheme == "http" && !a.allowHTTP {
+		return PullResponse{}, fmt.Errorf("%w: insecure http scheme disabled", ErrInvalidSource)
+	}
+	allowedHost := hostAllowed(parsedURL.Hostname(), a.allowedHosts)
+	if isPrivateOrLoopbackHost(parsedURL.Hostname()) && !allowedHost {
+		return PullResponse{}, fmt.Errorf("%w: host %q", ErrSourceNotAllowed, parsedURL.Hostname())
+	}
+	if len(a.allowedHosts) > 0 && !allowedHost {
 		return PullResponse{}, fmt.Errorf("%w: host %q", ErrSourceNotAllowed, parsedURL.Hostname())
 	}
 

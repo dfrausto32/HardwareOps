@@ -41,18 +41,11 @@ func GetMaintenance(state MaintenanceState) http.HandlerFunc {
 	}
 }
 
-func SetMaintenance(logger *log.Logger, st store.Store, state MaintenanceState, token string, trustProxy bool) http.HandlerFunc {
+func SetMaintenance(logger *log.Logger, st store.Store, state MaintenanceState, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if state == nil {
 			http.Error(w, "maintenance not configured", http.StatusNotFound)
 			return
-		}
-		if token != "" {
-			header := strings.TrimSpace(r.Header.Get("X-Maintenance-Token"))
-			if header == "" || header != token {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
 		}
 		var req MaintenanceRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -62,11 +55,7 @@ func SetMaintenance(logger *log.Logger, st store.Store, state MaintenanceState, 
 		beforeEnabled, beforeMessage, beforeUpdatedAt := state.Get()
 		state.Set(req.Enabled, strings.TrimSpace(req.Message))
 		enabled, message, updatedAt := state.Get()
-		authMethod := "ui"
-		if token != "" {
-			authMethod = "maintenance_token"
-		}
-		event := buildAuditEvent(r, trustProxy, actorUser(authMethod), "maintenance.set", "maintenance", "control-plane")
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "maintenance.set", "maintenance", "control-plane")
 		event.BeforeJSON = auditJSON(map[string]any{
 			"enabled":   beforeEnabled,
 			"message":   beforeMessage,

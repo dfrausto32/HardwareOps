@@ -3,6 +3,46 @@ set -euo pipefail
 
 BASE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
+ensure_ca_bundle_contains() {
+  local bundle_path=$1
+  shift
+  python3 - "$bundle_path" "$@" <<'PY'
+import hashlib
+import re
+import ssl
+import sys
+from pathlib import Path
+
+bundle_path = Path(sys.argv[1])
+source_paths = [Path(p) for p in sys.argv[2:] if p]
+pattern = re.compile(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----\s*", re.S)
+
+seen = {}
+order = []
+
+def add_pems(path: Path) -> None:
+    if not path.exists():
+        return
+    text = path.read_text()
+    for match in pattern.findall(text):
+        pem = match if match.endswith("\n") else match + "\n"
+        der = ssl.PEM_cert_to_DER_cert(pem)
+        fp = hashlib.sha256(der).hexdigest()
+        if fp not in seen:
+            seen[fp] = pem
+            order.append(fp)
+
+add_pems(bundle_path)
+for src in source_paths:
+    add_pems(src)
+
+desired = "".join(seen[fp] for fp in order)
+current = bundle_path.read_text() if bundle_path.exists() else ""
+if current != desired:
+    bundle_path.write_text(desired)
+PY
+}
+
 if [ -n "${CONTROL_PLANE_ENV_FILE:-}" ] && [ -f "$CONTROL_PLANE_ENV_FILE" ]; then
   set -a
   # shellcheck disable=SC1090
@@ -195,6 +235,10 @@ export S3_PRESIGN_TTL=${S3_PRESIGN_TTL:-5m}
 export ARTIFACT_PULL_ALLOWED_HOSTS=${ARTIFACT_PULL_ALLOWED_HOSTS:-}
 export ARTIFACT_PULL_MAX_BYTES=${ARTIFACT_PULL_MAX_BYTES:-1073741824}
 export ARTIFACT_PULL_TIMEOUT=${ARTIFACT_PULL_TIMEOUT:-15m}
+export ARTIFACT_PULL_ALLOW_INSECURE_HTTP=${ARTIFACT_PULL_ALLOW_INSECURE_HTTP:-1}
+export ARTIFACT_SIGNATURE_REQUIRE_DEFAULT=${ARTIFACT_SIGNATURE_REQUIRE_DEFAULT:-0}
+export ARTIFACT_SIGNATURE_ENFORCE_INGEST=${ARTIFACT_SIGNATURE_ENFORCE_INGEST:-0}
+export ARTIFACT_SIGNATURE_KEY_ID=${ARTIFACT_SIGNATURE_KEY_ID:-}
 export ARTIFACT_PULL_CREDENTIALS_FILE=${ARTIFACT_PULL_CREDENTIALS_FILE:-}
 export ARTIFACT_PULL_CREDENTIALS_JSON=${ARTIFACT_PULL_CREDENTIALS_JSON:-}
 export ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID=${ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID:-}
@@ -207,6 +251,12 @@ export CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http:/
 export METRICS_ENABLED=${METRICS_ENABLED:-1}
 export METRICS_PATH=${METRICS_PATH:-/metrics}
 export METRICS_REFRESH_INTERVAL=${METRICS_REFRESH_INTERVAL:-30s}
+export AUTH_LOGIN_RPM=${AUTH_LOGIN_RPM:-120}
+export AUTH_LOGIN_BACKOFF_ENABLED=${AUTH_LOGIN_BACKOFF_ENABLED:-1}
+export AUTH_LOGIN_BACKOFF_THRESHOLD=${AUTH_LOGIN_BACKOFF_THRESHOLD:-3}
+export AUTH_LOGIN_BACKOFF_BASE=${AUTH_LOGIN_BACKOFF_BASE:-1s}
+export AUTH_LOGIN_BACKOFF_MAX=${AUTH_LOGIN_BACKOFF_MAX:-30s}
+export AUTH_LOGIN_BACKOFF_WINDOW=${AUTH_LOGIN_BACKOFF_WINDOW:-15m}
 export EVENT_RETENTION_DAYS=${EVENT_RETENTION_DAYS:-30}
 export EVENT_RETENTION_CLEANUP_INTERVAL=${EVENT_RETENTION_CLEANUP_INTERVAL:-1h}
 export DEVICE_IDENTITY_MODE=${DEVICE_IDENTITY_MODE:-audit}
@@ -251,6 +301,7 @@ if [ "$ROTATION_DEFAULTS" = "1" ]; then
   if [ ! -f "$CA_BUNDLE_PATH" ]; then
     cat "$CA_CERT" "$ACTIVE_CA_CERT_PATH" > "$CA_BUNDLE_PATH"
   fi
+  ensure_ca_bundle_contains "$CA_BUNDLE_PATH" "$CA_CERT" "$ACTIVE_CA_CERT_PATH"
 
   export ACTIVE_CA_CERT_PATH
   export ACTIVE_CA_KEY_PATH

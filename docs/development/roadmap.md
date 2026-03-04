@@ -9,6 +9,35 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 
 ---
 
+## Program Snapshot (Parallel Session Staging)
+_Updated: 2026-03-04_
+
+Use this section as the single source of truth for "what is done" vs "what is left."
+
+### Phase-level status
+| Phase | Status | Summary |
+|---|---|---|
+| Phase A — Foundation | 🟢 Complete | Core deployability, signing, upgrades, cert rotation, licensing, backup/restore are in place. |
+| Phase B — Operational Maturity | 🟢 Complete | Audit/metrics/events/lifecycle/CI ingest/bulk ops shipped and operational. |
+| Phase B Extension — UX + Realtime | 🟢 Complete | Bulk actions + realtime updates + auth-session UX reset shipped. |
+| Operational Hardening (between B and C) | 🟡 In progress | Most hardening tracks are complete; trusted-proxy CIDR tightening is still open. |
+| Phase C — Enterprise Readiness | 🟡 In progress | First-contact onboarding + break-glass + RBAC are partially complete; key closeout items remain. |
+| Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment exists; production hardening and cloud maturity items remain. |
+
+### Active work queue (what is still to do)
+1. **C-ONBOARD-TELEMETRY** — First-contact onboarding telemetry/alert closeout (pending queue pressure + abuse diagnostics).
+2. **C-RBAC-CLOSEOUT** — Complete role-aware UI gating and verify endpoint/UI parity across pages.
+3. **C-BREAKGLASS-ROTATION** — Complete break-glass credential/token forced-rotation + revocation workflow.
+4. **HARDENING-PROXY-CIDR** — Tighten and validate trusted-proxy CIDR policy in hardened deployments.
+5. **D-AWS-HARDENING** — Finish least-privilege IAM/WAF/exec guardrails and production hardening pack acceptance checks.
+
+### Ready for parallel execution
+- Lane A: `C-ONBOARD-TELEMETRY` + onboarding ops dashboard/alerts.
+- Lane B: `C-RBAC-CLOSEOUT` + role-aware UI cleanup.
+- Lane C: `D-AWS-HARDENING` + Terraform/runbook hardening acceptance.
+
+---
+
 ## Recently Completed (Current State)
 - ✅ Artifact signing + verification (Ed25519) end‑to‑end (packer → control‑plane → agent).
 - ✅ Device status model (active/stale/offline) with periodic refresh.
@@ -29,8 +58,11 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - ✅ AWS per-customer Terraform scaffold + CLI wrapper + deployment runbook + demo fleet baseline.
 - ✅ Artifact ingest validation harness (push + pull local smoke test + operator test runbook).
 - ✅ Artifactory pull adapter (provider plugin) + signed local demo workflow (`setup-artifactory-demo.sh` / `test-artifactory-adapter.sh`).
-- ✅ License anti-cheat hardening v1 (atomic enroll cap enforcement + clone-suspicion telemetry).
+- ✅ License anti-cheat hardening close-out (transactional cap checks + identity enforcement + hardened profile + auditable decommission).
 - ✅ Device identity hardening v1 (`DEVICE_IDENTITY_MODE` audit/enforce + hardware identity conflict detection on enroll/check-in).
+- ✅ Artifact auto-version tracking (global default + per-component override, semver `W.X.Y[.Z]`, signed/active eligibility, periodic + ingest-triggered desired-state updates).
+- ✅ Artifact signature enforcement policy (control-plane ingest guardrails + check-in applyPolicy defaults for agent-side verification).
+- ✅ Enrollment profile token reissue policy (rotate-time grace windows + rotation reason audit metadata).
 
 ---
 
@@ -193,16 +225,20 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
   - Production guardrails prevent accidental insecure mode (`AUTH_MODE=disabled`, `LICENSE_ENFORCE=0`) in hardened profiles.
   - Trusted-proxy allowlist is enforced for forwarded client-cert headers.
   - Device slot reclaim/decommission path is explicit and auditable (no silent quota bypass by deletes).
-- **Notes:** Shipped now: transactional device cap enforcement, clone-suspicion runtime/audit events, and hardware identity audit/enforce checks (`device-identity-hardening.md`). Remaining hardening items are scheduled in Phase B.
-- **Notes:** Shipped: transactional cap enforcement, clone-suspicion runtime/audit events, hardware identity audit/enforce checks (`device-identity-hardening.md`), hardened startup profile guardrails (`HARDENED_PROFILE`), and explicit admin decommission endpoint for auditable slot reclaim (`POST /api/v1/devices/{deviceId}/decommission`).
+- **Notes:** Shipped: transactional cap enforcement, clone-suspicion runtime/audit events, hardware identity audit/enforce checks (`device-identity-hardening.md`), hardened startup profile guardrails (`HARDENED_PROFILE`), trusted-proxy allowlist enforcement, and explicit admin decommission endpoint for auditable slot reclaim (`POST /api/v1/devices/{deviceId}/decommission`).
 
-#### Release channels
-- **Status:** ⬜ Planned
-- **Scope:** Stable/canary labels; gradual rollout controls.
-- **Dependencies:** Grouping + desired-state policy.
-- **Risks:** Mis‑targeted rollouts.
-- **Acceptance:** Controlled staged rollouts with visibility.
-- **Notes:** 
+#### Artifact auto-version tracking
+- **Status:** 🟢 Complete
+- **Scope:** Auto-advance desired state to the newest eligible artifact when `name + type` match and version is semver (`W.X.Y` or `W.X.Y.Z`).
+- **Dependencies:** Artifact metadata hygiene, desired-state components, audit trail.
+- **Risks:** Unexpected upgrades if defaults are too broad.
+- **Acceptance:** 
+  - Global default toggle in Settings with optional `allowUnsigned` override.
+  - Per-component `autoVersion.mode` override (`inherit` / `enabled` / `disabled`) in group/device desired-state editors.
+  - Only `status=active` artifacts are considered; signature required unless unsigned override is enabled.
+  - Runs on schedule and immediately after artifact ingest (`create` / `upload` / `pull` / `complete`).
+  - Updates components independently and emits audit events for entity updates + run summaries.
+- **Notes:** Supports immediate desired-state updates; agent-side apply rollback behavior remains unchanged.
 
 #### Bulk group management
 - **Status:** 🟢 Complete
@@ -221,8 +257,125 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Notes:** Presigned CI push path implemented (`/artifacts/presign-upload` + `/artifacts/complete`) with scoped expiring service tokens (`artifact.publish`) and `scripts/ci-upload-artifact.sh`. Pull ingest API implemented (`/artifacts/pull`) with checksum validation + host/size/timeout guardrails plus CI helper `scripts/ci-pull-artifact.sh`. Adapter framework and backward-compatible source shape are in place (`sourceUrl` or `source.kind` + `source.uri`; current kinds=`http`,`artifactory`). Credential resolver abstraction is in place (`source.credentialRef`) with static map (`ARTIFACT_PULL_CREDENTIALS_FILE`/`ARTIFACT_PULL_CREDENTIALS_JSON`) plus AWS Secrets Manager-backed loading (`ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID`). Pull resolver operational workflow is implemented with admin status/reload endpoints (`GET/POST /api/v1/artifacts/pull-credentials*`) and helper script (`scripts/reload-pull-credentials.sh`). Artifactory adapter shipped with local docker smoke scripts (`scripts/setup-artifactory-demo.sh`, `scripts/test-artifactory-adapter.sh`) and signed artifact demo flow. Smoke coverage now validates push + pull + pull-credential reload audit path in `scripts/test-artifact-ingest.sh` (see `artifact-ingest-test-plan.md`). CI provider scaffold templates added for GitHub Actions/GitLab/Jenkins (`../../deploy/ci/README.md`). Vault resolver backend is deferred to Phase C.
 
 ### Recommended Next Sequence (Current)
-1. **Release channels:** Add stable/canary promotion and staged rollout targeting.
-2. **Phase B closeout:** Run end-to-end validation + docs cleanup for CI/release workflow handoff.
+1. **First-contact onboarding closeout:** Finish `C-ONBOARD-TELEMETRY` (queue pressure/abuse observability + actionable alerts/runbook).
+2. **RBAC closeout:** Finish `C-RBAC-CLOSEOUT` (role-aware UI parity across all pages and regression validation).
+3. **Break-glass hardening:** Implement `C-BREAKGLASS-ROTATION` (forced rotation + revoke flows with strong audit trail).
+4. **Trusted proxy hardening:** Finish `HARDENING-PROXY-CIDR` (strict CIDR validation/policy in hardened profile + deployment docs).
+5. **AWS production hardening:** Continue `D-AWS-HARDENING` acceptance checks and runbook finalization.
+
+### Suggested Next Implementation (MVP)
+1. **Onboarding telemetry slice:** Add pending-queue age buckets + throttle reason counters + operator alert thresholds.
+2. **RBAC parity sweep:** Audit all UI actions/pages for role enforcement consistency and add missing gates.
+3. **Break-glass rotation API:** Add explicit rotate/revoke endpoints + operator UX + audit/event instrumentation.
+
+---
+
+## Phase B Extension — Operator UX + Realtime Workflow (Post-Phase B, Pre-Phase C)
+**Goal:** Close production operator workflow gaps found during Docker prod-lab testing.
+
+### Definition of Done
+- Operators can perform high-volume cleanup actions directly in UI without repetitive per-row work.
+- Device/artifact lifecycle changes are visible near-real-time without manual refresh loops.
+- Expired/invalid auth sessions fail cleanly back to login instead of broad fetch-failure states.
+
+### Backlog Tracks
+#### Device bulk delete actions
+- **Status:** 🟢 Complete
+- **Scope:** Multi-select devices in Devices page and delete selected in one operation.
+- **Notes:** Devices page now supports row/shift multi-select with explicit decommission confirmation + reason and bulk execution summary.
+
+#### Group delete with optional device cascade
+- **Status:** 🟢 Complete
+- **Scope:** Group delete flow can optionally remove devices assigned to that group.
+- **Notes:** Single and selected-group delete flows now support optional "Delete + Devices" cascade with impact counts and required decommission reason.
+
+#### Device logs navigation improvements
+- **Status:** 🟢 Complete
+- **Scope:** Add device selector dropdown on Logs page for fast switching.
+- **Notes:** Preserve current filter state when switching devices.
+
+#### Artifact bulk delete
+- **Status:** 🟢 Complete
+- **Scope:** Multi-select artifacts for delete/prune actions (still honoring in-use safety checks).
+- **Notes:** Artifacts table now supports row/shift multi-select and bulk delete; only deprecated + unreferenced artifacts are deleted and skipped counts are surfaced.
+
+#### Realtime upload + registration updates
+- **Status:** 🟢 Complete
+- **Scope:** WebSocket/SSE-driven near-real-time UI updates for artifact uploads and new device registration.
+- **Notes:** Runtime events now include `artifact.registered` and `device.enroll`; dashboard clients auto-refresh artifacts/devices on relevant event types via websocket feed with throttled refresh.
+
+#### Auth/session failure UX reset
+- **Status:** 🟢 Complete
+- **Scope:** On auth expiry/invalid session, route to login with clear session-expired message.
+- **Notes:** Avoid global "everything failed to fetch" dead state.
+
+---
+
+## Operational Hardening (Post-Phase B, Pre-Phase C)
+**Goal:** Close immediate production security gaps before enterprise identity/policy expansion.
+
+### Definition of Done
+- Production bundles fail fast on insecure defaults.
+- Browser clients are not shipped privileged operational secrets.
+- Pull ingest and proxy trust are tightly bounded to explicit network policy.
+- Auth, artifact, and upgrade paths have abuse-resistant controls.
+
+### Hardening Tracks
+#### Pull ingest boundary hardening
+- **Status:** 🟢 Complete
+- **Scope:** Require explicit `ARTIFACT_PULL_ALLOWED_HOSTS` in hardened deployments; default to HTTPS-only pull adapters; block internal/loopback targets unless explicitly allowed.
+- **Dependencies:** Pull adapter policy checks, startup config validation.
+- **Risks:** Breaking existing permissive pull workflows if migration is not staged.
+- **Acceptance:** Pull ingest cannot reach arbitrary/internal endpoints by default.
+- **Notes:** Implemented with adapter-level policy enforcement (`http`/`artifactory`), `ARTIFACT_PULL_ALLOW_INSECURE_HTTP=0` production defaults, internal/loopback block unless allowlisted, and hardened-profile startup checks requiring explicit pull allowlist.
+
+#### Maintenance/upgrade token exposure removal
+- **Status:** 🟢 Complete
+- **Scope:** Remove `VITE_MAINTENANCE_TOKEN` from shipped UI; perform maintenance/upgrade authorization server-side via admin auth and/or operator-only backend workflows.
+- **Dependencies:** UI/API maintenance flows, deployment templates.
+- **Risks:** Temporary operator friction during migration.
+- **Acceptance:** No privileged maintenance token embedded in browser-delivered assets.
+- **Notes:** UI now uses admin-authenticated API calls for maintenance toggle and upgrade apply; browser build/token wiring removed from compose, installer, and upgrade package templates.
+
+#### Secure defaults and startup guardrails
+- **Status:** 🟢 Complete
+- **Scope:** Eliminate permissive fallback secrets/tokens for production profiles; enforce `LICENSE_ENFORCE=1`, non-placeholder auth/bootstrap/maintenance secrets, and strict proxy CIDR validation.
+- **Dependencies:** Config validation, installer/compose templates.
+- **Risks:** Install failures for environments still using dev defaults.
+- **Acceptance:** Hardened/prod startup refuses weak or placeholder configuration.
+- **Notes:** Hardened startup now enforces non-placeholder/length guardrails for auth + bootstrap secrets, rejects overly long auth token TTL, validates proxy CIDRs, and rejects wildcard proxy trust ranges.
+
+#### Privilege boundary for upgrade/backup execution
+- **Status:** 🟢 Complete
+- **Scope:** Reduce control-plane host privilege by moving docker-socket-dependent actions into constrained runner workflows.
+- **Dependencies:** Upgrade/backup runner architecture, container/runtime policy.
+- **Risks:** Operational complexity if migration is incomplete.
+- **Acceptance:** Always-on control-plane no longer requires broad host-level container control.
+- **Notes:** Control-plane now supports `remote` runner mode (`UPGRADE_RUNNER_MODE=remote`, `BACKUP_RUNNER_MODE=remote`) and calls a dedicated `maintenance-runner` API for upgrade/backup/restore execution. On-prem compose/templates now move `/var/run/docker.sock` to `maintenance-runner` only, removing docker-socket privilege from the always-on control-plane service.
+
+#### Auth brute-force and abuse controls
+- **Status:** 🟢 Complete
+- **Scope:** Add login rate limiting and progressive lock/backoff for repeated failures.
+- **Dependencies:** Auth middleware and audit integration.
+- **Risks:** False positives impacting legitimate users.
+- **Acceptance:** Repeated credential attacks are throttled and visible in audit/metrics.
+- **Notes:** Implemented for local auth with per-IP login RPM limiter (`AUTH_LOGIN_RPM`) plus progressive per-identity backoff (`AUTH_LOGIN_BACKOFF_*`) and `Retry-After` responses; failed/blocked login attempts are audited.
+
+#### Artifact signature enforcement by policy
+- **Status:** 🟢 Complete
+- **Scope:** Make signature verification default-required for production agent profiles, with explicit emergency override only.
+- **Dependencies:** Agent config profiles, deployment docs.
+- **Risks:** Older unsigned pipelines break until signing is adopted.
+- **Acceptance:** Production agents reject unsigned artifacts by default.
+- **Notes:** Control-plane now supports signature policy defaults (`ARTIFACT_SIGNATURE_REQUIRE_DEFAULT`, `ARTIFACT_SIGNATURE_KEY_ID`) that are merged into component `applyPolicy` at check-in time, so agents enforce signature verification without per-device env tuning. Optional ingest-time enforcement (`ARTIFACT_SIGNATURE_ENFORCE_INGEST=1`) blocks unsigned/wrong-key artifact registration in control-plane paths (`create`, `upload`, `pull`, `complete`).
+
+#### Trusted proxy allowlist tightening
+- **Status:** ⬜ Planned
+- **Scope:** Validate and constrain `TRUST_PROXY_CIDRS`; block wildcard/overbroad trust in hardened deployments.
+- **Dependencies:** Config validation, deployment runbooks.
+- **Risks:** Incorrect CIDRs can break real client IP/cert forwarding.
+- **Acceptance:** Forwarded headers are only honored from explicitly trusted proxy ranges.
+- **Notes:** Complements existing forwarded-header allowlist implementation.
 
 ---
 
@@ -258,6 +411,14 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Risks:** Complexity / misconfig.
 - **Acceptance:** Custom policies enforce least privilege.
 - **Notes:** 
+
+#### Release channels (customer-defined canary/stable)
+- **Status:** ⬜ Planned
+- **Scope:** Customer-owned channel labels and promotion workflow (for environments that want staged channel operations).
+- **Dependencies:** Desired-state/channel model, policy/audit controls, optional health/soak integration.
+- **Risks:** Mis-targeted promotions and policy drift across customers.
+- **Acceptance:** Controlled staged promotions with explicit visibility and rollback path.
+- **Notes:** Deferred from Phase B to Phase C because rollout policy is customer-specific.
 
 #### OIDC SSO
 - **Status:** ⬜ Planned
@@ -322,6 +483,19 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 - **Risks:** Misuse.
 - **Acceptance:** Emergency access is possible and auditable.
 - **Notes:** Bootstrap admin + voucher onboarding implemented; rotation + revocation workflows remain.
+
+#### Agent first-contact approval onboarding (no pre-shipped client cert)
+- **Status:** 🟡 In progress
+- **Scope:** Let agents start without a device client cert, request enrollment, wait in a pending queue, and only receive signed device certs after explicit operator approval.
+- **Dependencies:** Enrollment token/profile model, pending-enrollment API/UI, CSR signing pipeline, rate limits/abuse controls, audit events.
+- **Risks:** Enrollment spam, spoofed first-contact metadata, and insecure bootstrap if server trust is not established.
+- **Acceptance:**
+  - Agent can bootstrap with only control-plane URL + enrollment profile/token (no preloaded client cert/key).
+  - Agent generates keypair locally and submits CSR; private key never leaves device.
+  - Control-plane creates a pending enrollment record; operator can approve/deny in UI/API.
+  - On approval, control-plane signs CSR and returns cert chain; agent transitions to normal mTLS check-in flow.
+  - All actions (request/approve/deny/issue) are audited and subject to license/device-cap checks.
+- **Notes:** Draft API/workflow + exact agent bootstrap state machine: `agent-first-contact-onboarding.md`. Backend slices 1-2 shipped: enrollment profile creation/listing (`GET|POST /api/v1/enrollment-profiles`), profile update/edit (`PATCH /api/v1/enrollment-profiles/{profileId}`), profile token rotation (`POST /api/v1/enrollment-profiles/{profileId}/rotate`), profile enable/disable (`POST /api/v1/enrollment-profiles/{profileId}/enable|disable`), pending enrollment request (`POST /api/v1/pending-enrollments/request`), queue read (`GET /api/v1/pending-enrollments`), operator approve/deny/reset (`POST /api/v1/pending-enrollments/{requestId}/approve|deny|reset`), and agent claim (`POST /api/v1/pending-enrollments/claim`) that issues certs after approval. Conflict claim paths now persist `status=conflict`, and reset tooling reopens denied/conflict/expired requests. Anti-spam / abuse controls are now in place: optional per-profile enrollment challenge, per-source + per-profile request rate limits, active pending queue caps, explicit pending queue/throttle metrics, approval-delay throttles surfaced in the Security UI, and approval-delay validation so profiles cannot outlive the pending request TTL. Security UI now includes enrollment profile management with labels, in-place profile editing (labels/challenge/delay), one-click copy/download for freshly issued bootstrap tokens, token rotation, a pending-enrollment queue with approve/deny/reset actions, and a global approval alert that jumps directly to Security. Dev/demo launcher supports pending mode for local testing, including profile default-label injection. The real Go agent now has an approval-mode scaffold behind `AGENT_ENROLL_MODE=approval`, with persisted `bootstrap-state.json`, CSR request/claim polling, identity materialization into `device.crt` + `device-id`, retry behavior that can resume after operator resets, reenroll CA persistence so private-CA rotation propagates correctly after `device.reenroll`, and coverage proving enrollment profile default labels drive first check-in group desired-state resolution. Token reissue policy tuning is now in place via rotate-time grace windows (`gracePeriodSec`) and rotation-reason audit metadata. Next: deeper approval-abuse telemetry if needed in production.
 
 ---
 

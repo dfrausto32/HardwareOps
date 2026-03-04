@@ -14,6 +14,7 @@ Deep-dive references are listed at the end.
 ## 1) Choose a deployment path
 
 - **Local dev (WSL):** `local-dev-wsl.md`
+- **Production-like Docker validation:** `testing/prod-docker-lab.md`
 - **On-prem customer stack:** Section 2 in this file
 - **AWS vendor-hosted per customer:** Section 3 in this file
 
@@ -223,6 +224,7 @@ sudo chattr +i .env.onprem docker-compose.onprem.bundle.yml
 - Installer details: `installers.md`
 - Fresh-machine installer flow: `installer-flow.md`
 - Deployment hardening details: `deployment-hardening.md`
+- Production-like Docker validation lab: `testing/prod-docker-lab.md`
 - AWS strategy: `development/aws-cloud-setup-plan.md`
 - AWS runbook (expanded): `development/aws-customer-deployment-runbook.md`
 - Terraform module details: `../deploy/aws/terraform/README.md`

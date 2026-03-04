@@ -19,6 +19,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/hardwareops/control-plane/internal/artifactingest"
+	"github.com/hardwareops/control-plane/internal/events"
 	"github.com/hardwareops/control-plane/internal/lifecycle"
 	"github.com/hardwareops/control-plane/internal/metrics"
 	"github.com/hardwareops/control-plane/internal/store"
@@ -117,6 +118,10 @@ type PullSourceSpec struct {
 	CredentialRef string `json:"credentialRef"`
 }
 
+type releaseAutoTrigger interface {
+	Trigger(reason string)
+}
+
 type DeprecateArtifactRequest struct {
 	DeleteAfterDays int `json:"deleteAfterDays"`
 }
@@ -158,7 +163,19 @@ type ArtifactLifecycleStatusResponse struct {
 	Alerts                  []lifecycle.Alert       `json:"alerts,omitempty"`
 }
 
-func CreateArtifact(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
+func CreateArtifact(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
+	return createArtifact(logger, st, trustProxy, sigPolicy, nil, nil)
+}
+
+func CreateArtifactWithReleaseAuto(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger) http.HandlerFunc {
+	return createArtifact(logger, st, trustProxy, sigPolicy, releaseAuto, nil)
+}
+
+func CreateArtifactWithRealtime(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub) http.HandlerFunc {
+	return createArtifact(logger, st, trustProxy, sigPolicy, releaseAuto, hub)
+}
+
+func createArtifact(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req CreateArtifactRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -177,6 +194,10 @@ func CreateArtifact(logger *log.Logger, st store.Store, trustProxy bool) http.Ha
 		meta, err := normalizeMetadata(req.Metadata)
 		if err != nil {
 			http.Error(w, "metadata must be valid json", http.StatusBadRequest)
+			return
+		}
+		if err := sigPolicy.ValidateIngest(req.Signature, req.SignatureKeyID); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		meta, err = mergeSignatureKeyID(meta, req.SignatureKeyID)
@@ -222,6 +243,10 @@ func CreateArtifact(logger *log.Logger, st store.Store, trustProxy bool) http.Ha
 			"sizeBytes":  artifact.SizeBytes,
 		})
 		writeAudit(logger, st, event, nil)
+		emitArtifactRegisteredEvent(logger, st, hub, artifact, "create")
+		if releaseAuto != nil {
+			releaseAuto.Trigger("artifact_create")
+		}
 
 		resp := artifactToResponse(artifact, 0)
 		w.Header().Set("Content-Type", "application/json")
@@ -229,7 +254,34 @@ func CreateArtifact(logger *log.Logger, st store.Store, trustProxy bool) http.Ha
 	}
 }
 
-func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics) http.HandlerFunc {
+func emitArtifactRegisteredEvent(logger *log.Logger, st store.Store, hub *events.Hub, artifact store.Artifact, source string) {
+	emitRuntimeEvent(logger, st, hub, events.Event{
+		Type: events.TypeArtifactRegistered,
+		Payload: auditJSON(map[string]any{
+			"artifactId": artifact.ArtifactID,
+			"name":       artifact.Name,
+			"version":    artifact.Version,
+			"type":       artifact.Type,
+			"status":     artifact.Status,
+			"source":     source,
+			"sizeBytes":  artifact.SizeBytes,
+		}),
+	})
+}
+
+func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
+	return uploadArtifact(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, nil, nil)
+}
+
+func UploadArtifactWithReleaseAuto(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger) http.HandlerFunc {
+	return uploadArtifact(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, releaseAuto, nil)
+}
+
+func UploadArtifactWithRealtime(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub) http.HandlerFunc {
+	return uploadArtifact(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, releaseAuto, hub)
+}
+
+func uploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		record := func(status string) {
 			if metricsCollector != nil {
@@ -269,6 +321,11 @@ func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 		}
 		signature := strings.TrimSpace(r.FormValue("signature"))
 		signatureKeyID := strings.TrimSpace(r.FormValue("signatureKeyId"))
+		if err := sigPolicy.ValidateIngest(signature, signatureKeyID); err != nil {
+			record("error")
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		meta, err = mergeSignatureKeyID(meta, signatureKeyID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -344,6 +401,10 @@ func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 			"sizeBytes":  size,
 		})
 		writeAudit(logger, st, event, nil)
+		emitArtifactRegisteredEvent(logger, st, hub, artifact, "upload")
+		if releaseAuto != nil {
+			releaseAuto.Trigger("artifact_upload")
+		}
 
 		resp := UploadArtifactResponse{
 			ArtifactID: artifactID,
@@ -359,10 +420,22 @@ func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 	}
 }
 
-func PullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, allowedHosts []string, maxBytes int64, timeout time.Duration, credentialResolver artifactingest.CredentialResolver, trustProxy bool, metricsCollector *metrics.Metrics) http.HandlerFunc {
+func PullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, allowedHosts []string, maxBytes int64, timeout time.Duration, allowInsecureHTTP bool, credentialResolver artifactingest.CredentialResolver, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
+	return pullArtifact(logger, st, objStore, bucket, allowedHosts, maxBytes, timeout, allowInsecureHTTP, credentialResolver, trustProxy, metricsCollector, sigPolicy, nil, nil)
+}
+
+func PullArtifactWithReleaseAuto(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, allowedHosts []string, maxBytes int64, timeout time.Duration, allowInsecureHTTP bool, credentialResolver artifactingest.CredentialResolver, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger) http.HandlerFunc {
+	return pullArtifact(logger, st, objStore, bucket, allowedHosts, maxBytes, timeout, allowInsecureHTTP, credentialResolver, trustProxy, metricsCollector, sigPolicy, releaseAuto, nil)
+}
+
+func PullArtifactWithRealtime(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, allowedHosts []string, maxBytes int64, timeout time.Duration, allowInsecureHTTP bool, credentialResolver artifactingest.CredentialResolver, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub) http.HandlerFunc {
+	return pullArtifact(logger, st, objStore, bucket, allowedHosts, maxBytes, timeout, allowInsecureHTTP, credentialResolver, trustProxy, metricsCollector, sigPolicy, releaseAuto, hub)
+}
+
+func pullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, allowedHosts []string, maxBytes int64, timeout time.Duration, allowInsecureHTTP bool, credentialResolver artifactingest.CredentialResolver, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub) http.HandlerFunc {
 	adapterRegistry := artifactingest.NewPullAdapterRegistry(
-		artifactingest.NewHTTPPullAdapter(allowedHosts, timeout),
-		artifactingest.NewArtifactoryPullAdapter(allowedHosts, timeout),
+		artifactingest.NewHTTPPullAdapter(allowedHosts, timeout, allowInsecureHTTP),
+		artifactingest.NewArtifactoryPullAdapter(allowedHosts, timeout, allowInsecureHTTP),
 	)
 	if credentialResolver == nil {
 		credentialResolver = artifactingest.NoopCredentialResolver{}
@@ -429,6 +502,11 @@ func PullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, buck
 		if err != nil {
 			record("error")
 			http.Error(w, "metadata must be valid json", http.StatusBadRequest)
+			return
+		}
+		if err := sigPolicy.ValidateIngest(req.Signature, req.SignatureKeyID); err != nil {
+			record("error")
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		meta, err = mergeSignatureKeyID(meta, req.SignatureKeyID)
@@ -591,6 +669,10 @@ func PullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, buck
 			"credentialRef": sourceSpec.CredentialRef,
 		})
 		writeAudit(logger, st, event, nil)
+		emitArtifactRegisteredEvent(logger, st, hub, artifact, "pull")
+		if releaseAuto != nil {
+			releaseAuto.Trigger("artifact_pull")
+		}
 
 		out := UploadArtifactResponse{
 			ArtifactID: artifactID,
@@ -683,7 +765,19 @@ func PresignArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectSt
 	}
 }
 
-func CompleteArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics) http.HandlerFunc {
+func CompleteArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
+	return completeArtifactUpload(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, nil, nil)
+}
+
+func CompleteArtifactUploadWithReleaseAuto(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger) http.HandlerFunc {
+	return completeArtifactUpload(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, releaseAuto, nil)
+}
+
+func CompleteArtifactUploadWithRealtime(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub) http.HandlerFunc {
+	return completeArtifactUpload(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, releaseAuto, hub)
+}
+
+func completeArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		record := func(status string) {
 			if metricsCollector != nil {
@@ -731,6 +825,11 @@ func CompleteArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectS
 		if err != nil {
 			record("error")
 			http.Error(w, "metadata must be valid json", http.StatusBadRequest)
+			return
+		}
+		if err := sigPolicy.ValidateIngest(req.Signature, req.SignatureKeyID); err != nil {
+			record("error")
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		meta, err = mergeSignatureKeyID(meta, req.SignatureKeyID)
@@ -813,6 +912,10 @@ func CompleteArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectS
 			"sizeBytes":  size,
 		})
 		writeAudit(logger, st, event, nil)
+		emitArtifactRegisteredEvent(logger, st, hub, artifact, "complete")
+		if releaseAuto != nil {
+			releaseAuto.Trigger("artifact_complete_upload")
+		}
 
 		resp := UploadArtifactResponse{
 			ArtifactID: req.ArtifactID,

@@ -97,7 +97,7 @@ type Action struct {
 	TimeoutSec int             `json:"timeoutSec"`
 }
 
-func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustProxy bool, clientCertHeader string, activeCAPool func() *x509.CertPool, identityPolicy DeviceIdentityPolicy, metricsCollector *metrics.Metrics) http.HandlerFunc {
+func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustProxy bool, clientCertHeader string, activeCAPool func() *x509.CertPool, identityPolicy DeviceIdentityPolicy, metricsCollector *metrics.Metrics, signaturePolicy ArtifactSignaturePolicy) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		policy := identityPolicy.normalized()
 		recordCheckin := func(status, reason string) {
@@ -366,19 +366,19 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 		}
 		for key := range componentKeys {
 			if comp, ok := desiredComponents[key]; ok && comp.Source == "manual" {
-				out := toCheckinComponent(comp)
+				out := toCheckinComponent(comp, signaturePolicy)
 				out.Source = "manual"
 				respComponents[key] = out
 				continue
 			}
 			if comp, ok := groupComponents[key]; ok && (comp.ArtifactID != "" || comp.DesiredVersion != "" || comp.DesiredConfigRev != "" || len(comp.Policy) != 0) {
-				out := toCheckinComponent(comp)
+				out := toCheckinComponent(comp, signaturePolicy)
 				out.Source = "group"
 				respComponents[key] = out
 				continue
 			}
 			if comp, ok := desiredComponents[key]; ok {
-				respComponents[key] = toCheckinComponent(comp)
+				respComponents[key] = toCheckinComponent(comp, signaturePolicy)
 			}
 		}
 
@@ -613,13 +613,13 @@ func componentHasError(comps map[string]DeviceComponentState) bool {
 	return false
 }
 
-func toCheckinComponent(comp DesiredComponentResponse) DesiredComponent {
+func toCheckinComponent(comp DesiredComponentResponse, signaturePolicy ArtifactSignaturePolicy) DesiredComponent {
 	return DesiredComponent{
 		ArtifactID:      comp.ArtifactID,
 		ArtifactType:    comp.ArtifactType,
 		SoftwareVersion: comp.DesiredVersion,
 		ConfigRev:       comp.DesiredConfigRev,
-		ApplyPolicy:     comp.Policy,
+		ApplyPolicy:     signaturePolicy.MergeApplyPolicy(comp.Policy),
 		Source:          comp.Source,
 		Locked:          comp.Locked,
 	}

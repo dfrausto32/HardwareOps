@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -23,11 +24,23 @@ type RateLimitError struct {
 	Status     int
 }
 
+type StatusError struct {
+	StatusCode int
+	Body       string
+}
+
 func (e RateLimitError) Error() string {
 	if e.RetryAfter > 0 {
 		return fmt.Sprintf("rate limited: retry after %s", e.RetryAfter)
 	}
 	return fmt.Sprintf("rate limited: status=%d", e.Status)
+}
+
+func (e StatusError) Error() string {
+	if e.Body == "" {
+		return fmt.Sprintf("request failed: status=%d", e.StatusCode)
+	}
+	return fmt.Sprintf("request failed: status=%d body=%s", e.StatusCode, e.Body)
 }
 
 func New(baseURL string) *Client {
@@ -90,17 +103,19 @@ type DesiredState struct {
 	SoftwareVersion string                      `json:"softwareVersion"`
 	ConfigRev       string                      `json:"configRev"`
 	DownloadURL     string                      `json:"downloadUrl"`
+	ApplyPolicy     json.RawMessage             `json:"applyPolicy"`
 	CheckinInterval int                         `json:"checkinIntervalSec"`
 	Source          string                      `json:"source,omitempty"`
 	Components      map[string]DesiredComponent `json:"components,omitempty"`
 }
 
 type DesiredComponent struct {
-	ArtifactID      string `json:"artifactId"`
-	SoftwareVersion string `json:"softwareVersion"`
-	ConfigRev       string `json:"configRev"`
-	DownloadURL     string `json:"downloadUrl"`
-	Source          string `json:"source,omitempty"`
+	ArtifactID      string          `json:"artifactId"`
+	SoftwareVersion string          `json:"softwareVersion"`
+	ConfigRev       string          `json:"configRev"`
+	DownloadURL     string          `json:"downloadUrl"`
+	ApplyPolicy     json.RawMessage `json:"applyPolicy"`
+	Source          string          `json:"source,omitempty"`
 }
 
 type CheckinResponse struct {
@@ -133,6 +148,37 @@ type ReenrollResponse struct {
 	CACertPEM string `json:"caCertPem"`
 }
 
+type PendingEnrollmentRequest struct {
+	ProfileToken string `json:"profileToken"`
+	CSR          string `json:"csr"`
+	AgentVersion string `json:"agentVersion,omitempty"`
+	Capabilities any    `json:"capabilities,omitempty"`
+	Metadata     any    `json:"metadata,omitempty"`
+}
+
+type PendingEnrollmentRequestResponse struct {
+	RequestID    string    `json:"requestId"`
+	Status       string    `json:"status"`
+	ClaimToken   string    `json:"claimToken"`
+	PollAfterSec int       `json:"pollAfterSec"`
+	ExpiresAt    time.Time `json:"expiresAt"`
+}
+
+type ClaimPendingEnrollmentRequest struct {
+	RequestID  string `json:"requestId"`
+	ClaimToken string `json:"claimToken"`
+}
+
+type ClaimPendingEnrollmentResponse struct {
+	Status       string    `json:"status"`
+	PollAfterSec int       `json:"pollAfterSec,omitempty"`
+	Reason       string    `json:"reason,omitempty"`
+	DeviceID     string    `json:"deviceId,omitempty"`
+	CertPEM      string    `json:"certPem,omitempty"`
+	CACertPEM    string    `json:"caCertPem,omitempty"`
+	ExpiresAt    time.Time `json:"expiresAt,omitempty"`
+}
+
 func (c *Client) Reenroll(csrPEM []byte) (ReenrollResponse, error) {
 	payload := map[string]string{"csr": string(csrPEM)}
 	body, err := json.Marshal(payload)
@@ -157,6 +203,58 @@ func (c *Client) Reenroll(csrPEM []byte) (ReenrollResponse, error) {
 		return ReenrollResponse{}, fmt.Errorf("reenroll failed: empty cert")
 	}
 	return out, nil
+}
+
+func (c *Client) RequestPendingEnrollment(req PendingEnrollmentRequest) (PendingEnrollmentRequestResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return PendingEnrollmentRequestResponse{}, err
+	}
+	url := fmt.Sprintf("%s/api/v1/pending-enrollments/request", c.baseURL)
+	resp, err := c.http.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return PendingEnrollmentRequestResponse{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		return PendingEnrollmentRequestResponse{}, readStatusError(resp)
+	}
+	var out PendingEnrollmentRequestResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return PendingEnrollmentRequestResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) ClaimPendingEnrollment(req ClaimPendingEnrollmentRequest) (ClaimPendingEnrollmentResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return ClaimPendingEnrollmentResponse{}, err
+	}
+	url := fmt.Sprintf("%s/api/v1/pending-enrollments/claim", c.baseURL)
+	resp, err := c.http.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return ClaimPendingEnrollmentResponse{}, err
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusAccepted, http.StatusGone:
+		var out ClaimPendingEnrollmentResponse
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			return ClaimPendingEnrollmentResponse{}, err
+		}
+		return out, nil
+	case http.StatusConflict:
+		var out ClaimPendingEnrollmentResponse
+		if err := json.NewDecoder(resp.Body).Decode(&out); err == nil && out.Status != "" {
+			return out, nil
+		}
+		return ClaimPendingEnrollmentResponse{}, readStatusError(resp)
+	default:
+		return ClaimPendingEnrollmentResponse{}, readStatusError(resp)
+	}
 }
 
 type PresignResponse struct {
@@ -252,6 +350,17 @@ func parseRetryAfter(resp *http.Response) time.Duration {
 		return d
 	}
 	return 0
+}
+
+func readStatusError(resp *http.Response) error {
+	if resp == nil {
+		return StatusError{}
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	return StatusError{
+		StatusCode: resp.StatusCode,
+		Body:       strings.TrimSpace(string(body)),
+	}
 }
 
 func timePtr(t time.Time) *time.Time {

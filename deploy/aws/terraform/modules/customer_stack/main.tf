@@ -23,7 +23,7 @@ locals {
     TRUST_PROXY_CIDRS  = var.vpc_cidr
     CLIENT_CERT_HEADER = "X-Client-Cert"
   }
-  artifact_pull_credentials_secret_id = trimspace(coalesce(var.artifact_pull_credentials_aws_secret_id, ""))
+  artifact_pull_credentials_secret_id = trimspace(var.artifact_pull_credentials_aws_secret_id != null ? var.artifact_pull_credentials_aws_secret_id : "")
   artifact_pull_credentials_enabled   = local.artifact_pull_credentials_secret_id != ""
   artifact_pull_credentials_secret_arn = startswith(local.artifact_pull_credentials_secret_id, "arn:") ? local.artifact_pull_credentials_secret_id : format(
     "arn:aws:secretsmanager:%s:%s:secret:%s*",
@@ -41,13 +41,11 @@ locals {
     CA_CERT_PATH = "/app/demo-certs/ca.crt"
     CA_KEY_PATH  = "/app/demo-certs/ca.key"
   } : {}
-  demo_bootstrap_email = coalesce(
-    var.demo_bootstrap_email,
-    lookup(var.control_plane_env, "AUTH_BOOTSTRAP_EMAIL", ""),
-  )
-  demo_bootstrap_password = coalesce(
-    var.demo_bootstrap_password,
-    lookup(var.control_plane_env, "AUTH_BOOTSTRAP_PASSWORD", ""),
+  demo_bootstrap_email = var.demo_bootstrap_email != null ? var.demo_bootstrap_email : lookup(var.control_plane_env, "AUTH_BOOTSTRAP_EMAIL", "")
+  demo_bootstrap_password = var.demo_bootstrap_password != null ? var.demo_bootstrap_password : lookup(
+    var.control_plane_env,
+    "AUTH_BOOTSTRAP_PASSWORD",
+    "",
   )
   demo_default_agent_env = {
     DEMO_APP_URL            = "https://${var.app_host}"

@@ -8,9 +8,12 @@ import (
 
 const (
 	TypeDeviceCheckin          = "device.checkin"
+	TypeDeviceEnroll           = "device.enroll"
+	TypeDeviceEnrollPending    = "device.enroll_pending"
 	TypeDeviceApplyResult      = "device.apply_result"
 	TypeDeviceCloneSuspected   = "device.clone_suspected"
 	TypeDeviceIdentityConflict = "device.identity_conflict"
+	TypeArtifactRegistered     = "artifact.registered"
 )
 
 type Event struct {

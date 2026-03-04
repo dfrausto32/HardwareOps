@@ -50,7 +50,7 @@ Note on trust paths:
 - `VITE_API_PROXY=1` (dev proxy mode) avoids installing CA on the browser machine for local testing.
 
 Note: `run-control-plane.sh` starts with maintenance mode **enabled** by default.
-To disable from the UI, set `VITE_MAINTENANCE_TOKEN=dev-token` (already in `ui/.env`) and click **Disable maintenance**.
+Disable maintenance from the UI using an admin session (or with auth disabled in dev).
 You can also start without maintenance:
 ```
 MAINTENANCE_MODE=0 ENABLE_TLS=1 ./scripts/run-control-plane.sh
@@ -82,6 +82,28 @@ Restart the browser after installing the CA (close all windows), or the trust ch
 ```
 ./scripts/run-demo-agent.sh
 ```
+
+Note:
+- Default mode is legacy direct enrollment.
+- To test the new first-contact approval flow with the same launcher:
+```
+AUTH_EMAIL=admin@example.com AUTH_PASSWORD=change-me ENROLLMENT_MODE=pending ./scripts/run-demo-agent.sh
+```
+- To auto-approve for API-only testing:
+```
+AUTH_EMAIL=admin@example.com AUTH_PASSWORD=change-me ENROLLMENT_MODE=pending PENDING_ENROLL_AUTO_APPROVE=1 ./scripts/run-demo-agent.sh
+```
+- `./scripts/test-pending-enrollment.sh` is still available as a lower-level helper for just the enrollment-profile/request/claim flow.
+- To smoke-test first desired-state resolution from enrollment profile labels:
+```
+AUTH_EMAIL=admin@example.com \
+AUTH_PASSWORD=change-me \
+PROFILE_DEFAULT_LABELS_JSON='{"site":"factory-a","role":"kiosk"}' \
+GROUP_DESIRED_VERSION=v9 \
+CHECKIN_AFTER_CLAIM=1 \
+./scripts/test-pending-enrollment.sh
+```
+- Runbook: `docs/development/agent-first-contact-onboarding.md`
 
 ## Troubleshooting
 ### UI shows NetworkError

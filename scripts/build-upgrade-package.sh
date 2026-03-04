@@ -15,7 +15,6 @@ esac
 DIST_NAME=${DIST_NAME:-hardwareops-upgrade-${VERSION}-linux-${arch}}
 DIST_DIR=${DIST_DIR:-$BASE_DIR/dist/upgrades/$DIST_NAME}
 PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://hardwareops.internal}
-MAINTENANCE_TOKEN=${MAINTENANCE_TOKEN:-change-me}
 ENV_FILE=${ENV_FILE:-}
 LICENSE_EMBED_PUBKEY_PATH=${LICENSE_EMBED_PUBKEY_PATH:-}
 LICENSE_EMBED_PUBKEY_B64=${LICENSE_EMBED_PUBKEY_B64:-}
@@ -46,7 +45,6 @@ docker build -t "$cp_tag" -f "$BASE_DIR/control-plane/Dockerfile" "${build_args[
 docker build -t "$gw_tag" -f "$BASE_DIR/deploy/compose/nginx/Dockerfile" \
   --build-arg VITE_API_BASE_URL="$PUBLIC_BASE_URL" \
   --build-arg VITE_SIMULATE_PROD=1 \
-  --build-arg VITE_MAINTENANCE_TOKEN="$MAINTENANCE_TOKEN" \
   "$BASE_DIR"
 
 docker save -o "$DIST_DIR/images/control-plane.tar" "$cp_tag"
@@ -111,11 +109,22 @@ services:
       AUDIT_RETENTION_CLEANUP_INTERVAL: \${AUDIT_RETENTION_CLEANUP_INTERVAL:-1h}
       EVENT_RETENTION_DAYS: \${EVENT_RETENTION_DAYS:-30}
       EVENT_RETENTION_CLEANUP_INTERVAL: \${EVENT_RETENTION_CLEANUP_INTERVAL:-1h}
+      ARTIFACT_PULL_ALLOW_INSECURE_HTTP: \${ARTIFACT_PULL_ALLOW_INSECURE_HTTP:-0}
+      ARTIFACT_SIGNATURE_REQUIRE_DEFAULT: \${ARTIFACT_SIGNATURE_REQUIRE_DEFAULT:-1}
+      ARTIFACT_SIGNATURE_ENFORCE_INGEST: \${ARTIFACT_SIGNATURE_ENFORCE_INGEST:-1}
+      ARTIFACT_SIGNATURE_KEY_ID: \${ARTIFACT_SIGNATURE_KEY_ID:-}
       ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID: \${ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID:-}
       ARTIFACT_PULL_CREDENTIALS_AWS_REGION: \${ARTIFACT_PULL_CREDENTIALS_AWS_REGION:-}
+      RELEASE_AUTO_UPDATE_INTERVAL: \${RELEASE_AUTO_UPDATE_INTERVAL:-60s}
       AUTH_MODE: \${AUTH_MODE:-local}
       AUTH_JWT_SECRET: \${AUTH_JWT_SECRET:-change-me}
       AUTH_TOKEN_TTL: \${AUTH_TOKEN_TTL:-12h}
+      AUTH_LOGIN_RPM: \${AUTH_LOGIN_RPM:-30}
+      AUTH_LOGIN_BACKOFF_ENABLED: \${AUTH_LOGIN_BACKOFF_ENABLED:-1}
+      AUTH_LOGIN_BACKOFF_THRESHOLD: \${AUTH_LOGIN_BACKOFF_THRESHOLD:-3}
+      AUTH_LOGIN_BACKOFF_BASE: \${AUTH_LOGIN_BACKOFF_BASE:-2s}
+      AUTH_LOGIN_BACKOFF_MAX: \${AUTH_LOGIN_BACKOFF_MAX:-5m}
+      AUTH_LOGIN_BACKOFF_WINDOW: \${AUTH_LOGIN_BACKOFF_WINDOW:-15m}
       AUTH_ISSUER: \${AUTH_ISSUER:-hardwareops}
       AUTH_BOOTSTRAP_EMAIL: \${AUTH_BOOTSTRAP_EMAIL:-admin@example.com}
       AUTH_BOOTSTRAP_PASSWORD: \${AUTH_BOOTSTRAP_PASSWORD:-change-me}
@@ -141,19 +150,60 @@ services:
       UPGRADE_WORK_DIR: \${UPGRADE_WORK_DIR:-/stack}
       UPGRADE_LOG_DIR: \${UPGRADE_LOG_DIR:-/var/lib/hardwareops/logs}
       UPGRADE_UPDATES_DIR: \${UPGRADE_UPDATES_DIR:-/stack/updates}
-      UPGRADE_RUNNER_MODE: \${UPGRADE_RUNNER_MODE:-docker}
+      UPGRADE_RUNNER_MODE: \${UPGRADE_RUNNER_MODE:-remote}
+      UPGRADE_RUNNER_URL: \${UPGRADE_RUNNER_URL:-http://maintenance-runner:8090}
+      UPGRADE_RUNNER_TOKEN: \${UPGRADE_RUNNER_TOKEN:-change-me-maintenance-runner}
       UPGRADE_RUNNER_IMAGE: \${UPGRADE_RUNNER_IMAGE:-${cp_tag}}
       BACKUP_CMD: \${BACKUP_CMD:-/app/scripts/backup-stack.sh}
       RESTORE_CMD: \${RESTORE_CMD:-/app/scripts/restore-stack.sh}
       BACKUP_DIR: \${BACKUP_DIR:-/stack/backups}
       BACKUP_WORK_DIR: \${BACKUP_WORK_DIR:-/stack}
       BACKUP_LOG_DIR: \${BACKUP_LOG_DIR:-/var/lib/hardwareops/logs}
-      BACKUP_RUNNER_MODE: \${BACKUP_RUNNER_MODE:-docker}
+      BACKUP_RUNNER_MODE: \${BACKUP_RUNNER_MODE:-remote}
+      BACKUP_RUNNER_URL: \${BACKUP_RUNNER_URL:-http://maintenance-runner:8090}
+      BACKUP_RUNNER_TOKEN: \${BACKUP_RUNNER_TOKEN:-change-me-maintenance-runner}
       BACKUP_RUNNER_IMAGE: \${BACKUP_RUNNER_IMAGE:-}
       BACKUP_POSTGRES_CONTAINER: \${BACKUP_POSTGRES_CONTAINER:-hardwareops-postgres-1}
       BACKUP_MINIO_CONTAINER: \${BACKUP_MINIO_CONTAINER:-hardwareops-minio-1}
       BACKUP_POSTGRES_USER: \${BACKUP_POSTGRES_USER:-hardwareops}
       BACKUP_POSTGRES_DB: \${BACKUP_POSTGRES_DB:-hardwareops}
+      STACK_DIR: \${STACK_DIR:-/stack}
+    volumes:
+      - \${CERTS_DIR:-/opt/hardwareops/certs}:/certs:ro
+      - controlplane-logs:/var/lib/hardwareops/logs
+      - \${STACK_DIR:-.}:/stack
+    depends_on:
+      - postgres
+      - minio
+      - maintenance-runner
+    restart: unless-stopped
+
+  maintenance-runner:
+    image: ${cp_tag}
+    entrypoint: ["/app/maintenance-runner"]
+    environment:
+      CA_CERT_PATH: /certs/ca.crt
+      MAINTENANCE_TOKEN: \${MAINTENANCE_TOKEN:-change-me}
+      UPGRADE_APPLY_CMD: \${UPGRADE_APPLY_CMD:-/app/scripts/apply-upgrade.sh}
+      UPGRADE_WORK_DIR: \${UPGRADE_WORK_DIR:-/stack}
+      UPGRADE_LOG_DIR: \${UPGRADE_LOG_DIR:-/var/lib/hardwareops/logs}
+      UPGRADE_UPDATES_DIR: \${UPGRADE_UPDATES_DIR:-/stack/updates}
+      UPGRADE_RUNNER_MODE: docker
+      UPGRADE_RUNNER_IMAGE: \${UPGRADE_RUNNER_IMAGE:-${cp_tag}}
+      UPGRADE_RUNNER_TOKEN: \${UPGRADE_RUNNER_TOKEN:-change-me-maintenance-runner}
+      BACKUP_CMD: \${BACKUP_CMD:-/app/scripts/backup-stack.sh}
+      RESTORE_CMD: \${RESTORE_CMD:-/app/scripts/restore-stack.sh}
+      BACKUP_DIR: \${BACKUP_DIR:-/stack/backups}
+      BACKUP_WORK_DIR: \${BACKUP_WORK_DIR:-/stack}
+      BACKUP_LOG_DIR: \${BACKUP_LOG_DIR:-/var/lib/hardwareops/logs}
+      BACKUP_RUNNER_MODE: docker
+      BACKUP_RUNNER_IMAGE: \${BACKUP_RUNNER_IMAGE:-}
+      BACKUP_RUNNER_TOKEN: \${BACKUP_RUNNER_TOKEN:-change-me-maintenance-runner}
+      BACKUP_POSTGRES_CONTAINER: \${BACKUP_POSTGRES_CONTAINER:-hardwareops-postgres-1}
+      BACKUP_MINIO_CONTAINER: \${BACKUP_MINIO_CONTAINER:-hardwareops-minio-1}
+      BACKUP_POSTGRES_USER: \${BACKUP_POSTGRES_USER:-hardwareops}
+      BACKUP_POSTGRES_DB: \${BACKUP_POSTGRES_DB:-hardwareops}
+      MAINTENANCE_RUNNER_ADDR: \${MAINTENANCE_RUNNER_ADDR:-:8090}
       STACK_DIR: \${STACK_DIR:-/stack}
     volumes:
       - \${CERTS_DIR:-/opt/hardwareops/certs}:/certs:ro

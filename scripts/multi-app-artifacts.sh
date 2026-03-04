@@ -28,6 +28,15 @@ if [[ "$BASE_URL" == https:* ]]; then
     curl_opts+=(-k)
   fi
 fi
+if [ -n "${CURL_RESOLVE_HOSTS:-}" ]; then
+  IFS=',' read -r -a resolve_entries <<<"$CURL_RESOLVE_HOSTS"
+  for entry in "${resolve_entries[@]}"; do
+    entry=$(echo "$entry" | xargs)
+    if [ -n "$entry" ]; then
+      curl_opts+=(--resolve "$entry")
+    fi
+  done
+fi
 
 auth_header=()
 if [ -z "$AUTH_TOKEN" ] && [ -n "$AUTH_EMAIL" ] && [ -n "$AUTH_PASSWORD" ]; then

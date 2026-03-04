@@ -17,6 +17,9 @@ import {
   getArtifactLifecycleStatus,
   setArtifactLifecyclePolicy,
   pruneArtifacts,
+  getReleaseAutoUpdateStatus,
+  setReleaseAutoUpdateSettings,
+  runReleaseAutoUpdate,
   setDesiredStateDevice,
   setDesiredStateGroup,
   clearDesiredStateGroup,
@@ -56,8 +59,19 @@ import {
   createVoucher,
   listUsers,
   createUser,
+  listEnrollmentProfiles,
+  createEnrollmentProfile,
+  updateEnrollmentProfile,
+  rotateEnrollmentProfile,
+  disableEnrollmentProfile,
+  enableEnrollmentProfile,
+  listPendingEnrollments,
+  approvePendingEnrollment,
+  denyPendingEnrollment,
+  resetPendingEnrollment,
   getAuthToken,
   setAuthToken as persistAuthToken,
+  subscribeAuthExpired,
 } from './api'
 
 const nav = [
@@ -99,6 +113,56 @@ const chartColors = {
   error: '#f27272',
   warning: '#f1c76f',
   info: '#8aa5ff',
+}
+
+const autoTrackModes = [
+  { id: 'inherit', label: 'Inherit' },
+  { id: 'enabled', label: 'Enabled' },
+  { id: 'disabled', label: 'Disabled' },
+]
+
+function parsePolicyObject(raw) {
+  if (!raw) return {}
+  if (typeof raw === 'object') return { ...raw }
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed
+      }
+    } catch {
+      return {}
+    }
+  }
+  return {}
+}
+
+function getAutoTrackModeFromPolicy(raw) {
+  const policy = parsePolicyObject(raw)
+  const mode = policy?.hwops?.autoVersion?.mode
+  if (mode === 'enabled' || mode === 'disabled') return mode
+  return 'inherit'
+}
+
+function mergeAutoTrackModeIntoPolicy(raw, mode) {
+  const policy = parsePolicyObject(raw)
+  const hwops = policy.hwops && typeof policy.hwops === 'object' ? { ...policy.hwops } : {}
+  const autoVersion = hwops.autoVersion && typeof hwops.autoVersion === 'object' ? { ...hwops.autoVersion } : {}
+  if (mode === 'enabled' || mode === 'disabled') {
+    autoVersion.mode = mode
+    hwops.autoVersion = autoVersion
+    policy.hwops = hwops
+    return policy
+  }
+  if (hwops.autoVersion) {
+    delete hwops.autoVersion
+  }
+  if (Object.keys(hwops).length > 0) {
+    policy.hwops = hwops
+  } else {
+    delete policy.hwops
+  }
+  return policy
 }
 
 function formatChartValue(value, integerOnly) {
@@ -239,6 +303,8 @@ function newComponentRow(overrides = {}) {
     artifactId: '',
     desiredVersion: '',
     desiredConfigRev: '',
+    policy: {},
+    autoTrackMode: 'inherit',
     locked: false,
     ...overrides,
   }
@@ -344,6 +410,29 @@ function selectorToForm(selector) {
     .filter(([key]) => !['region', 'role', 'site'].includes(key))
     .map(([key, value]) => ({ key, value: String(value ?? '') }))
   return { region, role, site, custom }
+}
+
+function objectToKeyValueRows(obj) {
+  const normalized = normalizeObject(obj)
+  const entries = Object.entries(normalized)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => ({ key: String(key), value: String(value ?? '') }))
+  return entries.length > 0 ? entries : [{ key: '', value: '' }]
+}
+
+function keyValueRowsToObject(rows) {
+  const out = {}
+  const seen = new Set()
+  for (const row of rows || []) {
+    const key = String(row?.key || '').trim()
+    if (!key) continue
+    if (seen.has(key)) {
+      return { value: null, error: `Duplicate label key: ${key}` }
+    }
+    seen.add(key)
+    out[key] = String(row?.value ?? '').trim()
+  }
+  return { value: out, error: '' }
 }
 
 function formatSelector(selector) {
@@ -577,11 +666,50 @@ function formatDurationSeconds(seconds) {
   const hours = Math.floor(remaining / 3600)
   remaining -= hours * 3600
   const minutes = Math.floor(remaining / 60)
+  remaining -= minutes * 60
   const parts = []
   if (days) parts.push(`${days}d`)
   if (hours) parts.push(`${hours}h`)
   if (!days && minutes) parts.push(`${minutes}m`)
+  if (!days && !hours && !minutes && remaining) parts.push(`${remaining}s`)
   return parts.join(' ') || '—'
+}
+
+async function copyText(text) {
+  if (!text) return false
+  if (navigator?.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return true
+  }
+  const input = document.createElement('textarea')
+  input.value = text
+  input.setAttribute('readonly', '')
+  input.style.position = 'absolute'
+  input.style.left = '-9999px'
+  document.body.appendChild(input)
+  input.select()
+  const ok = document.execCommand('copy')
+  document.body.removeChild(input)
+  return ok
+}
+
+function downloadTextFile(filename, text) {
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+function formatObjectSummary(value) {
+  const obj = normalizeObject(value)
+  const entries = Object.entries(obj)
+  if (entries.length === 0) return '—'
+  return entries.map(([key, val]) => `${key}=${String(val)}`).join(', ')
 }
 
 function parsePrometheusMetrics(text) {
@@ -772,6 +900,29 @@ export default function App() {
     loadUsers()
   }, [authToken])
 
+  useEffect(() => {
+    return subscribeAuthExpired(() => {
+      persistAuthToken('')
+      setAuthToken('')
+      setAuthUser(null)
+      setAuthView('login')
+      setAuthError('Session expired. Please sign in again.')
+      setLoginStatus('')
+      setDevicesError('')
+      setGroupsError('')
+      setArtifactsError('')
+      setDesiredError('')
+      setLogError('')
+      setAuditError('')
+      setEventQueryError('')
+      setEventsError('')
+      setMaintenanceError('')
+      setUpgradeError('')
+      setUpgradeAvailableError('')
+      setUpgradePreflightError('')
+    })
+  }, [])
+
   const [devices, setDevices] = useState([])
   const [devicesLoading, setDevicesLoading] = useState(false)
   const [devicesError, setDevicesError] = useState('')
@@ -780,6 +931,7 @@ export default function App() {
   const [deviceStatusFilter, setDeviceStatusFilter] = useState('all')
 
   const [selectedDeviceId, setSelectedDeviceId] = useState('')
+  const [selectedDeviceIds, setSelectedDeviceIds] = useState([])
   const [deviceDetail, setDeviceDetail] = useState(null)
   const [deviceDetailError, setDeviceDetailError] = useState('')
   const [deviceDrawerOpen, setDeviceDrawerOpen] = useState(false)
@@ -838,6 +990,7 @@ export default function App() {
   const [groupBulkApplying, setGroupBulkApplying] = useState(false)
 
   const [artifacts, setArtifacts] = useState([])
+  const [selectedArtifactIds, setSelectedArtifactIds] = useState([])
   const [artifactsError, setArtifactsError] = useState('')
   const [artifactsStatus, setArtifactsStatus] = useState('')
   const [artifactLifecyclePolicy, setArtifactLifecyclePolicy] = useState({
@@ -854,6 +1007,17 @@ export default function App() {
     lastRun: null,
     alerts: [],
   })
+  const [releaseAutoUpdate, setReleaseAutoUpdate] = useState({
+    enabled: false,
+    allowUnsigned: false,
+    intervalSeconds: 60,
+    running: false,
+    updatedAt: '',
+    updatedByUserId: '',
+    lastRun: null,
+  })
+  const [releaseAutoUpdateSaving, setReleaseAutoUpdateSaving] = useState(false)
+  const [releaseAutoUpdateStatus, setReleaseAutoUpdateStatus] = useState('')
 
   const [desiredState, setDesiredState] = useState({ groups: [], devices: [] })
   const [desiredError, setDesiredError] = useState('')
@@ -890,6 +1054,8 @@ export default function App() {
     s3ObjectsTotal: null,
     s3BytesTotal: null,
     devicesTotal: null,
+    pendingEnrollActive: null,
+    pendingEnrollThrottleTotal: null,
     httpLatencyAvg: null,
     devicesStatus: {},
     updatedAt: '',
@@ -920,6 +1086,40 @@ export default function App() {
   const [rotationLoading, setRotationLoading] = useState(false)
   const [rotationError, setRotationError] = useState('')
   const [rotationMessage, setRotationMessage] = useState('')
+  const [enrollmentProfiles, setEnrollmentProfiles] = useState([])
+  const [enrollmentProfilesLoading, setEnrollmentProfilesLoading] = useState(false)
+  const [enrollmentProfilesError, setEnrollmentProfilesError] = useState('')
+  const [enrollmentProfilesStatus, setEnrollmentProfilesStatus] = useState('')
+  const [enrollmentProfileCreateOpen, setEnrollmentProfileCreateOpen] = useState(false)
+  const [latestEnrollmentProfileToken, setLatestEnrollmentProfileToken] = useState('')
+  const [latestEnrollmentProfileTokenName, setLatestEnrollmentProfileTokenName] = useState('')
+  const [enrollmentProfileForm, setEnrollmentProfileForm] = useState({
+    name: 'default-profile',
+    expiresInDays: '30',
+    maxUses: '1',
+    challengeSecret: '',
+    challengeHint: '',
+    approvalDelaySec: '0',
+    defaultLabelRows: [{ key: '', value: '' }],
+    allowUnsignedHardwareIdentity: false,
+  })
+  const [editingEnrollmentProfileId, setEditingEnrollmentProfileId] = useState('')
+  const [enrollmentProfileEditForm, setEnrollmentProfileEditForm] = useState({
+    name: '',
+    maxUses: '0',
+    challengeEnabled: false,
+    challengeSecret: '',
+    challengeHint: '',
+    approvalDelaySec: '0',
+    defaultLabelRows: [{ key: '', value: '' }],
+    allowUnsignedHardwareIdentity: false,
+  })
+  const [pendingEnrollments, setPendingEnrollments] = useState([])
+  const [pendingEnrollmentsLoading, setPendingEnrollmentsLoading] = useState(false)
+  const [pendingEnrollmentsError, setPendingEnrollmentsError] = useState('')
+  const [pendingEnrollmentsStatus, setPendingEnrollmentsStatus] = useState('')
+  const [pendingEnrollmentsFilter, setPendingEnrollmentsFilter] = useState('pending')
+  const [pendingEnrollmentAlertCount, setPendingEnrollmentAlertCount] = useState(0)
 
   const [eventsFeed, setEventsFeed] = useState([])
   const [eventsStatus, setEventsStatus] = useState('disconnected')
@@ -954,18 +1154,19 @@ export default function App() {
   const [selectedBackupId, setSelectedBackupId] = useState('')
   const selectedDeviceIdRef = useRef('')
   const refreshTimerRef = useRef(null)
+  const pendingRealtimeRefreshRef = useRef({ devices: false, artifacts: false })
   const deviceOrderRef = useRef([])
   const eventsConnRef = useRef('disconnected')
   const lastEventAtRef = useRef(0)
   const eventsHeartbeatRef = useRef(null)
   const drawerResizingRef = useRef(false)
   const groupSelectionAnchorRef = useRef(-1)
+  const deviceSelectionAnchorRef = useRef(-1)
+  const artifactSelectionAnchorRef = useRef(-1)
 
   const [theme, setTheme] = useState(() => {
     return localStorage.getItem('hwops-theme') || 'dark'
   })
-  const maintenanceToken = import.meta.env.VITE_MAINTENANCE_TOKEN || ''
-  const canToggleMaintenance = Boolean(maintenanceToken)
   const preflightOk = Boolean(upgradePreflight.ok)
   const upgradeReady = Boolean(preflightOk && upgradeAvailable.available)
 
@@ -977,18 +1178,44 @@ export default function App() {
     }
   }, [groups, selectedGroupId])
 
+  useEffect(() => {
+    const deviceIDs = new Set(devices.map((device) => device.deviceId))
+    setSelectedDeviceIds((prev) => prev.filter((id) => deviceIDs.has(id)))
+    if (selectedDeviceId && !deviceIDs.has(selectedDeviceId)) {
+      setSelectedDeviceId('')
+      setDeviceDetail(null)
+      setDeviceFormDirty(false)
+    }
+  }, [devices, selectedDeviceId])
+
+  useEffect(() => {
+    const artifactIDs = new Set(artifacts.map((artifact) => artifact.artifactId))
+    setSelectedArtifactIds((prev) => prev.filter((id) => artifactIDs.has(id)))
+  }, [artifacts])
+
+  useEffect(() => {
+    if (!editingEnrollmentProfileId) return
+    const exists = enrollmentProfiles.some((profile) => profile.profileId === editingEnrollmentProfileId)
+    if (!exists) {
+      handleCancelEditEnrollmentProfile()
+    }
+  }, [enrollmentProfiles, editingEnrollmentProfileId])
+
   function buildComponentRows(desiredComponents, legacy, current, fallbackKey = '') {
     const rows = []
     const source = desiredComponents && Object.keys(desiredComponents).length > 0 ? desiredComponents : null
     if (source) {
       Object.entries(source).forEach(([key, comp]) => {
         if (key === 'app_bundle') return
+        const policy = parsePolicyObject(comp.policy)
         rows.push(newComponentRow({
           key,
           artifactType: fallbackComponentType(key, comp.artifactType),
           artifactId: comp.artifactId || '',
           desiredVersion: comp.desiredVersion || '',
           desiredConfigRev: comp.desiredConfigRev || '',
+          policy,
+          autoTrackMode: getAutoTrackModeFromPolicy(policy),
           locked: Boolean(comp.locked),
         }))
       })
@@ -1028,6 +1255,8 @@ export default function App() {
         row.artifactId ||
         row.desiredVersion ||
         row.desiredConfigRev ||
+        (row.autoTrackMode && row.autoTrackMode !== 'inherit') ||
+        (row.policy && Object.keys(parsePolicyObject(row.policy)).length > 0) ||
         row.locked,
       )
       if (!hasValues) continue
@@ -1042,11 +1271,13 @@ export default function App() {
       if (!artifactType) {
         return { error: `Component ${key} requires an artifact type.` }
       }
+      const mergedPolicy = mergeAutoTrackModeIntoPolicy(row.policy, row.autoTrackMode)
       components[key] = {
         artifactId: row.artifactId || undefined,
         artifactType,
         desiredVersion: row.desiredVersion || undefined,
         desiredConfigRev: row.desiredConfigRev || undefined,
+        policy: Object.keys(mergedPolicy).length > 0 ? mergedPolicy : undefined,
         locked: row.locked,
       }
     }
@@ -1164,6 +1395,7 @@ export default function App() {
     loadArtifacts()
     loadArtifactLifecyclePolicy()
     loadArtifactLifecycleStatus()
+    loadReleaseAutoUpdate()
     loadDesired()
     loadMaintenance()
     loadUpgrade()
@@ -1281,6 +1513,11 @@ export default function App() {
   const canRotate = useMemo(() => {
     return !authStatus.enabled || isAdmin
   }, [authStatus.enabled, isAdmin])
+  const canManagePendingEnrollments = useMemo(() => {
+    if (!authStatus.enabled) return true
+    const roles = authUser?.roles || []
+    return roles.includes('operator') || roles.includes('admin')
+  }, [authStatus.enabled, authUser])
 
   useEffect(() => {
     if (view !== 'dashboard') return undefined
@@ -1301,8 +1538,45 @@ export default function App() {
   }, [view, authStatus.enabled, isAdmin])
 
   useEffect(() => {
-    if (view !== 'security') return
+    if (view !== 'security') return undefined
     loadRotationStatus()
+    loadEnrollmentProfiles()
+    loadPendingEnrollments()
+    const timer = setInterval(() => {
+      loadRotationStatus()
+      loadEnrollmentProfiles({ silent: true })
+      loadPendingEnrollments({ silent: true })
+    }, 15000)
+    return () => clearInterval(timer)
+  }, [view])
+
+  useEffect(() => {
+    if (view !== 'security') return
+    loadPendingEnrollments()
+  }, [view, pendingEnrollmentsFilter, canManagePendingEnrollments])
+
+  useEffect(() => {
+    if (!canManagePendingEnrollments) {
+      setPendingEnrollmentAlertCount(0)
+      return undefined
+    }
+    const load = () => {
+      loadPendingEnrollmentAlertCount().catch(() => {})
+    }
+    load()
+    const timer = setInterval(load, 15000)
+    return () => clearInterval(timer)
+  }, [canManagePendingEnrollments])
+
+  useEffect(() => {
+    const latest = eventsFeed[0]
+    if (!canManagePendingEnrollments || !latest || latest.type !== 'device.enroll_pending') return
+    loadPendingEnrollmentAlertCount().catch(() => {})
+  }, [eventsFeed, canManagePendingEnrollments])
+
+  useEffect(() => {
+    if (view !== 'settings') return
+    loadReleaseAutoUpdate()
   }, [view])
 
   useEffect(() => {
@@ -1363,17 +1637,34 @@ export default function App() {
       ws.onmessage = (evt) => {
         try {
           const data = JSON.parse(evt.data)
+          const eventType = typeof data?.type === 'string' ? data.type : ''
+          const isDeviceEvent = eventType.startsWith('device.')
+          const isArtifactEvent = eventType.startsWith('artifact.')
+          if (isDeviceEvent) {
+            pendingRealtimeRefreshRef.current.devices = true
+          }
+          if (isArtifactEvent) {
+            pendingRealtimeRefreshRef.current.artifacts = true
+          }
           setEventsFeed((prev) => [data, ...prev].slice(0, 200))
           lastEventAtRef.current = Date.now()
           if (!refreshTimerRef.current) {
             refreshTimerRef.current = setTimeout(() => {
               refreshTimerRef.current = null
-              loadDevices({ silent: true })
-              const currentId = selectedDeviceIdRef.current
-              if (currentId) {
-                getDevice(currentId)
-                  .then(setDeviceDetail)
-                  .catch((err) => setDeviceDetailError(err.message || String(err)))
+              const pending = pendingRealtimeRefreshRef.current
+              pendingRealtimeRefreshRef.current = { devices: false, artifacts: false }
+
+              if (pending.devices) {
+                loadDevices({ silent: true })
+                const currentId = selectedDeviceIdRef.current
+                if (currentId) {
+                  getDevice(currentId)
+                    .then(setDeviceDetail)
+                    .catch((err) => setDeviceDetailError(err.message || String(err)))
+                }
+              }
+              if (pending.artifacts) {
+                loadArtifacts()
               }
             }, 500)
           }
@@ -1464,8 +1755,19 @@ export default function App() {
     if (desiredStatus) items.push({ type: 'info', text: desiredStatus })
     if (maintenanceStatus) items.push({ type: 'info', text: maintenanceStatus })
     if (upgradeStatus) items.push({ type: 'info', text: upgradeStatus })
+    if (canManagePendingEnrollments && pendingEnrollmentAlertCount > 0) {
+      items.unshift({
+        type: 'warning',
+        text: `${pendingEnrollmentAlertCount} first-contact enrollment${pendingEnrollmentAlertCount === 1 ? '' : 's'} pending approval`,
+        actionLabel: 'Review',
+        onAction: () => {
+          setPendingEnrollmentsFilter('pending')
+          setView('security')
+        },
+      })
+    }
     return items.slice(0, 4)
-  }, [devicesError, groupsError, artifactsError, desiredError, eventsError, eventQueryError, maintenanceError, upgradeError, upgradeAvailableError, uploadStatus, devicesStatus, groupsStatus, artifactsStatus, desiredStatus, maintenanceStatus, upgradeStatus])
+  }, [devicesError, groupsError, artifactsError, desiredError, eventsError, eventQueryError, maintenanceError, upgradeError, upgradeAvailableError, uploadStatus, devicesStatus, groupsStatus, artifactsStatus, desiredStatus, maintenanceStatus, upgradeStatus, canManagePendingEnrollments, pendingEnrollmentAlertCount])
 
   async function doLogin() {
     setLoginStatus('Signing in...')
@@ -1700,6 +2002,23 @@ export default function App() {
       .catch((err) => setArtifactsError(err.message || String(err)))
   }
 
+  function loadReleaseAutoUpdate() {
+    getReleaseAutoUpdateStatus()
+      .then((res) => {
+        setReleaseAutoUpdate((prev) => ({
+          ...prev,
+          enabled: Boolean(res?.enabled),
+          allowUnsigned: Boolean(res?.allowUnsigned),
+          intervalSeconds: Number(res?.intervalSeconds || prev.intervalSeconds || 0),
+          running: Boolean(res?.running),
+          updatedAt: res?.updatedAt || '',
+          updatedByUserId: res?.updatedByUserId || '',
+          lastRun: res?.lastRun || null,
+        }))
+      })
+      .catch((err) => setReleaseAutoUpdateStatus(err.message || String(err)))
+  }
+
   function loadDesired() {
     setDesiredError('')
     getDesiredState()
@@ -1745,38 +2064,122 @@ export default function App() {
       .catch((err) => setDesiredStatus(err.message || String(err)))
   }
 
+  function promptDecommissionReason(message) {
+    const reasonInput = window.prompt(message, '')
+    if (reasonInput === null) return null
+    const reason = reasonInput.trim()
+    if (!reason) {
+      setDevicesError('Decommission reason is required')
+      return null
+    }
+    return reason
+  }
+
+  async function decommissionDeviceIDs(deviceIDs, reason, statusLabel = 'Decommissioning devices') {
+    const targets = Array.from(new Set(deviceIDs.filter(Boolean)))
+    if (targets.length === 0) return { succeeded: 0, failed: 0, failedIDs: [] }
+
+    setDevicesError('')
+    setDevicesStatus(`${statusLabel}...`)
+
+    let succeeded = 0
+    let failed = 0
+    let firstError = ''
+    const failedIDs = []
+
+    for (const deviceID of targets) {
+      try {
+        await decommissionDevice(deviceID, { reason })
+        succeeded += 1
+      } catch (err) {
+        failed += 1
+        failedIDs.push(deviceID)
+        if (!firstError) {
+          firstError = `${deviceID}: ${err.message || String(err)}`
+        }
+      }
+    }
+
+    if (firstError) {
+      setDevicesError(firstError)
+    }
+
+    if (targets.includes(selectedDeviceId) && !failedIDs.includes(selectedDeviceId)) {
+      setSelectedDeviceId('')
+      setDeviceDetail(null)
+    }
+
+    setSelectedDeviceIds(failedIDs)
+    setDevicesStatus(`${statusLabel}: ${succeeded} succeeded, ${failed} failed.`)
+    loadDevices()
+    loadDesired()
+    return { succeeded, failed, failedIDs }
+  }
+
   async function handleDeleteDevice(deviceId) {
     if (authStatus.enabled && !isAdmin) {
       setDevicesError('Admin role required to decommission devices')
       return
     }
-    const reasonInput = window.prompt(
+    const reason = promptDecommissionReason(
       `Decommission device ${deviceId}.\nThis releases a license slot and removes desired state/apply history.\nEnter reason:`,
-      '',
     )
-    if (reasonInput === null) return
-    const reason = reasonInput.trim()
-    if (!reason) {
-      setDevicesError('Decommission reason is required')
+    if (!reason) return
+    await decommissionDeviceIDs([deviceId], reason, `Decommissioning ${deviceId}`)
+  }
+
+  function clearDeviceSelection() {
+    setSelectedDeviceIds([])
+    deviceSelectionAnchorRef.current = -1
+  }
+
+  function handleDeviceRowSelect(index, checked, shiftKey) {
+    setSelectedDeviceIds((prev) => {
+      const next = new Set(prev)
+      const anchor = deviceSelectionAnchorRef.current
+      const hasRange = shiftKey && anchor >= 0 && anchor < filteredDevices.length
+      if (hasRange) {
+        const start = Math.min(anchor, index)
+        const end = Math.max(anchor, index)
+        for (let i = start; i <= end; i += 1) {
+          const id = filteredDevices[i]?.deviceId
+          if (!id) continue
+          if (checked) next.add(id)
+          else next.delete(id)
+        }
+      } else {
+        const id = filteredDevices[index]?.deviceId
+        if (id) {
+          if (checked) next.add(id)
+          else next.delete(id)
+        }
+      }
+      deviceSelectionAnchorRef.current = index
+      return devices.map((device) => device.deviceId).filter((id) => next.has(id))
+    })
+  }
+
+  function handleSelectAllDevices(checked) {
+    if (checked) {
+      setSelectedDeviceIds(filteredDevices.map((device) => device.deviceId))
       return
     }
-    setDevicesStatus('Decommissioning device...')
-    try {
-      const resp = await decommissionDevice(deviceId, { reason })
-      if (resp?.slotBefore !== undefined && resp?.slotAfter !== undefined) {
-        setDevicesStatus(`Decommissioned device ${deviceId} (slots ${resp.slotBefore} -> ${resp.slotAfter})`)
-      } else {
-        setDevicesStatus(`Decommissioned device ${deviceId}`)
-      }
-      if (selectedDeviceId === deviceId) {
-        setSelectedDeviceId('')
-        setDeviceDetail(null)
-      }
-      loadDevices()
-      loadDesired()
-    } catch (err) {
-      setDevicesError(err.message || String(err))
+    clearDeviceSelection()
+  }
+
+  async function handleBulkDecommissionSelectedDevices() {
+    if (selectedDeviceIds.length === 0) return
+    if (authStatus.enabled && !isAdmin) {
+      setDevicesError('Admin role required to decommission devices')
+      return
     }
+    const confirmed = window.confirm(
+      `Decommission ${selectedDeviceIds.length} selected device(s)? This releases license slots and removes desired-state/apply history.`,
+    )
+    if (!confirmed) return
+    const reason = promptDecommissionReason('Enter decommission reason for selected devices:')
+    if (!reason) return
+    await decommissionDeviceIDs(selectedDeviceIds, reason, 'Bulk decommission')
   }
 
   async function handleDeleteArtifact(artifactId) {
@@ -1791,6 +2194,142 @@ export default function App() {
     } catch (err) {
       setArtifactsError(err.message || String(err))
     }
+  }
+
+  function clearArtifactSelection() {
+    setSelectedArtifactIds([])
+    artifactSelectionAnchorRef.current = -1
+  }
+
+  function handleArtifactRowSelect(index, checked, shiftKey) {
+    setSelectedArtifactIds((prev) => {
+      const next = new Set(prev)
+      const anchor = artifactSelectionAnchorRef.current
+      const hasRange = shiftKey && anchor >= 0 && anchor < visibleArtifactRows.length
+      if (hasRange) {
+        const start = Math.min(anchor, index)
+        const end = Math.max(anchor, index)
+        for (let i = start; i <= end; i += 1) {
+          const id = visibleArtifactRows[i]
+          if (!id) continue
+          if (checked) next.add(id)
+          else next.delete(id)
+        }
+      } else {
+        const id = visibleArtifactRows[index]
+        if (id) {
+          if (checked) next.add(id)
+          else next.delete(id)
+        }
+      }
+      artifactSelectionAnchorRef.current = index
+      return artifacts.map((artifact) => artifact.artifactId).filter((id) => next.has(id))
+    })
+  }
+
+  function handleSelectAllArtifacts(checked) {
+    if (checked) {
+      setSelectedArtifactIds(visibleArtifactRows)
+      return
+    }
+    clearArtifactSelection()
+  }
+
+  async function handleBulkDeleteSelectedArtifacts() {
+    if (selectedArtifactIds.length === 0) return
+    const selectedRows = selectedArtifactIds
+      .map((artifactId) => artifactByID[artifactId])
+      .filter(Boolean)
+    const eligible = selectedRows.filter((artifact) => {
+      const lifecycle = normalizeArtifactStatus(artifact.status)
+      const refs = Number(artifact.referenceCount || 0)
+      return lifecycle === 'deprecated' && refs <= 0
+    })
+    const skipped = selectedRows.length - eligible.length
+    if (eligible.length === 0) {
+      setArtifactsStatus('No selected artifacts are eligible for delete (must be deprecated with zero refs).')
+      return
+    }
+    const confirmed = window.confirm(
+      `Delete ${eligible.length} selected artifact(s)? ${skipped > 0 ? `${skipped} selected artifact(s) will be skipped.` : ''}`,
+    )
+    if (!confirmed) return
+
+    setArtifactsError('')
+    setArtifactsStatus('Deleting selected artifacts...')
+    let deleted = 0
+    let failed = 0
+    let firstError = ''
+    const failedIDs = []
+    for (const artifact of eligible) {
+      try {
+        await deleteArtifact(artifact.artifactId)
+        deleted += 1
+      } catch (err) {
+        failed += 1
+        failedIDs.push(artifact.artifactId)
+        if (!firstError) {
+          firstError = `${artifact.artifactId}: ${err.message || String(err)}`
+        }
+      }
+    }
+    if (firstError) {
+      setArtifactsError(firstError)
+    }
+    setSelectedArtifactIds(failedIDs)
+    setArtifactsStatus(
+      `Bulk delete: ${deleted} deleted, ${failed} failed${skipped > 0 ? `, ${skipped} skipped` : ''}.`,
+    )
+    loadArtifacts()
+    loadDesired()
+  }
+
+  async function handleBulkDeprecateSelectedArtifacts() {
+    if (selectedArtifactIds.length === 0) return
+    const selectedRows = selectedArtifactIds
+      .map((artifactId) => artifactByID[artifactId])
+      .filter(Boolean)
+    const eligible = selectedRows.filter((artifact) => normalizeArtifactStatus(artifact.status) !== 'deprecated')
+    const skippedRows = selectedRows.filter((artifact) => normalizeArtifactStatus(artifact.status) === 'deprecated')
+    const skipped = skippedRows.length
+    if (eligible.length === 0) {
+      setArtifactsStatus('No selected artifacts are eligible for deprecate (already deprecated).')
+      return
+    }
+    const confirmed = window.confirm(
+      `Deprecate ${eligible.length} selected artifact(s)? ${skipped > 0 ? `${skipped} selected artifact(s) will be skipped.` : ''}`,
+    )
+    if (!confirmed) return
+
+    setArtifactsError('')
+    setArtifactsStatus('Deprecating selected artifacts...')
+    const retentionDays = Number(artifactLifecyclePolicyInput)
+    const retention = Number.isFinite(retentionDays) && retentionDays > 0 ? retentionDays : undefined
+    let deprecated = 0
+    let failed = 0
+    let firstError = ''
+    const failedIDs = []
+    for (const artifact of eligible) {
+      try {
+        await deprecateArtifact(artifact.artifactId, retention)
+        deprecated += 1
+      } catch (err) {
+        failed += 1
+        failedIDs.push(artifact.artifactId)
+        if (!firstError) {
+          firstError = `${artifact.artifactId}: ${err.message || String(err)}`
+        }
+      }
+    }
+    if (firstError) {
+      setArtifactsError(firstError)
+    }
+    const skippedIDs = skippedRows.map((artifact) => artifact.artifactId)
+    setSelectedArtifactIds(Array.from(new Set([...failedIDs, ...skippedIDs])))
+    setArtifactsStatus(
+      `Bulk deprecate: ${deprecated} deprecated, ${failed} failed${skipped > 0 ? `, ${skipped} skipped` : ''}.`,
+    )
+    loadArtifacts()
   }
 
   async function handleDeprecateArtifact(artifactId) {
@@ -1836,6 +2375,57 @@ export default function App() {
       loadArtifactLifecycleStatus()
     } catch (err) {
       setArtifactsError(err.message || String(err))
+    }
+  }
+
+  async function handleSaveReleaseAutoUpdateSettings() {
+    if (authStatus.enabled && !isAdmin) return
+    setReleaseAutoUpdateSaving(true)
+    setReleaseAutoUpdateStatus('Saving release auto-update settings...')
+    try {
+      const res = await setReleaseAutoUpdateSettings({
+        enabled: Boolean(releaseAutoUpdate.enabled),
+        allowUnsigned: Boolean(releaseAutoUpdate.allowUnsigned),
+      })
+      setReleaseAutoUpdate((prev) => ({
+        ...prev,
+        enabled: Boolean(res?.enabled),
+        allowUnsigned: Boolean(res?.allowUnsigned),
+        intervalSeconds: Number(res?.intervalSeconds || prev.intervalSeconds || 0),
+        running: Boolean(res?.running),
+        updatedAt: res?.updatedAt || prev.updatedAt || '',
+        updatedByUserId: res?.updatedByUserId || '',
+        lastRun: res?.lastRun || prev.lastRun || null,
+      }))
+      setReleaseAutoUpdateStatus('Release auto-update settings saved')
+      loadReleaseAutoUpdate()
+    } catch (err) {
+      setReleaseAutoUpdateStatus(err.message || String(err))
+    } finally {
+      setReleaseAutoUpdateSaving(false)
+    }
+  }
+
+  async function handleRunReleaseAutoUpdate() {
+    if (authStatus.enabled && !isAdmin) return
+    setReleaseAutoUpdateSaving(true)
+    setReleaseAutoUpdateStatus('Running release auto-update...')
+    try {
+      const run = await runReleaseAutoUpdate()
+      setReleaseAutoUpdate((prev) => ({
+        ...prev,
+        running: false,
+        lastRun: run || null,
+      }))
+      setReleaseAutoUpdateStatus(
+        `Run complete: updated ${Number(run?.componentsUpdated || 0)} component(s) across ${Number(run?.groupsUpdated || 0)} group(s) and ${Number(run?.devicesUpdated || 0)} device override(s).`,
+      )
+      loadDesired()
+      loadReleaseAutoUpdate()
+    } catch (err) {
+      setReleaseAutoUpdateStatus(err.message || String(err))
+    } finally {
+      setReleaseAutoUpdateSaving(false)
     }
   }
 
@@ -1887,9 +2477,18 @@ export default function App() {
     }
   }
 
-  async function handleDeleteGroup(groupId) {
+  async function handleDeleteGroup(groupId, forceCascade = false) {
     const ok = window.confirm(`Delete group ${groupId}? This removes desired state for the group.`)
     if (!ok) return
+    const cascadeDeviceIDs = listDevicesMatchingGroups([groupId])
+    let cascade = forceCascade
+    if (cascadeDeviceIDs.length > 0) {
+      if (!forceCascade) {
+        cascade = window.confirm(
+          `Also decommission ${cascadeDeviceIDs.length} matching device(s)?\n\nOK = delete group + decommission devices\nCancel = delete group only`,
+        )
+      }
+    }
     setGroupsStatus('Deleting group...')
     try {
       await deleteGroup(groupId)
@@ -1900,6 +2499,14 @@ export default function App() {
       setSelectedGroupIds((prev) => prev.filter((id) => id !== groupId))
       loadGroups()
       loadDesired()
+      if (cascade && cascadeDeviceIDs.length > 0) {
+        const reason = promptDecommissionReason(
+          `Enter decommission reason for ${cascadeDeviceIDs.length} device(s) matched by the deleted group:`,
+        )
+        if (reason) {
+          await decommissionDeviceIDs(cascadeDeviceIDs, reason, 'Group cascade decommission')
+        }
+      }
     } catch (err) {
       setGroupsError(err.message || String(err))
     }
@@ -1973,22 +2580,64 @@ export default function App() {
     clearGroupSelection()
   }
 
-  async function handleBulkDeleteSelectedGroups() {
+  async function handleBulkDeleteSelectedGroups(forceCascade = false) {
     if (selectedGroupIds.length === 0) return
+    const cascadeDeviceIDs = listDevicesMatchingGroups(selectedGroupIds)
+    let cascade = forceCascade
     const confirmed = window.confirm(
       `Delete ${selectedGroupIds.length} selected group(s)? This also clears desired state for those groups.`,
     )
     if (!confirmed) return
+
+    if (cascadeDeviceIDs.length > 0 && !forceCascade) {
+      cascade = window.confirm(
+        `Also decommission ${cascadeDeviceIDs.length} matching device(s)?\n\nOK = delete groups + decommission devices\nCancel = delete groups only`,
+      )
+    }
+
     const actions = selectedGroupIds.map((groupId) => ({ action: 'delete', groupId }))
     const res = await applyGroupBatchActions(actions, 'Bulk delete')
     if (res.failed === 0) {
       clearGroupSelection()
+    }
+    if (cascade && cascadeDeviceIDs.length > 0) {
+      const appliedGroupIDs = new Set(
+        (res.results || [])
+          .filter((item) => item?.status === 'applied' && item?.groupId)
+          .map((item) => item.groupId),
+      )
+      const matchedIDs = listDevicesMatchingGroups(Array.from(appliedGroupIDs))
+      if (matchedIDs.length > 0) {
+        const reason = promptDecommissionReason(
+          `Enter decommission reason for ${matchedIDs.length} device(s) matched by deleted groups:`,
+        )
+        if (reason) {
+          await decommissionDeviceIDs(matchedIDs, reason, 'Group cascade decommission')
+        }
+      }
     }
   }
 
   function selectedGroupsSnapshot() {
     const selectedSet = new Set(selectedGroupIds)
     return groups.filter((group) => selectedSet.has(group.groupId))
+  }
+
+  function listDevicesMatchingGroups(groupIDs) {
+    if (!groupIDs || groupIDs.length === 0) return []
+    const targetIDs = new Set(groupIDs)
+    const matched = new Set()
+    groups
+      .filter((group) => targetIDs.has(group.groupId))
+      .forEach((group) => {
+        const selector = normalizeObject(group.selector)
+        devices.forEach((device) => {
+          if (selectorMatches(normalizeObject(device.labels), selector)) {
+            matched.add(device.deviceId)
+          }
+        })
+      })
+    return Array.from(matched)
   }
 
   function openGroupMultiEdit() {
@@ -2442,6 +3091,328 @@ export default function App() {
     }
   }
 
+  async function loadEnrollmentProfiles(options = {}) {
+    const { silent = false } = options
+    if (!canManagePendingEnrollments) {
+      setEnrollmentProfiles([])
+      setEnrollmentProfilesError('')
+      if (!silent) setEnrollmentProfilesLoading(false)
+      return
+    }
+    if (!silent) {
+      setEnrollmentProfilesLoading(true)
+    }
+    setEnrollmentProfilesError('')
+    try {
+      const res = await listEnrollmentProfiles()
+      setEnrollmentProfiles(res.items || [])
+    } catch (err) {
+      setEnrollmentProfilesError(err.message || String(err))
+    } finally {
+      if (!silent) {
+        setEnrollmentProfilesLoading(false)
+      }
+    }
+  }
+
+  async function loadPendingEnrollments(options = {}) {
+    const { silent = false } = options
+    if (!canManagePendingEnrollments) {
+      setPendingEnrollments([])
+      setPendingEnrollmentsError('')
+      if (!silent) setPendingEnrollmentsLoading(false)
+      return
+    }
+    if (!silent) {
+      setPendingEnrollmentsLoading(true)
+    }
+    setPendingEnrollmentsError('')
+    try {
+      const res = await listPendingEnrollments({
+        status: pendingEnrollmentsFilter === 'all' ? undefined : pendingEnrollmentsFilter,
+        limit: 200,
+      })
+      const items = res.items || []
+      setPendingEnrollments(items)
+      if (pendingEnrollmentsFilter === 'pending') {
+        setPendingEnrollmentAlertCount(items.length)
+      }
+    } catch (err) {
+      setPendingEnrollmentsError(err.message || String(err))
+    } finally {
+      if (!silent) {
+        setPendingEnrollmentsLoading(false)
+      }
+    }
+  }
+
+  async function loadPendingEnrollmentAlertCount() {
+    if (!canManagePendingEnrollments) {
+      setPendingEnrollmentAlertCount(0)
+      return
+    }
+    const res = await listPendingEnrollments({ status: 'pending', limit: 200 })
+    setPendingEnrollmentAlertCount(Array.isArray(res?.items) ? res.items.length : 0)
+  }
+
+  async function handleCreateEnrollmentProfile() {
+    if (!canManagePendingEnrollments) return
+    const name = String(enrollmentProfileForm.name || '').trim()
+    const challengeSecret = String(enrollmentProfileForm.challengeSecret || '').trim()
+    const challengeHint = String(enrollmentProfileForm.challengeHint || '').trim()
+    if (!name) {
+      setEnrollmentProfilesError('Profile name is required.')
+      return
+    }
+    const expiresInDays = Number(enrollmentProfileForm.expiresInDays || 0)
+    const maxUses = Number(enrollmentProfileForm.maxUses || 0)
+    const approvalDelaySec = Number(enrollmentProfileForm.approvalDelaySec || 0)
+    if (!Number.isFinite(expiresInDays) || expiresInDays <= 0) {
+      setEnrollmentProfilesError('Expiration days must be greater than 0.')
+      return
+    }
+    if (!Number.isFinite(maxUses) || maxUses < 0) {
+      setEnrollmentProfilesError('Max uses must be 0 or greater.')
+      return
+    }
+    if (!Number.isFinite(approvalDelaySec) || approvalDelaySec < 0) {
+      setEnrollmentProfilesError('Approval delay must be 0 or greater.')
+      return
+    }
+    const labelsParsed = keyValueRowsToObject(enrollmentProfileForm.defaultLabelRows)
+    if (labelsParsed.error) {
+      setEnrollmentProfilesError(labelsParsed.error)
+      return
+    }
+    const defaultLabels = labelsParsed.value
+    setEnrollmentProfilesStatus('Creating enrollment profile...')
+    setEnrollmentProfilesError('')
+    try {
+      const res = await createEnrollmentProfile({
+        name,
+        expiresInSec: Math.round(expiresInDays * 24 * 60 * 60),
+        maxUses,
+        requireApproval: true,
+        allowUnsignedHardwareIdentity: Boolean(enrollmentProfileForm.allowUnsignedHardwareIdentity),
+        challengeSecret,
+        challengeHint,
+        approvalDelaySec,
+        ...(Object.keys(defaultLabels).length > 0 ? { defaultLabels } : {}),
+      })
+      setLatestEnrollmentProfileToken(res.bootstrapToken || '')
+      setLatestEnrollmentProfileTokenName(res.name || name)
+      setEnrollmentProfilesStatus(`Created profile ${res.name || name}`)
+      setEnrollmentProfileForm((prev) => ({
+        ...prev,
+        challengeSecret: '',
+        challengeHint: challengeSecret ? challengeHint : '',
+        approvalDelaySec: String(approvalDelaySec),
+        defaultLabelRows: objectToKeyValueRows(defaultLabels),
+      }))
+      setEnrollmentProfileCreateOpen(false)
+      await loadEnrollmentProfiles({ silent: true })
+    } catch (err) {
+      setEnrollmentProfilesStatus('')
+      setEnrollmentProfilesError(err.message || String(err))
+    }
+  }
+
+  function handleOpenCreateEnrollmentProfile() {
+    setEnrollmentProfilesError('')
+    setEnrollmentProfilesStatus('')
+    setEnrollmentProfileCreateOpen(true)
+  }
+
+  function handleStartEditEnrollmentProfile(profile) {
+    setEditingEnrollmentProfileId(profile.profileId)
+    setEnrollmentProfileEditForm({
+      name: profile.name || '',
+      maxUses: String(profile.maxUses ?? 0),
+      challengeEnabled: Boolean(profile.challengeEnabled),
+      challengeSecret: '',
+      challengeHint: profile.challengeHint || '',
+      approvalDelaySec: String(profile.approvalDelaySec ?? 0),
+      defaultLabelRows: objectToKeyValueRows(profile.defaultLabels),
+      allowUnsignedHardwareIdentity: Boolean(profile.allowUnsignedHardwareIdentity),
+    })
+    setEnrollmentProfilesError('')
+    setEnrollmentProfilesStatus('')
+  }
+
+  function handleCancelEditEnrollmentProfile() {
+    setEditingEnrollmentProfileId('')
+    setEnrollmentProfileEditForm({
+      name: '',
+      maxUses: '0',
+      challengeEnabled: false,
+      challengeSecret: '',
+      challengeHint: '',
+      approvalDelaySec: '0',
+      defaultLabelRows: [{ key: '', value: '' }],
+      allowUnsignedHardwareIdentity: false,
+    })
+  }
+
+  async function handleUpdateEnrollmentProfile() {
+    if (!canManagePendingEnrollments || !editingEnrollmentProfileId) return
+    const name = String(enrollmentProfileEditForm.name || '').trim()
+    const challengeSecret = String(enrollmentProfileEditForm.challengeSecret || '').trim()
+    const challengeHint = String(enrollmentProfileEditForm.challengeHint || '').trim()
+    if (!name) {
+      setEnrollmentProfilesError('Profile name is required.')
+      return
+    }
+    const maxUses = Number(enrollmentProfileEditForm.maxUses || 0)
+    const approvalDelaySec = Number(enrollmentProfileEditForm.approvalDelaySec || 0)
+    if (!Number.isFinite(maxUses) || maxUses < 0) {
+      setEnrollmentProfilesError('Max uses must be 0 or greater.')
+      return
+    }
+    if (!Number.isFinite(approvalDelaySec) || approvalDelaySec < 0) {
+      setEnrollmentProfilesError('Approval delay must be 0 or greater.')
+      return
+    }
+    const labelsParsed = keyValueRowsToObject(enrollmentProfileEditForm.defaultLabelRows)
+    if (labelsParsed.error) {
+      setEnrollmentProfilesError(labelsParsed.error)
+      return
+    }
+    const defaultLabels = labelsParsed.value
+    const existing = enrollmentProfiles.find((profile) => profile.profileId === editingEnrollmentProfileId)
+    const challengeEnabled = Boolean(enrollmentProfileEditForm.challengeEnabled)
+    if (challengeEnabled && !existing?.challengeEnabled && !challengeSecret) {
+      setEnrollmentProfilesError('Challenge secret is required when enabling challenge protection.')
+      return
+    }
+
+    const payload = {
+      name,
+      maxUses,
+      requireApproval: true,
+      allowUnsignedHardwareIdentity: Boolean(enrollmentProfileEditForm.allowUnsignedHardwareIdentity),
+      approvalDelaySec,
+      ...(Object.keys(defaultLabels).length > 0 ? { defaultLabels } : { clearDefaultLabels: true }),
+      ...(challengeEnabled
+        ? {
+            challengeHint,
+            ...(challengeSecret ? { challengeSecret } : {}),
+          }
+        : { clearChallenge: true }),
+    }
+
+    setEnrollmentProfilesStatus('Updating enrollment profile...')
+    setEnrollmentProfilesError('')
+    try {
+      await updateEnrollmentProfile(editingEnrollmentProfileId, payload)
+      setEnrollmentProfilesStatus(`Updated ${name}`)
+      await loadEnrollmentProfiles({ silent: true })
+      handleCancelEditEnrollmentProfile()
+    } catch (err) {
+      setEnrollmentProfilesStatus('')
+      setEnrollmentProfilesError(err.message || String(err))
+    }
+  }
+
+  async function handleRotateEnrollmentProfile(profileId, name) {
+    if (!canManagePendingEnrollments) return
+    const confirmed = window.confirm(`Rotate bootstrap token for ${name || profileId}? Existing distributed tokens will stop working.`)
+    if (!confirmed) return
+    setEnrollmentProfilesStatus('Rotating bootstrap token...')
+    setEnrollmentProfilesError('')
+    try {
+      const res = await rotateEnrollmentProfile(profileId)
+      setLatestEnrollmentProfileToken(res.bootstrapToken || '')
+      setLatestEnrollmentProfileTokenName(res.name || name || profileId)
+      setEnrollmentProfilesStatus(`Rotated token for ${res.name || name || profileId}`)
+      await loadEnrollmentProfiles({ silent: true })
+    } catch (err) {
+      setEnrollmentProfilesStatus('')
+      setEnrollmentProfilesError(err.message || String(err))
+    }
+  }
+
+  async function handleCopyEnrollmentProfileToken() {
+    if (!latestEnrollmentProfileToken) return
+    try {
+      await copyText(latestEnrollmentProfileToken)
+      setEnrollmentProfilesStatus(`Copied bootstrap token for ${latestEnrollmentProfileTokenName || 'profile'}`)
+    } catch (err) {
+      setEnrollmentProfilesError(err.message || String(err))
+    }
+  }
+
+  function handleDownloadEnrollmentProfileToken() {
+    if (!latestEnrollmentProfileToken) return
+    const safeName = (latestEnrollmentProfileTokenName || 'enrollment-profile').replace(/[^a-z0-9._-]+/gi, '-')
+    downloadTextFile(`${safeName}.bootstrap-token.txt`, latestEnrollmentProfileToken)
+    setEnrollmentProfilesStatus(`Downloaded bootstrap token for ${latestEnrollmentProfileTokenName || 'profile'}`)
+  }
+
+  async function handleSetEnrollmentProfileDisabled(profileId, disabled) {
+    if (!canManagePendingEnrollments) return
+    setEnrollmentProfilesStatus(disabled ? 'Disabling enrollment profile...' : 'Enabling enrollment profile...')
+    setEnrollmentProfilesError('')
+    try {
+      if (disabled) {
+        await disableEnrollmentProfile(profileId)
+      } else {
+        await enableEnrollmentProfile(profileId)
+      }
+      setEnrollmentProfilesStatus(disabled ? `Disabled ${profileId}` : `Enabled ${profileId}`)
+      await loadEnrollmentProfiles({ silent: true })
+    } catch (err) {
+      setEnrollmentProfilesStatus('')
+      setEnrollmentProfilesError(err.message || String(err))
+    }
+  }
+
+  async function handleApprovePendingEnrollment(requestId) {
+    if (!canManagePendingEnrollments) return
+    setPendingEnrollmentsStatus('Approving pending enrollment...')
+    setPendingEnrollmentsError('')
+    try {
+      await approvePendingEnrollment(requestId)
+      setPendingEnrollmentsStatus(`Approved ${requestId}`)
+      await loadPendingEnrollments({ silent: true })
+      await loadPendingEnrollmentAlertCount()
+    } catch (err) {
+      setPendingEnrollmentsStatus('')
+      setPendingEnrollmentsError(err.message || String(err))
+    }
+  }
+
+  async function handleResetPendingEnrollment(requestId) {
+    if (!canManagePendingEnrollments) return
+    setPendingEnrollmentsStatus('Resetting pending enrollment...')
+    setPendingEnrollmentsError('')
+    try {
+      await resetPendingEnrollment(requestId)
+      setPendingEnrollmentsStatus(`Reset ${requestId}`)
+      await loadPendingEnrollments({ silent: true })
+      await loadPendingEnrollmentAlertCount()
+    } catch (err) {
+      setPendingEnrollmentsStatus('')
+      setPendingEnrollmentsError(err.message || String(err))
+    }
+  }
+
+  async function handleDenyPendingEnrollment(requestId) {
+    if (!canManagePendingEnrollments) return
+    const reasonInput = window.prompt('Enter deny reason (optional):', '')
+    if (reasonInput === null) return
+    setPendingEnrollmentsStatus('Denying pending enrollment...')
+    setPendingEnrollmentsError('')
+    try {
+      await denyPendingEnrollment(requestId, String(reasonInput || '').trim())
+      setPendingEnrollmentsStatus(`Denied ${requestId}`)
+      await loadPendingEnrollments({ silent: true })
+      await loadPendingEnrollmentAlertCount()
+    } catch (err) {
+      setPendingEnrollmentsStatus('')
+      setPendingEnrollmentsError(err.message || String(err))
+    }
+  }
+
   async function downloadAudit() {
     try {
       const csv = await downloadAuditCSV(buildAuditParams())
@@ -2664,6 +3635,7 @@ export default function App() {
       const uploadStatus = groupLabeledMetrics(parsed, 'hwops_artifact_upload_total', 'status')
       const presignStatus = groupLabeledMetrics(parsed, 'hwops_artifact_presign_total', 'status')
       const rateLimitByEndpoint = groupLabeledMetrics(parsed, 'hwops_rate_limit_total', 'endpoint')
+      const pendingEnrollThrottleByReason = groupLabeledMetrics(parsed, 'hwops_pending_enroll_throttle_total', 'reason')
       const upgradeStatus = groupLabeledMetrics(parsed, 'hwops_upgrade_total', 'status')
       const backupStatus = groupLabeledMetrics(parsed, 'hwops_backup_total', 'operation', (label) => label || 'backup')
       const pendingByType = groupLabeledMetrics(parsed, 'hwops_pending_actions_total', 'type')
@@ -2688,6 +3660,8 @@ export default function App() {
           s3ObjectsTotal: parsed.values.hwops_s3_objects_total ?? null,
           s3BytesTotal: parsed.values.hwops_s3_bytes_total ?? null,
           devicesTotal: parsed.values.hwops_devices_total ?? null,
+          pendingEnrollActive: parsed.values.hwops_pending_enroll_active_total ?? null,
+          pendingEnrollThrottleTotal: sumLabeled(parsed, 'hwops_pending_enroll_throttle_total') || 0,
           httpLatencyAvg,
         },
         labels: {
@@ -2700,6 +3674,7 @@ export default function App() {
           uploadStatus,
           presignStatus,
           rateLimitByEndpoint,
+          pendingEnrollThrottleByReason,
           upgradeStatus,
           backupStatus,
           pendingByType,
@@ -2797,7 +3772,7 @@ export default function App() {
   }
 
   async function toggleMaintenance() {
-    if (!canToggleMaintenance) return
+    if (!isAdmin) return
     const nextEnabled = !maintenance.enabled
     let message = maintenance.message || ''
     if (nextEnabled) {
@@ -2810,7 +3785,7 @@ export default function App() {
     }
     setMaintenanceStatus(nextEnabled ? 'Enabling maintenance...' : 'Disabling maintenance...')
     try {
-      const res = await setMaintenance({ enabled: nextEnabled, message }, maintenanceToken)
+      const res = await setMaintenance({ enabled: nextEnabled, message })
       setMaintenanceState(res)
       setMaintenanceStatus(nextEnabled ? 'Maintenance enabled' : 'Maintenance disabled')
     } catch (err) {
@@ -2819,7 +3794,7 @@ export default function App() {
   }
 
   async function startUpgrade() {
-    if (!canToggleMaintenance || !upgrade.enabled) return
+    if (!isAdmin || !upgrade.enabled) return
     if (!maintenance.enabled) {
       setUpgradeStatus('Enable maintenance before applying updates.')
       return
@@ -2832,7 +3807,7 @@ export default function App() {
     if (!proceed) return
     setUpgradeStatus('Applying update...')
     try {
-      const res = await applyUpgrade(maintenanceToken)
+      const res = await applyUpgrade()
       setUpgrade(res)
       loadUpgradeAvailable()
       if (res.state === 'running') {
@@ -2848,6 +3823,13 @@ export default function App() {
   const selectedDesired = desiredState.devices?.find((d) => d.deviceId === selectedDeviceId)
   const selectedGroupDesired = desiredState.groups?.find((g) => g.groupId === selectedGroupId)
   const lastAppliedArtifact = artifacts.find((a) => a.artifactId === deviceDetail?.current?.lastApplyArtifactId)
+  const artifactByID = useMemo(() => {
+    const map = {}
+    artifacts.forEach((artifact) => {
+      map[artifact.artifactId] = artifact
+    })
+    return map
+  }, [artifacts])
   const artifactGroups = useMemo(() => {
     const map = new Map()
     artifacts.forEach((artifact) => {
@@ -2902,6 +3884,22 @@ export default function App() {
   const selectedGroupSet = useMemo(() => new Set(selectedGroupIds), [selectedGroupIds])
   const allGroupsSelected = groups.length > 0 && selectedGroupIds.length === groups.length
   const someGroupsSelected = selectedGroupIds.length > 0 && !allGroupsSelected
+  const selectedDeviceSet = useMemo(() => new Set(selectedDeviceIds), [selectedDeviceIds])
+  const visibleArtifactRows = useMemo(
+    () => artifactGroups.flatMap((group) => group.versions.map((artifact) => artifact.artifactId)),
+    [artifactGroups],
+  )
+  const artifactRowIndexByID = useMemo(() => {
+    const map = {}
+    visibleArtifactRows.forEach((artifactId, index) => {
+      map[artifactId] = index
+    })
+    return map
+  }, [visibleArtifactRows])
+  const selectedArtifactSet = useMemo(() => new Set(selectedArtifactIds), [selectedArtifactIds])
+  const allArtifactsSelected =
+    visibleArtifactRows.length > 0 && visibleArtifactRows.every((artifactId) => selectedArtifactSet.has(artifactId))
+  const someArtifactsSelected = selectedArtifactIds.length > 0 && !allArtifactsSelected
 
   const groupSelectorById = useMemo(() => {
     const map = {}
@@ -2995,6 +3993,11 @@ export default function App() {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3)
       .map(([label]) => label)
+    const pendingEnrollThrottleEntries = Object.entries(metricsLatest?.labels?.pendingEnrollThrottleByReason || {})
+    const pendingEnrollThrottleLabels = pendingEnrollThrottleEntries
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([label]) => label)
     const pendingLabels = Object.keys(metricsLatest?.labels?.pendingByType || {})
     const dynamicPalette = ['#8aa5ff', '#3bd487', '#f1c76f', '#f27272', '#9aa3ad']
     const rateLimitColors = rateLimitLabels.reduce((acc, label, idx) => {
@@ -3002,6 +4005,10 @@ export default function App() {
       return acc
     }, {})
     const pendingColors = pendingLabels.reduce((acc, label, idx) => {
+      acc[label] = dynamicPalette[idx % dynamicPalette.length]
+      return acc
+    }, {})
+    const pendingEnrollThrottleColors = pendingEnrollThrottleLabels.reduce((acc, label, idx) => {
       acc[label] = dynamicPalette[idx % dynamicPalette.length]
       return acc
     }, {})
@@ -3014,6 +4021,8 @@ export default function App() {
       ],
       storageBytes: [seriesFromKey('s3BytesTotal', 'Bytes', '#8aa5ff')],
       storageObjects: [seriesFromKey('s3ObjectsTotal', 'Objects', '#3bd487')],
+      pendingEnrollQueue: [seriesFromKey('pendingEnrollActive', 'Active Pending', '#f27272')],
+      pendingEnrollThrottle: seriesFromLabels('pendingEnrollThrottleByReason', pendingEnrollThrottleLabels, pendingEnrollThrottleColors),
       devicesTotal: [seriesFromKey('devicesTotal', 'Devices', chartColors.total)],
       devicesStatus: seriesFromLabels('devicesStatus', ['active', 'degraded', 'stale', 'offline'], chartColors),
       checkins: seriesFromLabels('checkinStatus', ['success', 'error'], chartColors),
@@ -3045,6 +4054,9 @@ export default function App() {
     if (deviceStatusFilter === 'all') return devices
     return devices.filter((d) => (d.status || '').toLowerCase() === deviceStatusFilter)
   }, [devices, deviceStatusFilter])
+  const allDevicesSelected =
+    filteredDevices.length > 0 && filteredDevices.every((device) => selectedDeviceSet.has(device.deviceId))
+  const someDevicesSelected = selectedDeviceIds.length > 0 && !allDevicesSelected
 
   if (authStatus.loaded && authStatus.enabled && !authToken) {
     return (
@@ -3192,6 +4204,20 @@ export default function App() {
             </div>
           </div>
         )}
+        {notifications.length > 0 && (
+          <div className="notices">
+            {notifications.map((n, idx) => (
+              <div key={`${n.type}-${idx}`} className={`notice ${n.type}`}>
+                <span>{n.text}</span>
+                {n.actionLabel && typeof n.onAction === 'function' && (
+                  <button className="notice-action" type="button" onClick={n.onAction}>
+                    {n.actionLabel}
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
         {view === 'dashboard' && (
           <>
             <section id="dashboard" className="card">
@@ -3213,15 +4239,6 @@ export default function App() {
                   <button className="button ghost" onClick={loadHealthSummary}>Refresh</button>
                 </div>
               </div>
-              {notifications.length > 0 && (
-                <div className="notices">
-                  {notifications.map((n, idx) => (
-                    <div key={`${n.type}-${idx}`} className={`notice ${n.type}`}>
-                      {n.text}
-                    </div>
-                  ))}
-                </div>
-              )}
               {healthSummaryError && <div className="error">{healthSummaryError}</div>}
               <div className="grid">
                 <div className="metric">
@@ -3277,6 +4294,23 @@ export default function App() {
                 </div>
               </div>
               {devicesError && <div className="error">{devicesError}</div>}
+              {selectedDeviceIds.length > 1 && (
+                <div className="group-selection-toolbar">
+                  <div className="group-selection-count">{selectedDeviceIds.length} selected</div>
+                  <div className="inline-row">
+                    <button
+                      className="button"
+                      onClick={handleBulkDecommissionSelectedDevices}
+                      disabled={selectedDeviceIds.length === 0 || (authStatus.enabled && !isAdmin)}
+                    >
+                      Decommission Selected
+                    </button>
+                    <button className="button ghost" onClick={clearDeviceSelection} disabled={selectedDeviceIds.length === 0}>
+                      Clear
+                    </button>
+                  </div>
+                </div>
+              )}
               {devicesLoading ? (
                 <div className="placeholder">Loading devices...</div>
               ) : (
@@ -3284,6 +4318,18 @@ export default function App() {
                   <table>
                     <thead>
                       <tr>
+                        <th>
+                          <input
+                            type="checkbox"
+                            checked={allDevicesSelected}
+                            ref={(el) => {
+                              if (el) {
+                                el.indeterminate = someDevicesSelected
+                              }
+                            }}
+                            onChange={(e) => handleSelectAllDevices(e.target.checked)}
+                          />
+                        </th>
                         <th>Device ID</th>
                         <th>Status</th>
                         <th>Last Seen</th>
@@ -3291,7 +4337,7 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredDevices.map((d) => (
+                      {filteredDevices.map((d, index) => (
                         <tr
                           key={d.deviceId}
                           className={selectedDeviceId === d.deviceId ? 'selected' : ''}
@@ -3301,6 +4347,14 @@ export default function App() {
                             setDeviceFormDirty(false)
                           }}
                         >
+                          <td>
+                            <input
+                              type="checkbox"
+                              checked={selectedDeviceSet.has(d.deviceId)}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => handleDeviceRowSelect(index, e.target.checked, Boolean(e.nativeEvent?.shiftKey))}
+                            />
+                          </td>
                           <td>{d.deviceId}</td>
                           <td>
                             <span className={`pill status ${(d.status || 'unknown').toLowerCase()}`}>
@@ -3322,7 +4376,7 @@ export default function App() {
                       ))}
                       {filteredDevices.length === 0 && (
                         <tr>
-                          <td colSpan={4}>No devices match this filter.</td>
+                          <td colSpan={5}>No devices match this filter.</td>
                         </tr>
                       )}
                     </tbody>
@@ -3360,24 +4414,29 @@ export default function App() {
               {groupsError && <div className="error">{groupsError}</div>}
               {groupBatchError && <div className="error">{groupBatchError}</div>}
 
-              <div className="group-selection-toolbar">
-                <div className="group-selection-count">{selectedGroupIds.length} selected</div>
-                <div className="inline-row">
-                  <button className="button ghost" onClick={openGroupMultiEdit} disabled={selectedGroupIds.length === 0}>
-                    Edit Selected
-                  </button>
-                  <button className="button ghost" onClick={openGroupMultiDesired} disabled={selectedGroupIds.length === 0}>
-                    Set Desired Selected
-                  </button>
-                  <button className="button" onClick={handleBulkDeleteSelectedGroups} disabled={selectedGroupIds.length === 0}>
-                    Delete Selected
-                  </button>
-                  <button className="button ghost" onClick={clearGroupSelection} disabled={selectedGroupIds.length === 0}>
-                    Clear
-                  </button>
+              {selectedGroupIds.length > 1 && (
+                <div className="group-selection-toolbar">
+                  <div className="group-selection-count">{selectedGroupIds.length} selected</div>
+                  <div className="inline-row">
+                    <button className="button ghost" onClick={openGroupMultiEdit} disabled={selectedGroupIds.length === 0}>
+                      Edit Selected
+                    </button>
+                    <button className="button ghost" onClick={openGroupMultiDesired} disabled={selectedGroupIds.length === 0}>
+                      Set Desired Selected
+                    </button>
+                    <button className="button" onClick={() => handleBulkDeleteSelectedGroups(false)} disabled={selectedGroupIds.length === 0}>
+                      Delete Selected
+                    </button>
+                    <button className="button ghost" onClick={() => handleBulkDeleteSelectedGroups(true)} disabled={selectedGroupIds.length === 0}>
+                      Delete + Devices
+                    </button>
+                    <button className="button ghost" onClick={clearGroupSelection} disabled={selectedGroupIds.length === 0}>
+                      Clear
+                    </button>
+                  </div>
+                  {groupBatchStatus && <div className="status">{groupBatchStatus}</div>}
                 </div>
-                {groupBatchStatus && <div className="status">{groupBatchStatus}</div>}
-              </div>
+              )}
 
               <div className="table-wrap">
                 <table>
@@ -3449,9 +4508,15 @@ export default function App() {
                           </button>
                           <button
                             className="button ghost"
-                            onClick={() => handleDeleteGroup(group.groupId)}
+                            onClick={() => handleDeleteGroup(group.groupId, false)}
                           >
                             Delete
+                          </button>
+                          <button
+                            className="button ghost"
+                            onClick={() => handleDeleteGroup(group.groupId, true)}
+                          >
+                            Delete + Devices
                           </button>
                         </td>
                       </tr>
@@ -3535,11 +4600,47 @@ export default function App() {
                 </div>
               </div>
               {artifactsError && <div className="error">{artifactsError}</div>}
+              {selectedArtifactIds.length > 1 && (
+                <div className="group-selection-toolbar">
+                  <div className="group-selection-count">{selectedArtifactIds.length} selected</div>
+                  <div className="inline-row">
+                    <button
+                      className="button"
+                      onClick={handleBulkDeprecateSelectedArtifacts}
+                      disabled={!canManageArtifacts || selectedArtifactIds.length === 0}
+                    >
+                      Deprecate Selected
+                    </button>
+                    <button
+                      className="button"
+                      onClick={handleBulkDeleteSelectedArtifacts}
+                      disabled={!canManageArtifacts || selectedArtifactIds.length === 0}
+                    >
+                      Delete Selected
+                    </button>
+                    <button className="button ghost" onClick={clearArtifactSelection} disabled={selectedArtifactIds.length === 0}>
+                      Clear
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
+                      <th>
+                        <input
+                          type="checkbox"
+                          checked={allArtifactsSelected}
+                          ref={(el) => {
+                            if (el) {
+                              el.indeterminate = someArtifactsSelected
+                            }
+                          }}
+                          onChange={(e) => handleSelectAllArtifacts(e.target.checked)}
+                        />
+                      </th>
                       <th>Name</th>
                       <th>Artifact ID</th>
                       <th>Version</th>
@@ -3561,6 +4662,18 @@ export default function App() {
                           canManageArtifacts && lifecycle === 'deprecated' && refs <= 0
                         return (
                           <tr key={a.artifactId} className={idx === 0 ? 'artifact-group-start' : ''}>
+                            <td>
+                              <input
+                                type="checkbox"
+                                checked={selectedArtifactSet.has(a.artifactId)}
+                                onChange={(e) =>
+                                  handleArtifactRowSelect(
+                                    artifactRowIndexByID[a.artifactId] ?? 0,
+                                    e.target.checked,
+                                    Boolean(e.nativeEvent?.shiftKey),
+                                  )}
+                              />
+                            </td>
                             <td>{idx === 0 ? group.name : ''}</td>
                             <td className="mono">{a.artifactId}</td>
                             <td>{a.version}</td>
@@ -3610,7 +4723,7 @@ export default function App() {
                     ))}
                     {artifactGroups.length === 0 && (
                       <tr>
-                        <td colSpan={10}>No artifacts uploaded yet.</td>
+                        <td colSpan={11}>No artifacts uploaded yet.</td>
                       </tr>
                     )}
                   </tbody>
@@ -3663,6 +4776,14 @@ export default function App() {
                 <div className="metric-value">{formatBytes(metricsSnapshot.s3BytesTotal)}</div>
               </div>
               <div className="metric">
+                <div className="metric-label">Pending Queue</div>
+                <div className="metric-value">{formatNumber(metricsSnapshot.pendingEnrollActive)}</div>
+              </div>
+              <div className="metric">
+                <div className="metric-label">Throttle Hits</div>
+                <div className="metric-value">{formatNumber(metricsSnapshot.pendingEnrollThrottleTotal)}</div>
+              </div>
+              <div className="metric">
                 <div className="metric-label">Updated</div>
                 <div className="metric-value small">{formatTime(metricsSnapshot.updatedAt)}</div>
               </div>
@@ -3695,6 +4816,22 @@ export default function App() {
                 </div>
                 <ChartLegend series={metricsSeries.storageObjects} />
                 <TimeSeriesChart series={metricsSeries.storageObjects} rangeMs={metricsRangeMs} integerOnly />
+              </div>
+
+              <div className="metrics-card">
+                <div className="metrics-card-header">
+                  <h3>Pending Enrollment Queue</h3>
+                </div>
+                <ChartLegend series={metricsSeries.pendingEnrollQueue} />
+                <TimeSeriesChart series={metricsSeries.pendingEnrollQueue} rangeMs={metricsRangeMs} integerOnly />
+              </div>
+
+              <div className="metrics-card">
+                <div className="metrics-card-header">
+                  <h3>Pending Enrollment Throttles</h3>
+                </div>
+                <ChartLegend series={metricsSeries.pendingEnrollThrottle} />
+                <TimeSeriesChart series={metricsSeries.pendingEnrollThrottle} rangeMs={metricsRangeMs} integerOnly />
               </div>
 
               <div className="metrics-card">
@@ -3994,11 +5131,17 @@ export default function App() {
               <>
                 <div className="form inline">
                   <label>Device ID</label>
-                  <input
+                  <select
                     value={logsDeviceId}
                     onChange={(e) => setLogsDeviceId(e.target.value)}
-                    placeholder="device uuid"
-                  />
+                  >
+                    <option value="">Select device…</option>
+                    {devices.map((device) => (
+                      <option key={device.deviceId} value={device.deviceId}>
+                        {device.deviceId} ({device.status || 'unknown'})
+                      </option>
+                    ))}
+                  </select>
                   <label>From</label>
                   <input
                     type="datetime-local"
@@ -4178,6 +5321,7 @@ export default function App() {
               <h2>Security</h2>
               <div className="settings-toolbar">
                 <button className="button ghost" onClick={loadRotationStatus}>Refresh rotation</button>
+                <button className="button ghost" onClick={loadPendingEnrollments}>Refresh pending enrollments</button>
                 {authStatus.enabled && authToken && isAdmin && (
                   <button className="button ghost" onClick={loadUsers}>Refresh users</button>
                 )}
@@ -4376,6 +5520,212 @@ export default function App() {
               </div>
 
               <div className="settings-section">
+                <div className="settings-title">Enrollment Profiles</div>
+                {!canManagePendingEnrollments ? (
+                  <div className="placeholder">Operator role required to manage enrollment profiles.</div>
+                ) : (
+                  <>
+                    <div className="inline-row">
+                      <button className="button ghost" onClick={handleOpenCreateEnrollmentProfile}>
+                        New profile
+                      </button>
+                      <button className="button ghost" onClick={loadEnrollmentProfiles}>
+                        Refresh profiles
+                      </button>
+                    </div>
+                    {enrollmentProfilesStatus && <div className="status">{enrollmentProfilesStatus}</div>}
+                    {enrollmentProfilesError && <div className="error">{enrollmentProfilesError}</div>}
+                    {latestEnrollmentProfileToken && (
+                      <div className="form compact">
+                        <div className="field">
+                          <label>Latest Bootstrap Token</label>
+                          <input readOnly value={latestEnrollmentProfileToken} />
+                        </div>
+                        <div className="field actions">
+                          <button className="button ghost" onClick={handleCopyEnrollmentProfileToken}>
+                            Copy token
+                          </button>
+                          <button className="button ghost" onClick={handleDownloadEnrollmentProfileToken}>
+                            Download token
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {enrollmentProfilesLoading ? (
+                      <div className="placeholder">Loading enrollment profiles...</div>
+                    ) : (
+                      <div className="table-wrap">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>Name</th>
+                              <th>Labels</th>
+                              <th>Uses</th>
+                              <th>Approval</th>
+                              <th>Challenge</th>
+                              <th>Delay</th>
+                              <th>Unsigned HW</th>
+                              <th>Expires</th>
+                              <th>Status</th>
+                              <th>Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {enrollmentProfiles.map((profile) => (
+                              <tr key={profile.profileId}>
+                                <td>{profile.name}</td>
+                                <td className="mono">{formatObjectSummary(profile.defaultLabels)}</td>
+                                <td>{profile.maxUses > 0 ? `${profile.uses}/${profile.maxUses}` : `${profile.uses}/unlimited`}</td>
+                                <td>{profile.requireApproval ? 'required' : 'not required'}</td>
+                                <td>{profile.challengeEnabled ? profile.challengeHint || 'enabled' : 'disabled'}</td>
+                                <td>{profile.approvalDelaySec > 0 ? formatDurationSeconds(profile.approvalDelaySec) : 'none'}</td>
+                                <td>{profile.allowUnsignedHardwareIdentity ? 'allowed' : 'blocked'}</td>
+                                <td>{formatTime(profile.expiresAt)}</td>
+                                <td>{profile.disabled ? 'disabled' : 'active'}</td>
+                                <td>
+                                  <div className="inline-row">
+                                    <button
+                                      className="button ghost"
+                                      onClick={() => handleStartEditEnrollmentProfile(profile)}
+                                    >
+                                      Edit
+                                    </button>
+                                    <button
+                                      className="button ghost"
+                                      onClick={() => handleRotateEnrollmentProfile(profile.profileId, profile.name)}
+                                    >
+                                      Rotate Token
+                                    </button>
+                                    <button
+                                      className="button ghost"
+                                      onClick={() => handleSetEnrollmentProfileDisabled(profile.profileId, !profile.disabled)}
+                                    >
+                                      {profile.disabled ? 'Enable' : 'Disable'}
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                            {enrollmentProfiles.length === 0 && (
+                              <tr>
+                                <td colSpan={10}>No enrollment profiles.</td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              <div className="settings-section">
+                <div className="settings-title">Pending Enrollments</div>
+                {!canManagePendingEnrollments ? (
+                  <div className="placeholder">Operator role required to review pending enrollments.</div>
+                ) : (
+                  <>
+                    <div className="inline-row">
+                      <label className="chip">
+                        <span>Filter</span>
+                        <select value={pendingEnrollmentsFilter} onChange={(e) => setPendingEnrollmentsFilter(e.target.value)}>
+                          <option value="pending">pending</option>
+                          <option value="approved">approved</option>
+                          <option value="conflict">conflict</option>
+                          <option value="denied">denied</option>
+                          <option value="expired">expired</option>
+                          <option value="issued">issued</option>
+                          <option value="all">all</option>
+                        </select>
+                      </label>
+                      <button className="button ghost" onClick={loadPendingEnrollments}>
+                        Refresh
+                      </button>
+                    </div>
+                    {pendingEnrollmentsStatus && <div className="status">{pendingEnrollmentsStatus}</div>}
+                    {pendingEnrollmentsError && <div className="error">{pendingEnrollmentsError}</div>}
+                    {pendingEnrollmentsLoading ? (
+                      <div className="placeholder">Loading pending enrollments...</div>
+                    ) : (
+                      <div className="table-wrap">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>Request ID</th>
+                              <th>Status</th>
+                              <th>Agent</th>
+                              <th>Hardware ID</th>
+                              <th>Source IP</th>
+                              <th>Reason</th>
+                              <th>Created</th>
+                              <th>Expires</th>
+                              <th>Approve After</th>
+                              <th>Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {pendingEnrollments.map((item) => {
+                              const approvalDt = item.approvalAvailableAt ? new Date(item.approvalAvailableAt) : null
+                              const approvalPending = Boolean(
+                                item.status === 'pending'
+                                  && approvalDt
+                                  && !Number.isNaN(approvalDt.getTime())
+                                  && approvalDt.getTime() > Date.now(),
+                              )
+                              const approvalDelayLabel = approvalPending
+                                ? `${formatDurationSeconds((approvalDt.getTime() - Date.now()) / 1000)} (${formatTime(item.approvalAvailableAt)})`
+                                : formatTime(item.approvalAvailableAt)
+                              return (
+                                <tr key={item.requestId}>
+                                  <td className="mono">{item.requestId}</td>
+                                  <td>{item.status || '—'}</td>
+                                  <td>{item.agentVersion || '—'}</td>
+                                  <td className="mono">{item.hardwareId || '—'}</td>
+                                  <td className="mono">{item.sourceIp || '—'}</td>
+                                  <td>{item.deniedReason || '—'}</td>
+                                  <td>{formatTime(item.createdAt)}</td>
+                                  <td>{formatTime(item.expiresAt)}</td>
+                                  <td>{approvalPending ? approvalDelayLabel : approvalDelayLabel || '—'}</td>
+                                  <td>
+                                    {item.status === 'pending' ? (
+                                      <div className="inline-row">
+                                        <button
+                                          className="button ghost"
+                                          disabled={approvalPending}
+                                          title={approvalPending ? `Approval available after ${formatTime(item.approvalAvailableAt)}` : ''}
+                                          onClick={() => handleApprovePendingEnrollment(item.requestId)}
+                                        >
+                                          {approvalPending ? 'Throttled' : 'Approve'}
+                                        </button>
+                                        <button className="button ghost" onClick={() => handleDenyPendingEnrollment(item.requestId)}>
+                                          Deny
+                                        </button>
+                                      </div>
+                                    ) : ['denied', 'conflict', 'expired'].includes(item.status) ? (
+                                      <button className="button ghost" onClick={() => handleResetPendingEnrollment(item.requestId)}>
+                                        Reset
+                                      </button>
+                                    ) : (
+                                      '—'
+                                    )}
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                            {pendingEnrollments.length === 0 && (
+                              <tr>
+                                <td colSpan={10}>No enrollment requests.</td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              <div className="settings-section">
                 <div className="settings-title">CA Rotation</div>
                 <div className="inline-row">
                   <button className="button ghost" onClick={loadRotationStatus}>
@@ -4531,6 +5881,7 @@ export default function App() {
                 <button className="button ghost" onClick={() => { loadArtifactLifecyclePolicy(); loadArtifactLifecycleStatus() }}>
                   Refresh lifecycle
                 </button>
+                <button className="button ghost" onClick={loadReleaseAutoUpdate}>Refresh auto-update</button>
                 <button className="button ghost" onClick={loadUpgrade}>Refresh upgrade</button>
                 <button className="button ghost" onClick={loadUpgradeAvailable}>Refresh updates</button>
               </div>
@@ -4553,7 +5904,7 @@ export default function App() {
                     <div className="detail-value">{maintenance.updatedAt ? new Date(maintenance.updatedAt).toLocaleString() : '—'}</div>
                   </div>
                   <div className="full">
-                    <button className="button ghost" onClick={toggleMaintenance} disabled={!canToggleMaintenance}>
+                    <button className="button ghost" onClick={toggleMaintenance} disabled={!isAdmin}>
                       {maintenance.enabled ? 'Disable maintenance' : 'Enable maintenance'}
                     </button>
                   </div>
@@ -4612,6 +5963,93 @@ export default function App() {
                     </div>
                   )}
                 </div>
+              </div>
+
+              <div className="settings-section">
+                <div className="settings-title">Release Auto-Update</div>
+                <div className="detail-grid">
+                  <div>
+                    <div className="detail-label">Enabled (default)</div>
+                    <label className="inline-toggle">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(releaseAutoUpdate.enabled)}
+                        onChange={(e) => {
+                          const enabled = e.target.checked
+                          setReleaseAutoUpdate((prev) => ({ ...prev, enabled }))
+                        }}
+                        disabled={authStatus.enabled && !isAdmin}
+                      />
+                      {releaseAutoUpdate.enabled ? 'on' : 'off'}
+                    </label>
+                  </div>
+                  <div>
+                    <div className="detail-label">Allow unsigned</div>
+                    <label className="inline-toggle">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(releaseAutoUpdate.allowUnsigned)}
+                        onChange={(e) => {
+                          const allowUnsigned = e.target.checked
+                          setReleaseAutoUpdate((prev) => ({ ...prev, allowUnsigned }))
+                        }}
+                        disabled={authStatus.enabled && !isAdmin}
+                      />
+                      {releaseAutoUpdate.allowUnsigned ? 'yes' : 'no'}
+                    </label>
+                  </div>
+                  <div>
+                    <div className="detail-label">Interval</div>
+                    <div className="detail-value">
+                      {releaseAutoUpdate.intervalSeconds > 0
+                        ? formatDurationSeconds(releaseAutoUpdate.intervalSeconds)
+                        : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="detail-label">Running</div>
+                    <div className="detail-value">{releaseAutoUpdate.running ? 'yes' : 'no'}</div>
+                  </div>
+                  <div>
+                    <div className="detail-label">Updated</div>
+                    <div className="detail-value">
+                      {releaseAutoUpdate.updatedAt
+                        ? new Date(releaseAutoUpdate.updatedAt).toLocaleString()
+                        : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="detail-label">Updated by</div>
+                    <div className="detail-value">{releaseAutoUpdate.updatedByUserId || '—'}</div>
+                  </div>
+                  <div className="full inline-row">
+                    <button
+                      className="button ghost"
+                      onClick={handleSaveReleaseAutoUpdateSettings}
+                      disabled={(authStatus.enabled && !isAdmin) || releaseAutoUpdateSaving}
+                    >
+                      Save auto-update settings
+                    </button>
+                    <button
+                      className="button ghost"
+                      onClick={handleRunReleaseAutoUpdate}
+                      disabled={(authStatus.enabled && !isAdmin) || releaseAutoUpdateSaving || releaseAutoUpdate.running}
+                    >
+                      Run now
+                    </button>
+                  </div>
+                </div>
+                {releaseAutoUpdate.lastRun && (
+                  <div className="detail-note">
+                    Last run: {formatTime(releaseAutoUpdate.lastRun.finishedAt || releaseAutoUpdate.lastRun.startedAt)} ·
+                    trigger {releaseAutoUpdate.lastRun.trigger || '—'} ·
+                    updated components {Number(releaseAutoUpdate.lastRun.componentsUpdated || 0)} ·
+                    groups {Number(releaseAutoUpdate.lastRun.groupsUpdated || 0)} ·
+                    devices {Number(releaseAutoUpdate.lastRun.devicesUpdated || 0)}
+                    {releaseAutoUpdate.lastRun.error ? ` · error: ${releaseAutoUpdate.lastRun.error}` : ''}
+                  </div>
+                )}
+                {releaseAutoUpdateStatus && <div className="status">{releaseAutoUpdateStatus}</div>}
               </div>
 
               <div className="settings-section">
@@ -4746,7 +6184,7 @@ export default function App() {
                       <button className="button ghost" onClick={loadUpgradePreflight}>
                         Run preflight
                       </button>
-                      {canToggleMaintenance && maintenance.enabled && upgrade.enabled && (
+                      {isAdmin && maintenance.enabled && upgrade.enabled && (
                         <button
                           className="button ghost"
                           onClick={startUpgrade}
@@ -4954,6 +6392,15 @@ export default function App() {
                               placeholder="artifact type"
                               disabled={locked}
                             />
+                            <select
+                              value={row.autoTrackMode || 'inherit'}
+                              onChange={(e) => updateDeviceComponent(idx, { autoTrackMode: e.target.value })}
+                              disabled={locked}
+                            >
+                              {autoTrackModes.map((mode) => (
+                                <option key={mode.id} value={mode.id}>{`Auto ${mode.label}`}</option>
+                              ))}
+                            </select>
                             <label className="inline-toggle">
                               <input
                                 type="checkbox"
@@ -5107,6 +6554,257 @@ export default function App() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {enrollmentProfileCreateOpen && (
+        <div className="modal-backdrop" onClick={() => setEnrollmentProfileCreateOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="section-header">
+              <h3>Create Enrollment Profile</h3>
+              <button className="button ghost" onClick={() => setEnrollmentProfileCreateOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="form compact two-column">
+              <div className="field">
+                <label>Name</label>
+                <input
+                  value={enrollmentProfileForm.name}
+                  onChange={(e) => setEnrollmentProfileForm((prev) => ({ ...prev, name: e.target.value }))}
+                />
+              </div>
+              <div className="field">
+                <label>Expiration Days</label>
+                <input
+                  value={enrollmentProfileForm.expiresInDays}
+                  onChange={(e) => setEnrollmentProfileForm((prev) => ({ ...prev, expiresInDays: e.target.value }))}
+                />
+              </div>
+              <div className="field">
+                <label>Max Uses (0 = unlimited)</label>
+                <input
+                  value={enrollmentProfileForm.maxUses}
+                  onChange={(e) => setEnrollmentProfileForm((prev) => ({ ...prev, maxUses: e.target.value }))}
+                />
+              </div>
+              <div className="field">
+                <label>Challenge Secret (optional)</label>
+                <input
+                  value={enrollmentProfileForm.challengeSecret}
+                  onChange={(e) => setEnrollmentProfileForm((prev) => ({ ...prev, challengeSecret: e.target.value }))}
+                />
+              </div>
+              <div className="field">
+                <label>Challenge Hint (optional)</label>
+                <input
+                  value={enrollmentProfileForm.challengeHint}
+                  onChange={(e) => setEnrollmentProfileForm((prev) => ({ ...prev, challengeHint: e.target.value }))}
+                />
+              </div>
+              <div className="field">
+                <label>Approval Delay (sec)</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={enrollmentProfileForm.approvalDelaySec}
+                  onChange={(e) => setEnrollmentProfileForm((prev) => ({ ...prev, approvalDelaySec: e.target.value }))}
+                />
+              </div>
+              <div className="field">
+                <label>Default Labels</label>
+                <div className="key-value-list">
+                  {enrollmentProfileForm.defaultLabelRows.map((row, idx) => (
+                    <div key={`profile-create-label-${idx}`} className="key-value-row">
+                      <input
+                        value={row.key}
+                        onChange={(e) => {
+                          const next = [...enrollmentProfileForm.defaultLabelRows]
+                          next[idx] = { ...row, key: e.target.value }
+                          setEnrollmentProfileForm((prev) => ({ ...prev, defaultLabelRows: next }))
+                        }}
+                        placeholder="label key"
+                      />
+                      <input
+                        value={row.value}
+                        onChange={(e) => {
+                          const next = [...enrollmentProfileForm.defaultLabelRows]
+                          next[idx] = { ...row, value: e.target.value }
+                          setEnrollmentProfileForm((prev) => ({ ...prev, defaultLabelRows: next }))
+                        }}
+                        placeholder="label value"
+                      />
+                      <button
+                        className="button ghost"
+                        type="button"
+                        onClick={() => {
+                          const next = enrollmentProfileForm.defaultLabelRows.filter((_, ridx) => ridx !== idx)
+                          setEnrollmentProfileForm((prev) => ({ ...prev, defaultLabelRows: next.length > 0 ? next : [{ key: '', value: '' }] }))
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    className="button ghost"
+                    type="button"
+                    onClick={() => setEnrollmentProfileForm((prev) => ({
+                      ...prev,
+                      defaultLabelRows: [...prev.defaultLabelRows, { key: '', value: '' }],
+                    }))}
+                  >
+                    Add Label
+                  </button>
+                </div>
+              </div>
+              <div className="field">
+                <label className="chip">
+                  <input
+                    type="checkbox"
+                    checked={enrollmentProfileForm.allowUnsignedHardwareIdentity}
+                    onChange={(e) => setEnrollmentProfileForm((prev) => ({ ...prev, allowUnsignedHardwareIdentity: e.target.checked }))}
+                  />
+                  Allow unsigned hardware identity
+                </label>
+              </div>
+              <div className="field actions">
+                <button className="button ghost" onClick={handleCreateEnrollmentProfile}>
+                  Create profile
+                </button>
+                <button className="button ghost" onClick={() => setEnrollmentProfileCreateOpen(false)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingEnrollmentProfileId && (
+        <div className="modal-backdrop" onClick={handleCancelEditEnrollmentProfile}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="section-header">
+              <h3>Edit Enrollment Profile</h3>
+              <button className="button ghost" onClick={handleCancelEditEnrollmentProfile}>
+                Close
+              </button>
+            </div>
+            <div className="form compact two-column">
+              <div className="field">
+                <label>Name</label>
+                <input
+                  value={enrollmentProfileEditForm.name}
+                  onChange={(e) => setEnrollmentProfileEditForm((prev) => ({ ...prev, name: e.target.value }))}
+                />
+              </div>
+              <div className="field">
+                <label>Max Uses (0 = unlimited)</label>
+                <input
+                  value={enrollmentProfileEditForm.maxUses}
+                  onChange={(e) => setEnrollmentProfileEditForm((prev) => ({ ...prev, maxUses: e.target.value }))}
+                />
+              </div>
+              <div className="field">
+                <label>Approval Delay (sec)</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={enrollmentProfileEditForm.approvalDelaySec}
+                  onChange={(e) => setEnrollmentProfileEditForm((prev) => ({ ...prev, approvalDelaySec: e.target.value }))}
+                />
+              </div>
+              <div className="field">
+                <label className="chip">
+                  <input
+                    type="checkbox"
+                    checked={enrollmentProfileEditForm.allowUnsignedHardwareIdentity}
+                    onChange={(e) => setEnrollmentProfileEditForm((prev) => ({ ...prev, allowUnsignedHardwareIdentity: e.target.checked }))}
+                  />
+                  Allow unsigned hardware identity
+                </label>
+              </div>
+              <div className="field">
+                <label className="chip">
+                  <input
+                    type="checkbox"
+                    checked={enrollmentProfileEditForm.challengeEnabled}
+                    onChange={(e) => setEnrollmentProfileEditForm((prev) => ({ ...prev, challengeEnabled: e.target.checked }))}
+                  />
+                  Challenge enabled
+                </label>
+              </div>
+              <div className="field">
+                <label>Challenge Secret (leave blank to keep current)</label>
+                <input
+                  value={enrollmentProfileEditForm.challengeSecret}
+                  onChange={(e) => setEnrollmentProfileEditForm((prev) => ({ ...prev, challengeSecret: e.target.value }))}
+                />
+              </div>
+              <div className="field">
+                <label>Challenge Hint</label>
+                <input
+                  value={enrollmentProfileEditForm.challengeHint}
+                  onChange={(e) => setEnrollmentProfileEditForm((prev) => ({ ...prev, challengeHint: e.target.value }))}
+                />
+              </div>
+              <div className="field">
+                <label>Default Labels</label>
+                <div className="key-value-list">
+                  {enrollmentProfileEditForm.defaultLabelRows.map((row, idx) => (
+                    <div key={`profile-edit-label-${idx}`} className="key-value-row">
+                      <input
+                        value={row.key}
+                        onChange={(e) => {
+                          const next = [...enrollmentProfileEditForm.defaultLabelRows]
+                          next[idx] = { ...row, key: e.target.value }
+                          setEnrollmentProfileEditForm((prev) => ({ ...prev, defaultLabelRows: next }))
+                        }}
+                        placeholder="label key"
+                      />
+                      <input
+                        value={row.value}
+                        onChange={(e) => {
+                          const next = [...enrollmentProfileEditForm.defaultLabelRows]
+                          next[idx] = { ...row, value: e.target.value }
+                          setEnrollmentProfileEditForm((prev) => ({ ...prev, defaultLabelRows: next }))
+                        }}
+                        placeholder="label value"
+                      />
+                      <button
+                        className="button ghost"
+                        type="button"
+                        onClick={() => {
+                          const next = enrollmentProfileEditForm.defaultLabelRows.filter((_, ridx) => ridx !== idx)
+                          setEnrollmentProfileEditForm((prev) => ({ ...prev, defaultLabelRows: next.length > 0 ? next : [{ key: '', value: '' }] }))
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    className="button ghost"
+                    type="button"
+                    onClick={() => setEnrollmentProfileEditForm((prev) => ({
+                      ...prev,
+                      defaultLabelRows: [...prev.defaultLabelRows, { key: '', value: '' }],
+                    }))}
+                  >
+                    Add Label
+                  </button>
+                </div>
+              </div>
+              <div className="field actions">
+                <button className="button ghost" onClick={handleUpdateEnrollmentProfile}>
+                  Save profile
+                </button>
+                <button className="button ghost" onClick={handleCancelEditEnrollmentProfile}>
+                  Cancel
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -5465,6 +7163,15 @@ export default function App() {
                           placeholder="artifact type"
                           disabled={locked}
                         />
+                        <select
+                          value={row.autoTrackMode || 'inherit'}
+                          onChange={(e) => updateGroupMultiDesiredComponent(idx, { autoTrackMode: e.target.value })}
+                          disabled={locked}
+                        >
+                          {autoTrackModes.map((mode) => (
+                            <option key={mode.id} value={mode.id}>{`Auto ${mode.label}`}</option>
+                          ))}
+                        </select>
                         <label className="inline-toggle">
                           <input
                             type="checkbox"
@@ -5730,6 +7437,15 @@ export default function App() {
                           placeholder="artifact type"
                           disabled={locked}
                         />
+                        <select
+                          value={row.autoTrackMode || 'inherit'}
+                          onChange={(e) => updateGroupComponent(idx, { autoTrackMode: e.target.value })}
+                          disabled={locked}
+                        >
+                          {autoTrackModes.map((mode) => (
+                            <option key={mode.id} value={mode.id}>{`Auto ${mode.label}`}</option>
+                          ))}
+                        </select>
                         <label className="inline-toggle">
                           <input
                             type="checkbox"

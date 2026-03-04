@@ -32,7 +32,9 @@ USAGE
 fi
 
 if [ -z "$OUT_PATH" ]; then
-  OUT_PATH="/tmp/${ARTIFACT_NAME}-${ARTIFACT_VERSION}.tar.gz"
+  out_dir="${TMPDIR:-/tmp}/hardwareops-artifacts"
+  mkdir -p "$out_dir"
+  OUT_PATH=$(mktemp "$out_dir/${ARTIFACT_NAME}-${ARTIFACT_VERSION}-XXXXXX.tar.gz")
 fi
 
 PACK_ARGS=(
@@ -82,6 +84,15 @@ if [[ "$BASE_URL" == https:* ]]; then
   elif [ "$INSECURE" = "1" ]; then
     curl_opts+=(-k)
   fi
+fi
+if [ -n "${CURL_RESOLVE_HOSTS:-}" ]; then
+  IFS=',' read -r -a resolve_entries <<<"$CURL_RESOLVE_HOSTS"
+  for entry in "${resolve_entries[@]}"; do
+    entry=$(echo "$entry" | xargs)
+    if [ -n "$entry" ]; then
+      curl_opts+=(--resolve "$entry")
+    fi
+  done
 fi
 
 form_args=(

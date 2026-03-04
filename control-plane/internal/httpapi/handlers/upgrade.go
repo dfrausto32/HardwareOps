@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/hardwareops/control-plane/internal/metrics"
@@ -30,7 +29,7 @@ func GetUpgradeStatus(runner *upgrade.Runner) http.HandlerFunc {
 	}
 }
 
-func ApplyUpgrade(logger *log.Logger, st store.Store, runner *upgrade.Runner, maintenance MaintenanceStateView, token string, trustProxy bool, updatesDir string, metricsCollector *metrics.Metrics) http.HandlerFunc {
+func ApplyUpgrade(logger *log.Logger, st store.Store, runner *upgrade.Runner, maintenance MaintenanceStateView, trustProxy bool, updatesDir string, metricsCollector *metrics.Metrics) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if runner == nil || !runner.Enabled() {
 			if metricsCollector != nil {
@@ -38,13 +37,6 @@ func ApplyUpgrade(logger *log.Logger, st store.Store, runner *upgrade.Runner, ma
 			}
 			http.Error(w, "upgrade runner not configured", http.StatusNotFound)
 			return
-		}
-		if token != "" {
-			header := strings.TrimSpace(r.Header.Get("X-Maintenance-Token"))
-			if header == "" || header != token {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
 		}
 		if maintenance == nil {
 			http.Error(w, "maintenance state not configured", http.StatusPreconditionFailed)
@@ -65,11 +57,7 @@ func ApplyUpgrade(logger *log.Logger, st store.Store, runner *upgrade.Runner, ma
 			_ = json.NewEncoder(w).Encode(preflight)
 			return
 		}
-		authMethod := "ui"
-		if token != "" {
-			authMethod = "maintenance_token"
-		}
-		event := buildAuditEvent(r, trustProxy, actorUser(authMethod), "upgrade.apply", "upgrade", "control-plane")
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "upgrade.apply", "upgrade", "control-plane")
 		status, err := runner.Start()
 		if err != nil {
 			writeAudit(logger, st, event, err)

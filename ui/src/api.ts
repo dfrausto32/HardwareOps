@@ -1,5 +1,6 @@
 const env = import.meta.env
-const useProxy = env.VITE_API_PROXY === '1'
+const simulateProd = env.VITE_SIMULATE_PROD === '1'
+const useProxy = env.VITE_API_PROXY === '1' && !simulateProd
 const defaultProtocol = env.VITE_TLS === '1' ? 'https' : 'http'
 const runtimeOrigin =
   typeof window !== 'undefined' && window.location?.origin ? window.location.origin : ''
@@ -10,6 +11,7 @@ let authToken = env.VITE_AUTH_TOKEN || ''
 export const API_BASE_URL = useProxy ? '' : apiTarget
 export const API_TARGET = apiTarget
 const AUTH_STORAGE_KEY = 'hwops_auth_token'
+const AUTH_EXPIRED_EVENT = 'hwops:auth-expired'
 
 export function getAuthToken() {
   if (authToken) return authToken
@@ -29,6 +31,31 @@ export function setAuthToken(token: string) {
       window.localStorage.removeItem(AUTH_STORAGE_KEY)
     }
   }
+}
+
+function emitAuthExpired(detail: { path: string; status: number }) {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT, { detail }))
+}
+
+function handleUnauthorized(path: string, status: number) {
+  if (status !== 401) return
+  if (path.startsWith('/api/v1/auth/login') || path.startsWith('/api/v1/auth/register')) return
+  if (!getAuthToken()) return
+  setAuthToken('')
+  emitAuthExpired({ path, status })
+}
+
+export function subscribeAuthExpired(listener: (detail: { path: string; status: number }) => void) {
+  if (typeof window === 'undefined') {
+    return () => {}
+  }
+  const handler = (event: Event) => {
+    const custom = event as CustomEvent<{ path: string; status: number }>
+    listener(custom.detail || { path: '', status: 401 })
+  }
+  window.addEventListener(AUTH_EXPIRED_EVENT, handler as EventListener)
+  return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handler as EventListener)
 }
 
 function buildUrl(path: string) {
@@ -54,7 +81,10 @@ async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> 
   })
   if (!resp.ok) {
     const text = await resp.text()
-    throw new Error(`request failed ${resp.status}: ${text}`)
+    handleUnauthorized(path, resp.status)
+    const err = new Error(`request failed ${resp.status}: ${text}`) as Error & { status?: number }
+    err.status = resp.status
+    throw err
   }
   return resp.json()
 }
@@ -66,7 +96,10 @@ async function requestText(path: string, init: RequestInit = {}): Promise<string
   })
   if (!resp.ok) {
     const text = await resp.text()
-    throw new Error(`request failed ${resp.status}: ${text}`)
+    handleUnauthorized(path, resp.status)
+    const err = new Error(`request failed ${resp.status}: ${text}`) as Error & { status?: number }
+    err.status = resp.status
+    throw err
   }
   return resp.text()
 }
@@ -78,7 +111,10 @@ async function requestNoContent(path: string, init: RequestInit = {}): Promise<v
   })
   if (!resp.ok) {
     const text = await resp.text()
-    throw new Error(`request failed ${resp.status}: ${text}`)
+    handleUnauthorized(path, resp.status)
+    const err = new Error(`request failed ${resp.status}: ${text}`) as Error & { status?: number }
+    err.status = resp.status
+    throw err
   }
 }
 
@@ -166,7 +202,10 @@ export async function uploadArtifact(formData: FormData) {
   })
   if (!resp.ok) {
     const text = await resp.text()
-    throw new Error(`upload failed ${resp.status}: ${text}`)
+    handleUnauthorized('/api/v1/artifacts/upload', resp.status)
+    const err = new Error(`upload failed ${resp.status}: ${text}`) as Error & { status?: number }
+    err.status = resp.status
+    throw err
   }
   return resp.json()
 }
@@ -222,6 +261,23 @@ export async function pruneArtifacts(limit = 100) {
   })
 }
 
+export async function getReleaseAutoUpdateStatus() {
+  return requestJson('/api/v1/release-auto-update')
+}
+
+export async function setReleaseAutoUpdateSettings(payload: { enabled: boolean; allowUnsigned: boolean }) {
+  return requestJson('/api/v1/release-auto-update', {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function runReleaseAutoUpdate() {
+  return requestJson('/api/v1/release-auto-update/run', {
+    method: 'POST',
+  })
+}
+
 export async function getDeviceLogs(deviceId: string) {
   return requestText(`/api/v1/logs/${encodeURIComponent(deviceId)}`)
 }
@@ -257,6 +313,71 @@ export async function setEventRetention(days: number) {
   })
 }
 
+export async function listPendingEnrollments(params: Record<string, string | number | undefined> = {}) {
+  const qs = new URLSearchParams()
+  Object.entries(params).forEach(([key, val]) => {
+    if (val === undefined || val === null || val === '') return
+    qs.set(key, String(val))
+  })
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  return requestJson(`/api/v1/pending-enrollments${suffix}`)
+}
+
+export async function listEnrollmentProfiles() {
+  return requestJson('/api/v1/enrollment-profiles')
+}
+
+export async function createEnrollmentProfile(payload: Record<string, unknown>) {
+  return requestJson('/api/v1/enrollment-profiles', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function updateEnrollmentProfile(profileId: string, payload: Record<string, unknown>) {
+  return requestJson(`/api/v1/enrollment-profiles/${encodeURIComponent(profileId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function rotateEnrollmentProfile(profileId: string) {
+  return requestJson(`/api/v1/enrollment-profiles/${encodeURIComponent(profileId)}/rotate`, {
+    method: 'POST',
+  })
+}
+
+export async function disableEnrollmentProfile(profileId: string) {
+  return requestJson(`/api/v1/enrollment-profiles/${encodeURIComponent(profileId)}/disable`, {
+    method: 'POST',
+  })
+}
+
+export async function enableEnrollmentProfile(profileId: string) {
+  return requestJson(`/api/v1/enrollment-profiles/${encodeURIComponent(profileId)}/enable`, {
+    method: 'POST',
+  })
+}
+
+export async function approvePendingEnrollment(requestId: string) {
+  return requestJson(`/api/v1/pending-enrollments/${encodeURIComponent(requestId)}/approve`, {
+    method: 'POST',
+  })
+}
+
+export async function denyPendingEnrollment(requestId: string, reason = '') {
+  return requestJson(`/api/v1/pending-enrollments/${encodeURIComponent(requestId)}/deny`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  })
+}
+
+export async function resetPendingEnrollment(requestId: string) {
+  return requestJson(`/api/v1/pending-enrollments/${encodeURIComponent(requestId)}/reset`, {
+    method: 'POST',
+  })
+}
+
 export async function downloadAuditCSV(params: Record<string, string | number | undefined> = {}) {
   const qs = new URLSearchParams()
   Object.entries(params).forEach(([key, val]) => {
@@ -282,14 +403,10 @@ export async function getMaintenance() {
   return requestJson('/api/v1/maintenance')
 }
 
-export async function setMaintenance(payload: Record<string, unknown>, token?: string) {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (token) {
-    headers['X-Maintenance-Token'] = token
-  }
+export async function setMaintenance(payload: Record<string, unknown>) {
   return requestJson('/api/v1/maintenance', {
     method: 'PUT',
-    headers,
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   })
 }
@@ -306,14 +423,9 @@ export async function getUpgradePreflight() {
   return requestJson('/api/v1/maintenance/upgrade/preflight')
 }
 
-export async function applyUpgrade(token?: string) {
-  const headers: Record<string, string> = {}
-  if (token) {
-    headers['X-Maintenance-Token'] = token
-  }
+export async function applyUpgrade() {
   return requestJson('/api/v1/maintenance/upgrade', {
     method: 'POST',
-    headers,
   })
 }
 
@@ -402,7 +514,10 @@ export async function downloadBootstrapCA(token?: string) {
   })
   if (!resp.ok) {
     const text = await resp.text()
-    throw new Error(`request failed ${resp.status}: ${text}`)
+    handleUnauthorized('/api/v1/bootstrap/ca', resp.status)
+    const err = new Error(`request failed ${resp.status}: ${text}`) as Error & { status?: number }
+    err.status = resp.status
+    throw err
   }
   return resp.blob()
 }

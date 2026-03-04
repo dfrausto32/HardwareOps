@@ -13,6 +13,7 @@ import (
 	"github.com/hardwareops/control-plane/internal/license"
 	"github.com/hardwareops/control-plane/internal/lifecycle"
 	"github.com/hardwareops/control-plane/internal/metrics"
+	"github.com/hardwareops/control-plane/internal/releaseautoupdate"
 	"github.com/hardwareops/control-plane/internal/store"
 	"github.com/hardwareops/control-plane/internal/upgrade"
 )
@@ -37,42 +38,57 @@ type RateLimitConfig struct {
 	EnrollRPM          int
 	CheckinRPM         int
 	ApplyResultRPM     int
+	AuthLoginRPM       int
+}
+
+type PendingEnrollmentGuardrailConfig struct {
+	RequestRPMPerSource  int
+	RequestRPMPerProfile int
+	MaxActive            int
+	MaxActivePerProfile  int
+	MaxActivePerSource   int
 }
 
 type Dependencies struct {
-	Store                          store.Store
-	Signer                         CertSigner
-	ObjectStore                    ObjectStore
-	S3Bucket                       string
-	PresignExpires                 time.Duration
-	TrustProxy                     bool
-	TrustedProxyCIDRs              []string
-	ClientCertHeader               string
-	RateLimits                     RateLimitConfig
-	LogDir                         string
-	Events                         *events.Hub
-	CORSAllowedOrigins             []string
-	Maintenance                    *MaintenanceState
-	MaintenanceToken               string
-	Upgrade                        *upgrade.Runner
-	UpgradeUpdatesDir              string
-	Backup                         *backup.Runner
-	Restore                        *backup.Runner
-	BackupDir                      string
-	Metrics                        *metrics.Metrics
-	MetricsPath                    string
-	Auth                           *auth.Manager
-	BootstrapToken                 string
-	License                        *license.Manager
-	CertManager                    *certs.Manager
-	CertRotationGrace              time.Duration
-	ArtifactLifecycle              *lifecycle.Manager
-	ArtifactPullHosts              []string
-	ArtifactPullMaxBytes           int64
-	ArtifactPullTimeout            time.Duration
-	ArtifactPullCreds              artifactingest.CredentialResolver
-	ArtifactPullCredsManager       *artifactingest.PullCredentialManager
-	DeviceIdentityMode             string
-	DeviceIdentityRequireOnEnroll  bool
-	DeviceIdentityRequireOnCheckin bool
+	Store                           store.Store
+	Signer                          CertSigner
+	ObjectStore                     ObjectStore
+	S3Bucket                        string
+	PresignExpires                  time.Duration
+	TrustProxy                      bool
+	TrustedProxyCIDRs               []string
+	ClientCertHeader                string
+	RateLimits                      RateLimitConfig
+	PendingEnrollmentGuardrails     PendingEnrollmentGuardrailConfig
+	LogDir                          string
+	Events                          *events.Hub
+	CORSAllowedOrigins              []string
+	Maintenance                     *MaintenanceState
+	Upgrade                         *upgrade.Runner
+	UpgradeUpdatesDir               string
+	Backup                          *backup.Runner
+	Restore                         *backup.Runner
+	BackupDir                       string
+	Metrics                         *metrics.Metrics
+	MetricsPath                     string
+	Auth                            *auth.Manager
+	AuthLoginBackoff                *auth.LoginBackoff
+	BootstrapToken                  string
+	License                         *license.Manager
+	CertManager                     *certs.Manager
+	CertRotationGrace               time.Duration
+	ArtifactLifecycle               *lifecycle.Manager
+	ArtifactPullHosts               []string
+	ArtifactPullMaxBytes            int64
+	ArtifactPullTimeout             time.Duration
+	ArtifactPullAllowInsecureHTTP   bool
+	ArtifactSignatureRequireDefault bool
+	ArtifactSignatureEnforceIngest  bool
+	ArtifactSignatureKeyID          string
+	ArtifactPullCreds               artifactingest.CredentialResolver
+	ArtifactPullCredsManager        *artifactingest.PullCredentialManager
+	ReleaseAutoUpdate               *releaseautoupdate.Manager
+	DeviceIdentityMode              string
+	DeviceIdentityRequireOnEnroll   bool
+	DeviceIdentityRequireOnCheckin  bool
 }

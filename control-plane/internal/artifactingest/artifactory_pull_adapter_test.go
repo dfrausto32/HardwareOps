@@ -2,6 +2,7 @@ package artifactingest
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -19,7 +20,7 @@ func TestArtifactoryPullAdapterTokenAlias(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	adapter := NewArtifactoryPullAdapter(nil, 5*time.Second)
+	adapter := NewArtifactoryPullAdapter([]string{"127.0.0.1"}, 5*time.Second, true)
 	resp, err := adapter.Pull(context.Background(), PullRequest{
 		URI: srv.URL + "/artifactory/generic-local/demo.tar.gz",
 		Credentials: Credentials{
@@ -48,7 +49,7 @@ func TestArtifactoryPullAdapterAPIKeyAlias(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	adapter := NewArtifactoryPullAdapter(nil, 5*time.Second)
+	adapter := NewArtifactoryPullAdapter([]string{"127.0.0.1"}, 5*time.Second, true)
 	resp, err := adapter.Pull(context.Background(), PullRequest{
 		URI: srv.URL + "/artifactory/generic-local/demo.tar.gz",
 		Credentials: Credentials{
@@ -69,11 +70,31 @@ func TestArtifactoryPullAdapterHostAllowlist(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	adapter := NewArtifactoryPullAdapter([]string{"example.com"}, 5*time.Second)
+	adapter := NewArtifactoryPullAdapter([]string{"example.com"}, 5*time.Second, true)
 	_, err := adapter.Pull(context.Background(), PullRequest{
 		URI: srv.URL + "/artifactory/generic-local/demo.tar.gz",
 	})
 	if err == nil {
 		t.Fatalf("expected host allowlist error")
+	}
+}
+
+func TestArtifactoryPullAdapterRejectsInsecureHTTPWhenDisabled(t *testing.T) {
+	adapter := NewArtifactoryPullAdapter([]string{"example.com"}, 5*time.Second, false)
+	_, err := adapter.Pull(context.Background(), PullRequest{
+		URI: "http://example.com/artifactory/generic-local/demo.tar.gz",
+	})
+	if err == nil {
+		t.Fatalf("expected insecure http rejection")
+	}
+}
+
+func TestArtifactoryPullAdapterRejectsPrivateHostWithoutAllowlist(t *testing.T) {
+	adapter := NewArtifactoryPullAdapter(nil, 5*time.Second, true)
+	_, err := adapter.Pull(context.Background(), PullRequest{
+		URI: "http://127.0.0.1/artifactory/generic-local/demo.tar.gz",
+	})
+	if !errors.Is(err, ErrSourceNotAllowed) {
+		t.Fatalf("expected source not allowed error, got %v", err)
 	}
 }

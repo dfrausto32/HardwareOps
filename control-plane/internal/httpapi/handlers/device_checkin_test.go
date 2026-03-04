@@ -25,7 +25,7 @@ func TestDeviceCheckin_Valid(t *testing.T) {
 	req, deviceID = attachMTLSDevice(t, mem, req, deviceID)
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil).ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -61,7 +61,7 @@ func TestDeviceCheckin_MissingDeviceID(t *testing.T) {
 	req, _ = attachMTLSDevice(t, mem, req, "")
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil).ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -77,7 +77,7 @@ func TestDeviceCheckin_InvalidDeviceID(t *testing.T) {
 	req, _ = attachMTLSDevice(t, mem, req, "")
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil).ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", w.Code)
@@ -105,7 +105,7 @@ func TestDeviceCheckin_CloneSignalOnRapidSourceIPSwitch(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil).ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -160,7 +160,7 @@ func TestDeviceCheckin_RejectsHardwareIdentityReuseInEnforceMode(t *testing.T) {
 	req, _ = attachMTLSDevice(t, mem, req, deviceID)
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{Mode: "enforce"}, nil).ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{Mode: "enforce"}, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("expected 409, got %d", w.Code)
 	}
@@ -175,5 +175,58 @@ func TestDeviceCheckin_RejectsHardwareIdentityReuseInEnforceMode(t *testing.T) {
 	}
 	if len(eventsRows) != 1 {
 		t.Fatalf("expected one identity conflict event, got %d", len(eventsRows))
+	}
+}
+
+func TestDeviceCheckin_AppliesSignaturePolicyDefaults(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+	deviceID := uuid.NewString()
+	desiredArtifactID := uuid.NewString()
+	now := time.Now().UTC()
+	if err := mem.UpsertDesiredStateDevice(store.DesiredStateDevice{
+		DeviceID:       deviceID,
+		ArtifactID:     desiredArtifactID,
+		DesiredVersion: "1.2.3",
+		ComponentsJSON: nil,
+		Source:         "manual",
+		UpdatedAt:      now,
+	}); err != nil {
+		t.Fatalf("seed desired state failed: %v", err)
+	}
+
+	reqBody := []byte(`{"deviceId":"` + deviceID + `","agentVersion":"0.1.0","current":{"softwareVersion":"v1","configRev":"c1"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/checkin", bytes.NewReader(reqBody))
+	req, _ = attachMTLSDevice(t, mem, req, deviceID)
+	w := httptest.NewRecorder()
+
+	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil, ArtifactSignaturePolicy{
+		Require: true,
+		KeyID:   "sha256:test-signing-key",
+	}).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var resp DeviceCheckinResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid response json: %v", err)
+	}
+	if resp.Desired == nil {
+		t.Fatalf("expected desired")
+	}
+	comp, ok := resp.Desired.Components["app_bundle"]
+	if !ok {
+		t.Fatalf("expected app_bundle desired component")
+	}
+	var policy map[string]any
+	if err := json.Unmarshal(comp.ApplyPolicy, &policy); err != nil {
+		t.Fatalf("applyPolicy json decode failed: %v", err)
+	}
+	if policy["requireSignature"] != true {
+		t.Fatalf("expected requireSignature=true, got %#v", policy["requireSignature"])
+	}
+	if policy["signingKeyId"] != "sha256:test-signing-key" {
+		t.Fatalf("expected signingKeyId default, got %#v", policy["signingKeyId"])
 	}
 }

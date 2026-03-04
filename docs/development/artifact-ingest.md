@@ -98,9 +98,15 @@ Server behavior:
 - Stores in object store and creates artifact metadata
 
 Pull safety controls:
-- `ARTIFACT_PULL_ALLOWED_HOSTS` (comma-separated host allowlist; empty allows any)
+- `ARTIFACT_PULL_ALLOWED_HOSTS` (comma-separated host allowlist; use explicit hosts in production)
 - `ARTIFACT_PULL_MAX_BYTES` (default `1073741824`, 1 GiB)
 - `ARTIFACT_PULL_TIMEOUT` (default `15m`)
+- `ARTIFACT_PULL_ALLOW_INSECURE_HTTP` (default `0`; blocks `http://` sources unless explicitly enabled)
+
+Adapter guardrails:
+- `http://` pull sources are rejected unless `ARTIFACT_PULL_ALLOW_INSECURE_HTTP=1`.
+- Loopback/private/link-local targets are blocked unless the host is explicitly allowlisted.
+- Hardened profile requires a non-empty `ARTIFACT_PULL_ALLOWED_HOSTS` and `ARTIFACT_PULL_ALLOW_INSECURE_HTTP=0`.
 
 Pull helper script:
 `scripts/ci-pull-artifact.sh`
@@ -164,3 +170,8 @@ Manual upload **does not change** unless signature verification is enforced on a
 - Set `REQUIRE_ARTIFACT_SIGNATURE=1` to hard‑fail unsigned artifacts.
 - Set `SIGNING_PUB_KEY_PATH=/path/to/ed25519.pub` so the agent can verify.
 - Optionally pin `SIGNING_KEY_ID=sha256:...` to enforce key identity.
+
+**Control-plane managed policy (recommended for production):**
+- `ARTIFACT_SIGNATURE_REQUIRE_DEFAULT=1` adds `applyPolicy.requireSignature=true` to desired components when not explicitly set.
+- `ARTIFACT_SIGNATURE_KEY_ID=sha256:...` injects pinned key ID into desired `applyPolicy` when not explicitly set.
+- `ARTIFACT_SIGNATURE_ENFORCE_INGEST=1` rejects unsigned artifacts (and wrong key ID when pinned) on create/upload/pull/complete APIs.

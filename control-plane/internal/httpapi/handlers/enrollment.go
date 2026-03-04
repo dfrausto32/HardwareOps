@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hardwareops/control-plane/internal/events"
 	"github.com/hardwareops/control-plane/internal/license"
 	"github.com/hardwareops/control-plane/internal/metrics"
 	"github.com/hardwareops/control-plane/internal/store"
@@ -130,6 +131,20 @@ func DeviceEnroll(logger *log.Logger, st store.Store, lic *license.Manager, sign
 	SignDeviceCert(csrPEM []byte, deviceID string, validity time.Duration) ([]byte, string, error)
 	CACertPEM() []byte
 }, identityPolicy DeviceIdentityPolicy, trustProxy bool, metricsCollector *metrics.Metrics) http.HandlerFunc {
+	return deviceEnroll(logger, st, lic, signer, identityPolicy, trustProxy, metricsCollector, nil)
+}
+
+func DeviceEnrollWithEvents(logger *log.Logger, st store.Store, lic *license.Manager, signer interface {
+	SignDeviceCert(csrPEM []byte, deviceID string, validity time.Duration) ([]byte, string, error)
+	CACertPEM() []byte
+}, identityPolicy DeviceIdentityPolicy, trustProxy bool, metricsCollector *metrics.Metrics, hub *events.Hub) http.HandlerFunc {
+	return deviceEnroll(logger, st, lic, signer, identityPolicy, trustProxy, metricsCollector, hub)
+}
+
+func deviceEnroll(logger *log.Logger, st store.Store, lic *license.Manager, signer interface {
+	SignDeviceCert(csrPEM []byte, deviceID string, validity time.Duration) ([]byte, string, error)
+	CACertPEM() []byte
+}, identityPolicy DeviceIdentityPolicy, trustProxy bool, metricsCollector *metrics.Metrics, hub *events.Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		policy := identityPolicy.normalized()
 		record := func(status, reason string) {
@@ -257,6 +272,16 @@ func DeviceEnroll(logger *log.Logger, st store.Store, lic *license.Manager, sign
 			"hardwareId":  hardware.ID,
 		})
 		writeAudit(logger, st, event, nil)
+
+		emitRuntimeEvent(logger, st, hub, events.Event{
+			Type:     events.TypeDeviceEnroll,
+			DeviceID: deviceID,
+			Payload: auditJSON(map[string]any{
+				"fingerprint": fingerprint,
+				"hardwareId":  hardware.ID,
+			}),
+		})
+
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 		record("success", "ok")

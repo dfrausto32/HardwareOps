@@ -70,44 +70,38 @@ def main():
         "files": [],
     }
 
-    tmp_root = Path(args.out).with_suffix('').with_suffix('')
-    staging = tmp_root.parent / (tmp_root.name + "-staging")
-    if staging.exists():
-        for p in staging.rglob('*'):
-            if p.is_file():
-                p.unlink()
-        for p in sorted(staging.rglob('*'), reverse=True):
-            if p.is_dir():
-                p.rmdir()
-    staging.mkdir(parents=True, exist_ok=True)
-
-    files_dir = staging / 'files'
-    files_dir.mkdir(parents=True, exist_ok=True)
-
-    for src, rel in files:
-        dest = files_dir / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(src.read_bytes())
-        try:
-            dest.chmod(src.stat().st_mode & 0o777)
-        except OSError:
-            pass
-        manifest["files"].append({
-            "path": f"files/{rel.as_posix()}",
-            "sha256": sha256_file(dest),
-            "size": dest.stat().st_size,
-        })
-
-    (staging / 'manifest.json').write_text(json.dumps(manifest, indent=2))
-    if plan_path.is_file():
-        (staging / 'plan.yaml').write_text(plan_path.read_text())
-
     out_path = Path(args.out).resolve()
-    with tarfile.open(out_path, 'w:gz') as tf:
-        tf.add(staging / 'manifest.json', arcname='manifest.json')
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    tmp_base = out_path.parent if out_path.parent.exists() else Path(tempfile.gettempdir())
+    with tempfile.TemporaryDirectory(prefix=f"{args.name}-{args.version}-", dir=str(tmp_base)) as tmpdir:
+        staging = Path(tmpdir)
+        files_dir = staging / 'files'
+        files_dir.mkdir(parents=True, exist_ok=True)
+
+        for src, rel in files:
+            dest = files_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(src.read_bytes())
+            try:
+                dest.chmod(src.stat().st_mode & 0o777)
+            except OSError:
+                pass
+            manifest["files"].append({
+                "path": f"files/{rel.as_posix()}",
+                "sha256": sha256_file(dest),
+                "size": dest.stat().st_size,
+            })
+
+        (staging / 'manifest.json').write_text(json.dumps(manifest, indent=2))
         if plan_path.is_file():
-            tf.add(staging / 'plan.yaml', arcname='plan.yaml')
-        tf.add(files_dir, arcname='files')
+            (staging / 'plan.yaml').write_text(plan_path.read_text())
+
+        with tarfile.open(out_path, 'w:gz') as tf:
+            tf.add(staging / 'manifest.json', arcname='manifest.json')
+            if plan_path.is_file():
+                tf.add(staging / 'plan.yaml', arcname='plan.yaml')
+            tf.add(files_dir, arcname='files')
 
     size_bytes = out_path.stat().st_size
     sha = sha256_file(out_path)

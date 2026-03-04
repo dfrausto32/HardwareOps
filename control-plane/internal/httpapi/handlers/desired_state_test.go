@@ -181,7 +181,7 @@ func TestDeviceCheckin_AgentDesiredOverrides(t *testing.T) {
 	req, _ = attachMTLSDevice(t, mem, req, deviceID)
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil).ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -209,7 +209,7 @@ func TestDeviceCheckin_GroupDesiredOverridesAgent(t *testing.T) {
 	req, _ = attachMTLSDevice(t, mem, req, deviceID)
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil).ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -225,6 +225,121 @@ func TestDeviceCheckin_GroupDesiredOverridesAgent(t *testing.T) {
 		t.Fatalf("expected checkin interval from group")
 	}
 }
+
+func TestDeviceCheckin_GroupDesiredResolvesFromEnrollmentProfileLabels(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+
+	groupID := uuid.NewString()
+	if err := mem.UpsertGroup(store.Group{
+		GroupID:      groupID,
+		Name:         "factory-kiosk",
+		SelectorJSON: []byte(`{"site":"factory-a","role":"kiosk"}`),
+		CreatedAt:    time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed group failed: %v", err)
+	}
+	if err := mem.UpsertDesiredStateGroup(store.DesiredStateGroup{
+		GroupID:         groupID,
+		DesiredVersion:  "v9",
+		CheckinInterval: 12,
+		UpdatedAt:       time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed group desired failed: %v", err)
+	}
+
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/enrollment-profiles", bytes.NewReader([]byte(`{
+		"name":"line-a",
+		"expiresInSec":3600,
+		"defaultLabels":{"site":"factory-a","role":"kiosk"}
+	}`)))
+	createW := httptest.NewRecorder()
+	CreateEnrollmentProfile(logger, mem, false).ServeHTTP(createW, createReq)
+	if createW.Code != http.StatusCreated {
+		t.Fatalf("create profile expected 201, got %d: %s", createW.Code, createW.Body.String())
+	}
+	var profileResp CreateEnrollmentProfileResponse
+	if err := json.Unmarshal(createW.Body.Bytes(), &profileResp); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	requestPayload := PendingEnrollmentRequestPayload{
+		ProfileToken: profileResp.BootstrapToken,
+		CSR:          string(mustCSR(t)),
+		AgentVersion: "0.1.0",
+	}
+	requestBody, _ := json.Marshal(requestPayload)
+	requestReq := httptest.NewRequest(http.MethodPost, "/api/v1/pending-enrollments/request", bytes.NewReader(requestBody))
+	requestW := httptest.NewRecorder()
+	RequestPendingEnrollment(logger, mem, DeviceIdentityPolicy{}, false, nil, nil, nil).ServeHTTP(requestW, requestReq)
+	if requestW.Code != http.StatusAccepted {
+		t.Fatalf("request expected 202, got %d: %s", requestW.Code, requestW.Body.String())
+	}
+	var pendingResp PendingEnrollmentRequestResponse
+	if err := json.Unmarshal(requestW.Body.Bytes(), &pendingResp); err != nil {
+		t.Fatalf("decode request response: %v", err)
+	}
+
+	approveReq := httptest.NewRequest(http.MethodPost, "/api/v1/pending-enrollments/"+pendingResp.RequestID+"/approve", nil)
+	approveReq = withURLParam(approveReq, "requestId", pendingResp.RequestID)
+	approveW := httptest.NewRecorder()
+	ApprovePendingEnrollment(logger, mem, false, nil).ServeHTTP(approveW, approveReq)
+	if approveW.Code != http.StatusOK {
+		t.Fatalf("approve expected 200, got %d: %s", approveW.Code, approveW.Body.String())
+	}
+
+	claimPayload := ClaimPendingEnrollmentPayload{
+		RequestID:  pendingResp.RequestID,
+		ClaimToken: pendingResp.ClaimToken,
+	}
+	claimBody, _ := json.Marshal(claimPayload)
+	claimReq := httptest.NewRequest(http.MethodPost, "/api/v1/pending-enrollments/claim", bytes.NewReader(claimBody))
+	claimW := httptest.NewRecorder()
+	ClaimPendingEnrollment(logger, mem, nil, &fakeSigner{certPEM: []byte("CERT"), caPEM: []byte("CA")}, DeviceIdentityPolicy{}, false, nil, nil).ServeHTTP(claimW, claimReq)
+	if claimW.Code != http.StatusOK {
+		t.Fatalf("claim expected 200, got %d: %s", claimW.Code, claimW.Body.String())
+	}
+	var claimResp ClaimPendingEnrollmentResponse
+	if err := json.Unmarshal(claimW.Body.Bytes(), &claimResp); err != nil {
+		t.Fatalf("decode claim response: %v", err)
+	}
+
+	body := []byte(`{"deviceId":"` + claimResp.DeviceID + `","agentVersion":"0.1.0","current":{"softwareVersion":"v1","configRev":"c1"}}`)
+	checkinReq := httptest.NewRequest(http.MethodPost, "/api/v1/devices/checkin", bytes.NewReader(body))
+	checkinReq = attachExistingMTLSDevice(t, mem, checkinReq, claimResp.DeviceID)
+	checkinW := httptest.NewRecorder()
+
+	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil, ArtifactSignaturePolicy{}).ServeHTTP(checkinW, checkinReq)
+	if checkinW.Code != http.StatusOK {
+		t.Fatalf("checkin expected 200, got %d: %s", checkinW.Code, checkinW.Body.String())
+	}
+
+	var resp DeviceCheckinResponse
+	if err := json.Unmarshal(checkinW.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode checkin response: %v", err)
+	}
+	if resp.Desired == nil || resp.Desired.SoftwareVersion != "v9" {
+		t.Fatalf("expected group desired version from profile labels, got %+v", resp.Desired)
+	}
+	if resp.Desired.Source != "group" {
+		t.Fatalf("expected desired source=group, got %q", resp.Desired.Source)
+	}
+	if resp.Desired.CheckinInterval != 12 {
+		t.Fatalf("expected checkin interval from group, got %d", resp.Desired.CheckinInterval)
+	}
+
+	device, ok, err := mem.GetDevice(claimResp.DeviceID)
+	if err != nil {
+		t.Fatalf("get device: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected issued device to exist")
+	}
+	if string(device.LabelsJSON) != `{"site":"factory-a","role":"kiosk"}` && string(device.LabelsJSON) != `{"role":"kiosk","site":"factory-a"}` {
+		t.Fatalf("expected profile labels to persist through first checkin, got %s", string(device.LabelsJSON))
+	}
+}
+
 func TestDeviceCheckin_AgentSetsDesired(t *testing.T) {
 	logger := log.New(&bytes.Buffer{}, "", 0)
 	mem := memory.New()
@@ -235,7 +350,7 @@ func TestDeviceCheckin_AgentSetsDesired(t *testing.T) {
 	req, _ = attachMTLSDevice(t, mem, req, deviceID)
 	w := httptest.NewRecorder()
 
-	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil).ServeHTTP(w, req)
+	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)

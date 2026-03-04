@@ -26,7 +26,7 @@ This document defines a **safe, repeatable** upgrade process for HardwareOps in 
 - ✅ Validate **disk space** and service health.
 - ✅ Review **release notes** (migrations, breaking changes).
 - ✅ **Enable maintenance mode** (UI toggle or `MAINTENANCE_MODE=1`) to freeze writes.
-- ✅ Run **upgrade preflight** in the UI (checks runner, updates dir, docker socket, bundles, disk space).
+- ✅ Run **upgrade preflight** in the UI (checks runner connectivity, updates dir, bundles, disk space, and docker requirements when docker-mode runner is used).
 
 ## Upgrade Paths
 
@@ -52,7 +52,7 @@ This document defines a **safe, repeatable** upgrade process for HardwareOps in 
    - If using the auto‑apply flow, the control‑plane will run `scripts/apply-upgrade.sh`.
 
 4) **Apply update**
-   - From the UI (requires `MAINTENANCE_TOKEN`):
+   - From the UI (admin-authenticated session):
      - Click **Enable maintenance** → **Apply update**.
      - Apply will **fail fast** if preflight has any blocking errors.
    - Or run manually:
@@ -91,7 +91,8 @@ Use this to catch missing mounts or packages before applying.
 **Purpose:** define a deterministic apply path with explicit staging and a clear rollback trigger.
 
 **Scope (v1):**
-- Docker runner only (`UPGRADE_RUNNER_MODE=docker`).
+- Remote maintenance-runner model (`UPGRADE_RUNNER_MODE=remote`).
+- Docker socket is mounted only in the maintenance-runner container.
 - On‑prem stack bundles (`hardwareops-upgrade-*.tar.gz`).
 - Rollback covers **gateway + control‑plane images** only (DB rollback requires backup restore).
 
@@ -109,8 +110,9 @@ Use this to catch missing mounts or packages before applying.
    - `images/` (optional) or a registry pull plan
 3) Mark staged bundle as “active” (e.g. `updates/current/ACTIVE` file).
 
-**Apply step (runner container):**
-- Start dedicated runner container with explicit image + env:
+**Apply step (maintenance-runner):**
+- Control-plane calls maintenance-runner API (`/v1/upgrade/start`) with bearer token.
+- Maintenance-runner starts a dedicated runner container with explicit image + env:
   - `--env-file /stack/.env.onprem`
   - `COMPOSE_FILE=/stack/updates/current/<bundle>/docker-compose.onprem.bundle.yml`
   - `PROJECT_NAME=hardwareops`
@@ -197,20 +199,16 @@ Agents are upgraded **via artifacts**, not via control‑plane stack upgrades.
   - Apply a small test artifact to a canary device
 
 ## Maintenance + Auto‑Apply Requirements
-- Control‑plane env must include (docker runner only):
+- Control‑plane env must include (remote runner):
   - `MAINTENANCE_MODE=1` (start in maintenance)
-  - `MAINTENANCE_TOKEN=...` (UI toggle + upgrade apply)
-  - `UPGRADE_APPLY_CMD=/path/to/scripts/apply-upgrade.sh`
-  - `UPGRADE_RUNNER_MODE=docker` (runs apply in a separate container)
-  - `UPGRADE_RUNNER_IMAGE=...` (image used for the upgrade runner)
-- UI build args must include:
-  - `VITE_MAINTENANCE_TOKEN` matching `MAINTENANCE_TOKEN`
-- If the control‑plane runs **in Docker**, the upgrade runner needs:
-  - `/var/run/docker.sock` mounted into the container
-  - the stack directory mounted (for compose + scripts)
-  - `UPGRADE_WORK_DIR` + `UPGRADE_APPLY_CMD` pointing at the mounted script
-- If running in containers, the upgrade runner needs access to Docker
-  (e.g., mount `/var/run/docker.sock` into the control‑plane container).
+  - `UPGRADE_RUNNER_MODE=remote`
+  - `UPGRADE_RUNNER_URL=http://maintenance-runner:8090`
+  - `UPGRADE_RUNNER_TOKEN=<strong token>`
+- Maintenance-runner env must include:
+  - `UPGRADE_RUNNER_MODE=docker`
+  - `UPGRADE_APPLY_CMD=/app/scripts/apply-upgrade.sh`
+  - `UPGRADE_WORK_DIR=/stack`
+  - stack + cert mounts and `/var/run/docker.sock`
 - Docker client API must be **>= 1.44** (Docker 25+). Older clients will fail
   to load staged images; rebuild the control‑plane image if needed.
 
@@ -221,7 +219,7 @@ Agents are upgraded **via artifacts**, not via control‑plane stack upgrades.
 2) **Stage an upgrade**
    - Copy the upgrade tarball into `/stack/updates`.
 3) **Enable maintenance in UI** (freeze writes).
-4) **Apply upgrade** (UI spawns dedicated runner container).
+4) **Apply upgrade** (UI triggers maintenance-runner to spawn dedicated runner container).
 5) **Verify + exit maintenance** (UI or auto‑disable).
 
 ## Future Enhancements

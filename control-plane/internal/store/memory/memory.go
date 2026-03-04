@@ -11,51 +11,59 @@ import (
 )
 
 type Store struct {
-	mu               sync.Mutex
-	devices          map[string]store.Device
-	states           map[string]store.DeviceState
-	tokens           map[string]store.EnrollmentToken
-	groups           map[string]store.Group
-	desiredGroups    map[string]store.DesiredStateGroup
-	desiredDevices   map[string]store.DesiredStateDevice
-	artifacts        map[string]store.Artifact
-	artifactPolicy   store.ArtifactLifecyclePolicy
-	applyResults     map[string]store.ApplyResult
-	runtimeEvents    []store.RuntimeEvent
-	runtimeRetention store.RuntimeEventRetention
-	auditEvents      []store.AuditEvent
-	auditRetention   store.AuditRetention
-	certRotation     *store.CertRotationState
-	users            map[string]store.User
-	userEmailIndex   map[string]string
-	vouchers         map[string]store.AuthVoucher
-	voucherTokenIdx  map[string]string
-	serviceTokens    map[string]store.ServiceToken
-	serviceTokenIdx  map[string]string
+	mu                   sync.Mutex
+	devices              map[string]store.Device
+	states               map[string]store.DeviceState
+	tokens               map[string]store.EnrollmentToken
+	enrollmentProfiles   map[string]store.EnrollmentProfile
+	enrollmentProfileIdx map[string]string
+	pendingEnrollments   map[string]store.PendingEnrollment
+	groups               map[string]store.Group
+	desiredGroups        map[string]store.DesiredStateGroup
+	desiredDevices       map[string]store.DesiredStateDevice
+	artifacts            map[string]store.Artifact
+	artifactPolicy       store.ArtifactLifecyclePolicy
+	releaseAuto          store.ReleaseAutoUpdateSettings
+	applyResults         map[string]store.ApplyResult
+	runtimeEvents        []store.RuntimeEvent
+	runtimeRetention     store.RuntimeEventRetention
+	auditEvents          []store.AuditEvent
+	auditRetention       store.AuditRetention
+	certRotation         *store.CertRotationState
+	users                map[string]store.User
+	userEmailIndex       map[string]string
+	vouchers             map[string]store.AuthVoucher
+	voucherTokenIdx      map[string]string
+	serviceTokens        map[string]store.ServiceToken
+	serviceTokenIdx      map[string]string
 }
 
 func New() *Store {
 	return &Store{
-		devices:          map[string]store.Device{},
-		states:           map[string]store.DeviceState{},
-		tokens:           map[string]store.EnrollmentToken{},
-		groups:           map[string]store.Group{},
-		desiredGroups:    map[string]store.DesiredStateGroup{},
-		desiredDevices:   map[string]store.DesiredStateDevice{},
-		artifacts:        map[string]store.Artifact{},
-		artifactPolicy:   store.ArtifactLifecyclePolicy{DeprecatedDeleteAfterDays: 30, UpdatedAt: time.Now().UTC()},
-		applyResults:     map[string]store.ApplyResult{},
-		runtimeEvents:    []store.RuntimeEvent{},
-		runtimeRetention: store.RuntimeEventRetention{Days: 30, UpdatedAt: time.Now().UTC()},
-		auditEvents:      []store.AuditEvent{},
-		auditRetention:   store.AuditRetention{Days: 90, UpdatedAt: time.Now().UTC()},
-		certRotation:     nil,
-		users:            map[string]store.User{},
-		userEmailIndex:   map[string]string{},
-		vouchers:         map[string]store.AuthVoucher{},
-		voucherTokenIdx:  map[string]string{},
-		serviceTokens:    map[string]store.ServiceToken{},
-		serviceTokenIdx:  map[string]string{},
+		devices:              map[string]store.Device{},
+		states:               map[string]store.DeviceState{},
+		tokens:               map[string]store.EnrollmentToken{},
+		enrollmentProfiles:   map[string]store.EnrollmentProfile{},
+		enrollmentProfileIdx: map[string]string{},
+		pendingEnrollments:   map[string]store.PendingEnrollment{},
+		groups:               map[string]store.Group{},
+		desiredGroups:        map[string]store.DesiredStateGroup{},
+		desiredDevices:       map[string]store.DesiredStateDevice{},
+		artifacts:            map[string]store.Artifact{},
+		artifactPolicy:       store.ArtifactLifecyclePolicy{DeprecatedDeleteAfterDays: 30, UpdatedAt: time.Now().UTC()},
+		releaseAuto:          store.ReleaseAutoUpdateSettings{Enabled: false, AllowUnsigned: false, UpdatedAt: time.Now().UTC()},
+		applyResults:         map[string]store.ApplyResult{},
+		runtimeEvents:        []store.RuntimeEvent{},
+		runtimeRetention:     store.RuntimeEventRetention{Days: 30, UpdatedAt: time.Now().UTC()},
+		auditEvents:          []store.AuditEvent{},
+		auditRetention:       store.AuditRetention{Days: 90, UpdatedAt: time.Now().UTC()},
+		certRotation:         nil,
+		users:                map[string]store.User{},
+		userEmailIndex:       map[string]string{},
+		vouchers:             map[string]store.AuthVoucher{},
+		voucherTokenIdx:      map[string]string{},
+		serviceTokens:        map[string]store.ServiceToken{},
+		serviceTokenIdx:      map[string]string{},
 	}
 }
 
@@ -68,6 +76,12 @@ func (s *Store) UpsertDevice(device store.Device) error {
 	if existing, ok := s.devices[device.DeviceID]; ok {
 		if device.CertFingerprint == "" {
 			device.CertFingerprint = existing.CertFingerprint
+		}
+		if len(device.LabelsJSON) == 0 {
+			device.LabelsJSON = existing.LabelsJSON
+		}
+		if len(device.MetadataJSON) == 0 {
+			device.MetadataJSON = existing.MetadataJSON
 		}
 	}
 	s.devices[device.DeviceID] = device
@@ -171,6 +185,422 @@ func (s *Store) EnrollDeviceWithToken(tokenHash string, device store.Device, max
 	s.devices[device.DeviceID] = device
 	delete(s.tokens, tokenHash)
 	return nil
+}
+
+func (s *Store) CreateEnrollmentProfile(profile store.EnrollmentProfile) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if profile.ProfileID == "" {
+		return errors.New("profile_id required")
+	}
+	if profile.Name == "" {
+		return errors.New("name required")
+	}
+	if profile.TokenHash == "" {
+		return errors.New("token_hash required")
+	}
+	if _, exists := s.enrollmentProfiles[profile.ProfileID]; exists {
+		return errors.New("enrollment profile already exists")
+	}
+	if existingID, exists := s.enrollmentProfileIdx[profile.TokenHash]; exists && existingID != "" {
+		return errors.New("enrollment profile token already exists")
+	}
+	if profile.CreatedAt.IsZero() {
+		profile.CreatedAt = time.Now().UTC()
+	}
+	profile.PreviousTokenHash = ""
+	profile.PreviousTokenExpiresAt = time.Time{}
+	profile.TokenRotatedAt = time.Time{}
+	s.enrollmentProfiles[profile.ProfileID] = profile
+	s.enrollmentProfileIdx[profile.TokenHash] = profile.ProfileID
+	return nil
+}
+
+func (s *Store) ListEnrollmentProfiles() ([]store.EnrollmentProfile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]store.EnrollmentProfile, 0, len(s.enrollmentProfiles))
+	for _, profile := range s.enrollmentProfiles {
+		out = append(out, profile)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
+func (s *Store) GetEnrollmentProfile(profileID string) (store.EnrollmentProfile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	profile, ok := s.enrollmentProfiles[profileID]
+	if !ok {
+		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileNotFound
+	}
+	return profile, nil
+}
+
+func (s *Store) UpdateEnrollmentProfile(profileID string, update store.EnrollmentProfileUpdate) (store.EnrollmentProfile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	profile, ok := s.enrollmentProfiles[profileID]
+	if !ok {
+		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileNotFound
+	}
+	profile.Name = update.Name
+	profile.RequireApproval = update.RequireApproval
+	profile.AllowUntrustedHW = update.AllowUntrustedHW
+	profile.ChallengeHash = update.ChallengeHash
+	profile.ChallengeHint = update.ChallengeHint
+	profile.ApprovalDelaySec = update.ApprovalDelaySec
+	profile.MaxUses = update.MaxUses
+	profile.DefaultLabelsJSON = update.DefaultLabelsJSON
+	s.enrollmentProfiles[profileID] = profile
+	return profile, nil
+}
+
+func (s *Store) GetEnrollmentProfileByTokenHash(profileTokenHash string) (store.EnrollmentProfile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.resolveEnrollmentProfileByTokenHashLocked(profileTokenHash, time.Now().UTC())
+}
+
+func (s *Store) SetEnrollmentProfileDisabled(profileID string, disabled bool) (store.EnrollmentProfile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	profile, ok := s.enrollmentProfiles[profileID]
+	if !ok {
+		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileNotFound
+	}
+	profile.Disabled = disabled
+	s.enrollmentProfiles[profileID] = profile
+	return profile, nil
+}
+
+func (s *Store) RotateEnrollmentProfileToken(profileID, tokenHash string, previousTokenValidUntil time.Time) (store.EnrollmentProfile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	profile, ok := s.enrollmentProfiles[profileID]
+	if !ok {
+		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileNotFound
+	}
+	if tokenHash == "" {
+		return store.EnrollmentProfile{}, errors.New("token_hash required")
+	}
+	if existingID, exists := s.enrollmentProfileIdx[tokenHash]; exists && existingID != "" && existingID != profileID {
+		return store.EnrollmentProfile{}, errors.New("enrollment profile token already exists")
+	}
+	now := time.Now().UTC()
+	delete(s.enrollmentProfileIdx, profile.PreviousTokenHash)
+	currentTokenHash := profile.TokenHash
+	if !previousTokenValidUntil.IsZero() && previousTokenValidUntil.After(now) {
+		profile.PreviousTokenHash = currentTokenHash
+		profile.PreviousTokenExpiresAt = previousTokenValidUntil
+		s.enrollmentProfileIdx[currentTokenHash] = profileID
+	} else {
+		delete(s.enrollmentProfileIdx, currentTokenHash)
+		profile.PreviousTokenHash = ""
+		profile.PreviousTokenExpiresAt = time.Time{}
+	}
+	profile.TokenHash = tokenHash
+	profile.TokenRotatedAt = now
+	s.enrollmentProfiles[profileID] = profile
+	s.enrollmentProfileIdx[tokenHash] = profileID
+	return profile, nil
+}
+
+func (s *Store) CreatePendingEnrollmentForProfileToken(profileTokenHash string, pending store.PendingEnrollment) (store.EnrollmentProfile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if profileTokenHash == "" {
+		return store.EnrollmentProfile{}, errors.New("profile_token_hash required")
+	}
+	if pending.RequestID == "" {
+		return store.EnrollmentProfile{}, errors.New("request_id required")
+	}
+	if pending.ClaimTokenHash == "" {
+		return store.EnrollmentProfile{}, errors.New("claim_token_hash required")
+	}
+	if pending.CSR == "" {
+		return store.EnrollmentProfile{}, errors.New("csr required")
+	}
+	if pending.ExpiresAt.IsZero() {
+		return store.EnrollmentProfile{}, errors.New("expires_at required")
+	}
+	now := time.Now().UTC()
+	profile, err := s.resolveEnrollmentProfileByTokenHashLocked(profileTokenHash, now)
+	if err != nil {
+		return store.EnrollmentProfile{}, err
+	}
+	if _, exists := s.pendingEnrollments[pending.RequestID]; exists {
+		return store.EnrollmentProfile{}, errors.New("pending enrollment already exists")
+	}
+	if pending.Status == "" {
+		pending.Status = "pending"
+	}
+	if pending.CreatedAt.IsZero() {
+		pending.CreatedAt = now
+	}
+	if pending.ApprovalAvailableAt.IsZero() {
+		pending.ApprovalAvailableAt = pending.CreatedAt
+	}
+	pending.ProfileID = profile.ProfileID
+	s.pendingEnrollments[pending.RequestID] = pending
+	profile.Uses++
+	s.enrollmentProfiles[profile.ProfileID] = profile
+	return profile, nil
+}
+
+func (s *Store) resolveEnrollmentProfileByTokenHashLocked(profileTokenHash string, now time.Time) (store.EnrollmentProfile, error) {
+	profileID, ok := s.enrollmentProfileIdx[profileTokenHash]
+	if !ok {
+		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileInvalid
+	}
+	profile, ok := s.enrollmentProfiles[profileID]
+	if !ok {
+		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileInvalid
+	}
+	if profile.PreviousTokenHash != "" && profileTokenHash == profile.PreviousTokenHash {
+		if profile.PreviousTokenExpiresAt.IsZero() || now.After(profile.PreviousTokenExpiresAt) {
+			delete(s.enrollmentProfileIdx, profile.PreviousTokenHash)
+			profile.PreviousTokenHash = ""
+			profile.PreviousTokenExpiresAt = time.Time{}
+			s.enrollmentProfiles[profileID] = profile
+			return store.EnrollmentProfile{}, store.ErrEnrollmentProfileInvalid
+		}
+	}
+	if profile.Disabled || (!profile.ExpiresAt.IsZero() && now.After(profile.ExpiresAt)) {
+		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileInvalid
+	}
+	if profile.MaxUses > 0 && profile.Uses >= profile.MaxUses {
+		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileExhausted
+	}
+	return profile, nil
+}
+
+func (s *Store) ListPendingEnrollments(filter store.PendingEnrollmentFilter) ([]store.PendingEnrollment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	out := make([]store.PendingEnrollment, 0, len(s.pendingEnrollments))
+	for _, pending := range s.pendingEnrollments {
+		if filter.Status != "" && pending.Status != filter.Status {
+			continue
+		}
+		out = append(out, pending)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if offset >= len(out) {
+		return []store.PendingEnrollment{}, nil
+	}
+	end := offset + limit
+	if end > len(out) {
+		end = len(out)
+	}
+	return out[offset:end], nil
+}
+
+func (s *Store) ApprovePendingEnrollment(requestID, approvedByUserID string, at time.Time) (store.PendingEnrollment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pending, ok := s.pendingEnrollments[requestID]
+	if !ok {
+		return store.PendingEnrollment{}, store.ErrPendingEnrollmentNotFound
+	}
+	if pending.Status != "pending" {
+		return store.PendingEnrollment{}, store.ErrPendingEnrollmentState
+	}
+	now := time.Now().UTC()
+	if at.IsZero() {
+		at = now
+	}
+	if now.After(pending.ExpiresAt) {
+		pending.Status = "expired"
+		s.pendingEnrollments[requestID] = pending
+		return store.PendingEnrollment{}, store.ErrPendingEnrollmentState
+	}
+	if !pending.ApprovalAvailableAt.IsZero() && pending.ApprovalAvailableAt.After(at) {
+		return pending, store.ErrPendingEnrollmentThrottled
+	}
+	pending.Status = "approved"
+	pending.ApprovedAt = at
+	pending.ApprovedByUserID = approvedByUserID
+	s.pendingEnrollments[requestID] = pending
+	return pending, nil
+}
+
+func (s *Store) DenyPendingEnrollment(requestID, reason, deniedByUserID string, at time.Time) (store.PendingEnrollment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pending, ok := s.pendingEnrollments[requestID]
+	if !ok {
+		return store.PendingEnrollment{}, store.ErrPendingEnrollmentNotFound
+	}
+	if pending.Status != "pending" && pending.Status != "approved" {
+		return store.PendingEnrollment{}, store.ErrPendingEnrollmentState
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	pending.Status = "denied"
+	pending.DeniedReason = reason
+	pending.DeniedAt = at
+	pending.DeniedByUserID = deniedByUserID
+	s.pendingEnrollments[requestID] = pending
+	return pending, nil
+}
+
+func (s *Store) ConflictPendingEnrollment(requestID, reason string, at time.Time) (store.PendingEnrollment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pending, ok := s.pendingEnrollments[requestID]
+	if !ok {
+		return store.PendingEnrollment{}, store.ErrPendingEnrollmentNotFound
+	}
+	if pending.Status != "pending" && pending.Status != "approved" {
+		return store.PendingEnrollment{}, store.ErrPendingEnrollmentState
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	pending.Status = "conflict"
+	pending.DeniedReason = reason
+	pending.DeniedAt = at
+	s.pendingEnrollments[requestID] = pending
+	return pending, nil
+}
+
+func (s *Store) ResetPendingEnrollment(requestID string, expiresAt time.Time) (store.PendingEnrollment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pending, ok := s.pendingEnrollments[requestID]
+	if !ok {
+		return store.PendingEnrollment{}, store.ErrPendingEnrollmentNotFound
+	}
+	switch pending.Status {
+	case "denied", "conflict", "expired":
+	default:
+		return store.PendingEnrollment{}, store.ErrPendingEnrollmentState
+	}
+	if expiresAt.IsZero() {
+		expiresAt = time.Now().UTC().Add(15 * time.Minute)
+	}
+	pending.Status = "pending"
+	pending.ExpiresAt = expiresAt
+	pending.DeniedReason = ""
+	pending.ApprovedAt = time.Time{}
+	pending.ApprovedByUserID = ""
+	pending.DeniedAt = time.Time{}
+	pending.DeniedByUserID = ""
+	pending.IssuedAt = time.Time{}
+	pending.IssuedDeviceID = ""
+	s.pendingEnrollments[requestID] = pending
+	return pending, nil
+}
+
+func (s *Store) ExpirePendingEnrollments(before time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for requestID, pending := range s.pendingEnrollments {
+		if (pending.Status == "pending" || pending.Status == "approved") && !pending.ExpiresAt.IsZero() && !before.Before(pending.ExpiresAt) {
+			pending.Status = "expired"
+			s.pendingEnrollments[requestID] = pending
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (s *Store) CountActivePendingEnrollments(profileID, sourceIP string, now time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for _, pending := range s.pendingEnrollments {
+		if pending.Status != "pending" && pending.Status != "approved" {
+			continue
+		}
+		if !pending.ExpiresAt.IsZero() && !pending.ExpiresAt.After(now) {
+			continue
+		}
+		if profileID != "" && pending.ProfileID != profileID {
+			continue
+		}
+		if sourceIP != "" && pending.SourceIP != sourceIP {
+			continue
+		}
+		count++
+	}
+	return count, nil
+}
+
+func (s *Store) GetPendingEnrollmentForClaim(requestID, claimTokenHash string) (store.PendingEnrollment, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pending, ok := s.pendingEnrollments[requestID]
+	if !ok {
+		return store.PendingEnrollment{}, false, nil
+	}
+	if pending.ClaimTokenHash != claimTokenHash {
+		return store.PendingEnrollment{}, false, nil
+	}
+	if (pending.Status == "pending" || pending.Status == "approved") && time.Now().UTC().After(pending.ExpiresAt) {
+		pending.Status = "expired"
+		s.pendingEnrollments[requestID] = pending
+	}
+	return pending, true, nil
+}
+
+func (s *Store) MarkPendingEnrollmentIssued(requestID, claimTokenHash string, device store.Device, maxDevices int, issuedAt time.Time) (store.PendingEnrollment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pending, ok := s.pendingEnrollments[requestID]
+	if !ok {
+		return store.PendingEnrollment{}, store.ErrPendingEnrollmentNotFound
+	}
+	if pending.ClaimTokenHash != claimTokenHash {
+		return store.PendingEnrollment{}, store.ErrPendingEnrollmentToken
+	}
+	if pending.Status != "approved" {
+		if (pending.Status == "pending" || pending.Status == "approved") && time.Now().UTC().After(pending.ExpiresAt) {
+			pending.Status = "expired"
+			s.pendingEnrollments[requestID] = pending
+		}
+		return store.PendingEnrollment{}, store.ErrPendingEnrollmentState
+	}
+	if maxDevices > 0 && len(s.devices) >= maxDevices {
+		return store.PendingEnrollment{}, store.ErrDeviceLimitExceeded
+	}
+	if device.DeviceID == "" {
+		return store.PendingEnrollment{}, errors.New("device_id required")
+	}
+	if _, exists := s.devices[device.DeviceID]; exists {
+		return store.PendingEnrollment{}, errors.New("device already exists")
+	}
+	if device.CertFingerprint != "" {
+		for _, d := range s.devices {
+			if d.CertFingerprint == device.CertFingerprint {
+				return store.PendingEnrollment{}, errors.New("device cert already exists")
+			}
+		}
+	}
+	s.devices[device.DeviceID] = device
+	if issuedAt.IsZero() {
+		issuedAt = time.Now().UTC()
+	}
+	pending.Status = "issued"
+	pending.IssuedAt = issuedAt
+	pending.IssuedDeviceID = device.DeviceID
+	s.pendingEnrollments[requestID] = pending
+	return pending, nil
 }
 
 func (s *Store) CreateDevice(device store.Device) error {
@@ -716,6 +1146,20 @@ func (s *Store) SetArtifactLifecyclePolicy(days int) (store.ArtifactLifecyclePol
 		UpdatedAt:                 time.Now().UTC(),
 	}
 	return s.artifactPolicy, nil
+}
+
+func (s *Store) GetReleaseAutoUpdateSettings() (store.ReleaseAutoUpdateSettings, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.releaseAuto, nil
+}
+
+func (s *Store) SetReleaseAutoUpdateSettings(settings store.ReleaseAutoUpdateSettings) (store.ReleaseAutoUpdateSettings, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	settings.UpdatedAt = time.Now().UTC()
+	s.releaseAuto = settings
+	return s.releaseAuto, nil
 }
 
 func (s *Store) DeleteArtifact(artifactID string) error {

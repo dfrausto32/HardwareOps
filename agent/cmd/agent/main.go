@@ -53,6 +53,12 @@ func main() {
 	}
 	logger.SetDeviceID(st.DeviceID)
 
+	capabilities := buildCapabilities(logger)
+	if err := bootstrapApprovalIdentity(cfg, &st, logger, capabilities); err != nil {
+		logger.Errorf("approval bootstrap: %v", err)
+		os.Exit(1)
+	}
+
 	if cfg.DeviceCertPath != "" {
 		deviceID, err := deviceIDFromCert(cfg.DeviceCertPath)
 		if err != nil {
@@ -70,7 +76,6 @@ func main() {
 
 	tlsConfig := buildTLSConfig(cfg, logger)
 	c := client.NewWithTLS(cfg.ControlPlaneURL, tlsConfig)
-	capabilities := buildCapabilities(logger)
 	interval := cfg.CheckinInterval
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
@@ -182,6 +187,28 @@ func reenrollDevice(c *client.Client, cfg config.Config, st *state.State, logger
 	}
 	if err := os.WriteFile(cfg.DeviceCertPath, []byte(resp.CertPEM), 0o644); err != nil {
 		return fmt.Errorf("write device cert: %w", err)
+	}
+	// Persist the returned CA when the agent is configured with an explicit CA file.
+	// This keeps private-CA deployments working across CA rotation after reenroll.
+	if err := persistReenrollCACert(cfg, resp.CACertPEM); err != nil {
+		return err
+	}
+	return nil
+}
+
+func persistReenrollCACert(cfg config.Config, caPEM string) error {
+	if strings.TrimSpace(cfg.CACertPath) == "" || strings.TrimSpace(caPEM) == "" {
+		return nil
+	}
+	if !strings.HasSuffix(caPEM, "\n") {
+		caPEM += "\n"
+	}
+	pool := x509.NewCertPool()
+	if ok := pool.AppendCertsFromPEM([]byte(caPEM)); !ok {
+		return errors.New("write reenroll ca cert: invalid ca cert pem")
+	}
+	if err := writeTextFile(cfg.CACertPath, caPEM, 0o644); err != nil {
+		return fmt.Errorf("write reenroll ca cert: %w", err)
 	}
 	return nil
 }
@@ -331,6 +358,7 @@ func desiredComponents(desired *client.DesiredState) map[string]client.DesiredCo
 			SoftwareVersion: desired.SoftwareVersion,
 			ConfigRev:       desired.ConfigRev,
 			DownloadURL:     desired.DownloadURL,
+			ApplyPolicy:     desired.ApplyPolicy,
 			Source:          desired.Source,
 		},
 	}
@@ -419,6 +447,7 @@ func applyDesiredComponent(component, root string, c *client.Client, desired cli
 	if compState.CurrentVersion == targetVersion && compState.CurrentConfigRev == desired.ConfigRev {
 		return nil
 	}
+	componentOpts := mergeApplyPolicyOptions(applyOpts, desired.ApplyPolicy)
 
 	componentRoot := componentRootPath(root, component)
 	logger.Infof("apply start component=%s artifact=%s version=%s", component, desired.ArtifactID, targetVersion)
@@ -435,7 +464,7 @@ func applyDesiredComponent(component, root string, c *client.Client, desired cli
 		Type:           meta.Type,
 		Signature:      meta.Signature,
 		SignatureKeyID: signatureKeyIDFromMetadata(meta.Metadata),
-	}, c.HTTPClient(), logger, applyOpts)
+	}, c.HTTPClient(), logger, componentOpts)
 	if err != nil {
 		errMsg := fmt.Sprintf("apply artifact: %v", err)
 		if oldVersion != "" {
@@ -476,6 +505,29 @@ func applyDesiredComponent(component, root string, c *client.Client, desired cli
 		logger.Warnf("post apply result: %v", err)
 	}
 	return nil
+}
+
+type applyPolicy struct {
+	RequireSignature *bool  `json:"requireSignature,omitempty"`
+	SigningKeyID     string `json:"signingKeyId,omitempty"`
+}
+
+func mergeApplyPolicyOptions(base artifacts.ApplyOptions, raw json.RawMessage) artifacts.ApplyOptions {
+	if len(raw) == 0 || string(raw) == "null" {
+		return base
+	}
+	var policy applyPolicy
+	if err := json.Unmarshal(raw, &policy); err != nil {
+		return base
+	}
+	out := base
+	if policy.RequireSignature != nil {
+		out.RequireSignature = *policy.RequireSignature
+	}
+	if keyID := strings.TrimSpace(policy.SigningKeyID); keyID != "" {
+		out.SigningKeyID = keyID
+	}
+	return out
 }
 
 func reportApplyError(c *client.Client, st *state.State, component string, errMsg string, outcome artifacts.ApplyOutcome, logger *logging.Logger, artifactID string) error {

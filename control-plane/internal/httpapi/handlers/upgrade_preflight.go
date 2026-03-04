@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,6 +59,20 @@ func BuildUpgradePreflight(runner *upgrade.Runner, updatesDir string) PreflightR
 
 	if runnerCfg.Mode != "" {
 		addCheck("Runner mode", "ok", runnerCfg.Mode)
+	}
+	if strings.EqualFold(runnerCfg.Mode, "remote") {
+		if runnerCfg.RemoteURL == "" {
+			addCheck("Remote runner URL", "error", "UPGRADE_RUNNER_URL not set")
+		} else if _, err := url.ParseRequestURI(runnerCfg.RemoteURL); err != nil {
+			addCheck("Remote runner URL", "error", "invalid URL")
+		} else {
+			addCheck("Remote runner URL", "ok", runnerCfg.RemoteURL)
+			if status.State == "failed" && strings.TrimSpace(status.Error) != "" {
+				addCheck("Remote runner connectivity", "error", status.Error)
+			} else {
+				addCheck("Remote runner connectivity", "ok", "reachable")
+			}
+		}
 	}
 	if strings.EqualFold(runnerCfg.Mode, "docker") {
 		if _, err := exec.LookPath("docker"); err != nil {
@@ -123,20 +138,21 @@ func BuildUpgradePreflight(runner *upgrade.Runner, updatesDir string) PreflightR
 		}
 	}
 
-	if status.Command == "" {
-		addCheck("Apply command", "error", "UPGRADE_APPLY_CMD not set")
-	} else {
-		addCheck("Apply command", "ok", status.Command)
-	}
-
-	if status.WorkingDir != "" {
-		if stat, err := os.Stat(status.WorkingDir); err != nil || !stat.IsDir() {
-			addCheck("Working dir", "error", "Invalid working dir")
+	if !strings.EqualFold(runnerCfg.Mode, "remote") {
+		if status.Command == "" {
+			addCheck("Apply command", "error", "UPGRADE_APPLY_CMD not set")
 		} else {
-			addCheck("Working dir", "ok", status.WorkingDir)
+			addCheck("Apply command", "ok", status.Command)
 		}
-	} else {
-		addCheck("Working dir", "warn", "No working dir set")
+		if status.WorkingDir != "" {
+			if stat, err := os.Stat(status.WorkingDir); err != nil || !stat.IsDir() {
+				addCheck("Working dir", "error", "Invalid working dir")
+			} else {
+				addCheck("Working dir", "ok", status.WorkingDir)
+			}
+		} else {
+			addCheck("Working dir", "warn", "No working dir set")
+		}
 	}
 
 	if updatesDir != "" {
@@ -162,10 +178,12 @@ func BuildUpgradePreflight(runner *upgrade.Runner, updatesDir string) PreflightR
 		addCheck("Updates dir", "warn", "UPGRADE_UPDATES_DIR not set")
 	}
 
-	if sock := "/var/run/docker.sock"; fileExists(sock) {
-		addCheck("Docker socket", "ok", sock)
-	} else {
-		addCheck("Docker socket", "warn", "Docker socket not mounted")
+	if strings.EqualFold(runnerCfg.Mode, "docker") {
+		if sock := "/var/run/docker.sock"; fileExists(sock) {
+			addCheck("Docker socket", "ok", sock)
+		} else {
+			addCheck("Docker socket", "warn", "Docker socket not mounted")
+		}
 	}
 
 	if dir := firstNonEmpty(status.WorkingDir, updatesDir); dir != "" {

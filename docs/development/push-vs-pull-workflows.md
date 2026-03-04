@@ -70,8 +70,10 @@ For both workflows:
 
 For pull workflow:
 - Set `ARTIFACT_PULL_ALLOWED_HOSTS`.
+- Keep `ARTIFACT_PULL_ALLOW_INSECURE_HTTP=0` (enable only for controlled local/dev scenarios).
 - Keep `ARTIFACT_PULL_MAX_BYTES` tight to expected artifact size.
 - Use short `ARTIFACT_PULL_TIMEOUT`.
+- Avoid loopback/private source hosts unless they are explicitly allowlisted.
 - After rotating pull credentials, run:
   - `POST /api/v1/artifacts/pull-credentials/reload`
   - or `scripts/reload-pull-credentials.sh`

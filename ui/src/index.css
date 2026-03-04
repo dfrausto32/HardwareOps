@@ -399,6 +399,9 @@ body {
   background: var(--panel-2);
   border: 1px solid var(--border);
   color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .notice.error {
@@ -409,6 +412,22 @@ body {
 
 .notice.info {
   background: var(--panel-2);
+}
+
+.notice.warning {
+  background: #2b2410;
+  border-color: #c69a2a;
+  color: #f7df9d;
+}
+
+.notice-action {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
 }
 
 .table-wrap {
@@ -519,9 +538,18 @@ tr.artifact-group-start td {
 
 .key-value-row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(140px, 1fr)) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   gap: 8px;
-  align-items: center;
+  align-items: start;
+}
+
+.key-value-row input {
+  width: 100%;
+  min-width: 0;
+}
+
+.key-value-row .button {
+  white-space: nowrap;
 }
 
 .form label {
@@ -1383,5 +1411,13 @@ tr.artifact-group-start td {
 
   .form.inline {
     grid-template-columns: 1fr;
+  }
+
+  .key-value-row {
+    grid-template-columns: 1fr;
+  }
+
+  .key-value-row .button {
+    width: fit-content;
   }
 }

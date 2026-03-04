@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,7 +51,7 @@ type RegisterResponse struct {
 	User UserView `json:"user"`
 }
 
-func Login(logger *log.Logger, manager *auth.Manager, st store.Store, trustProxy bool) http.HandlerFunc {
+func Login(logger *log.Logger, manager *auth.Manager, st store.Store, trustProxy bool, backoff *auth.LoginBackoff) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if manager == nil || !manager.Enabled() {
 			http.Error(w, "auth disabled", http.StatusNotFound)
@@ -65,10 +67,42 @@ func Login(logger *log.Logger, manager *auth.Manager, st store.Store, trustProxy
 			http.Error(w, "email and password required", http.StatusBadRequest)
 			return
 		}
+		now := time.Now().UTC()
+		if backoff != nil {
+			if blocked, retry := backoff.Check(req.Email, now); blocked {
+				setRetryAfterHeader(w, retry)
+				writeAudit(logger, st, buildAuditEvent(
+					r,
+					trustProxy,
+					AuditActor{Type: "anonymous", Email: req.Email, AuthMethod: manager.Mode()},
+					"auth.login",
+					"user",
+					req.Email,
+				), errors.New("login backoff active"))
+				http.Error(w, "too many login attempts; try again later", http.StatusTooManyRequests)
+				return
+			}
+		}
+
 		user, token, exp, err := manager.Authenticate(req.Email, req.Password)
 		if err != nil {
+			if backoff != nil {
+				retry := backoff.RegisterFailure(req.Email, now)
+				setRetryAfterHeader(w, retry)
+			}
+			writeAudit(logger, st, buildAuditEvent(
+				r,
+				trustProxy,
+				AuditActor{Type: "anonymous", Email: req.Email, AuthMethod: manager.Mode()},
+				"auth.login",
+				"user",
+				req.Email,
+			), err)
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
 			return
+		}
+		if backoff != nil {
+			backoff.RegisterSuccess(req.Email)
 		}
 		resp := LoginResponse{
 			Token:     token,
@@ -78,9 +112,26 @@ func Login(logger *log.Logger, manager *auth.Manager, st store.Store, trustProxy
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 
-		event := buildAuditEvent(r, trustProxy, actorUser("local"), "auth.login", "user", user.UserID)
+		event := buildAuditEvent(r, trustProxy, AuditActor{
+			Type:       "user",
+			ID:         user.UserID,
+			Email:      user.Email,
+			Roles:      rolesFromJSON(user.RolesJSON),
+			AuthMethod: manager.Mode(),
+		}, "auth.login", "user", user.UserID)
 		writeAudit(logger, st, event, nil)
 	}
+}
+
+func setRetryAfterHeader(w http.ResponseWriter, retry time.Duration) {
+	if retry <= 0 {
+		return
+	}
+	secs := int(retry.Seconds())
+	if secs < 1 {
+		secs = 1
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(secs))
 }
 
 func GetMe() http.HandlerFunc {

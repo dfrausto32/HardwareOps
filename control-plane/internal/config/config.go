@@ -49,10 +49,15 @@ type Config struct {
 	ArtifactPullAllowedHosts             []string
 	ArtifactPullMaxBytes                 int64
 	ArtifactPullTimeout                  time.Duration
+	ArtifactPullAllowInsecureHTTP        bool
+	ArtifactSignatureRequireDefault      bool
+	ArtifactSignatureEnforceIngest       bool
+	ArtifactSignatureKeyID               string
 	ArtifactPullCredentialsJSON          string
 	ArtifactPullCredentialsFile          string
 	ArtifactPullCredentialsAWSSecretID   string
 	ArtifactPullCredentialsAWSRegion     string
+	ReleaseAutoUpdateInterval            time.Duration
 	MaintenanceEnabled                   bool
 	MaintenanceMessage                   string
 	MaintenanceToken                     string
@@ -62,12 +67,16 @@ type Config struct {
 	UpgradeUpdatesDir                    string
 	UpgradeRunnerMode                    string
 	UpgradeRunnerImage                   string
+	UpgradeRunnerURL                     string
+	UpgradeRunnerToken                   string
 	BackupCmd                            string
 	BackupWorkDir                        string
 	BackupLogDir                         string
 	BackupDir                            string
 	BackupRunnerMode                     string
 	BackupRunnerImage                    string
+	BackupRunnerURL                      string
+	BackupRunnerToken                    string
 	BackupPostgresContainer              string
 	BackupMinioContainer                 string
 	BackupPostgresUser                   string
@@ -86,6 +95,17 @@ type Config struct {
 	AuthMode                             string
 	AuthJWTSecret                        string
 	AuthTokenTTL                         time.Duration
+	AuthLoginRPM                         int
+	PendingEnrollRequestRPMPerSource     int
+	PendingEnrollRequestRPMPerProfile    int
+	PendingEnrollMaxActive               int
+	PendingEnrollMaxActivePerProfile     int
+	PendingEnrollMaxActivePerSource      int
+	AuthLoginBackoffEnabled              bool
+	AuthLoginBackoffThreshold            int
+	AuthLoginBackoffBase                 time.Duration
+	AuthLoginBackoffMax                  time.Duration
+	AuthLoginBackoffWindow               time.Duration
 	AuthIssuer                           string
 	AuthBootstrapEmail                   string
 	AuthBootstrapPassword                string
@@ -159,10 +179,15 @@ func FromEnv() Config {
 		ArtifactPullAllowedHosts:             parseCSV(getenvDefault("ARTIFACT_PULL_ALLOWED_HOSTS", "")),
 		ArtifactPullMaxBytes:                 getenvInt64("ARTIFACT_PULL_MAX_BYTES", 1024*1024*1024),
 		ArtifactPullTimeout:                  parseDurationDefault(getenvDefault("ARTIFACT_PULL_TIMEOUT", "15m"), 15*time.Minute),
+		ArtifactPullAllowInsecureHTTP:        parseBoolEnvDefault("ARTIFACT_PULL_ALLOW_INSECURE_HTTP", false),
+		ArtifactSignatureRequireDefault:      parseBoolEnvDefault("ARTIFACT_SIGNATURE_REQUIRE_DEFAULT", false),
+		ArtifactSignatureEnforceIngest:       parseBoolEnvDefault("ARTIFACT_SIGNATURE_ENFORCE_INGEST", false),
+		ArtifactSignatureKeyID:               strings.TrimSpace(os.Getenv("ARTIFACT_SIGNATURE_KEY_ID")),
 		ArtifactPullCredentialsJSON:          os.Getenv("ARTIFACT_PULL_CREDENTIALS_JSON"),
 		ArtifactPullCredentialsFile:          os.Getenv("ARTIFACT_PULL_CREDENTIALS_FILE"),
 		ArtifactPullCredentialsAWSSecretID:   os.Getenv("ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID"),
 		ArtifactPullCredentialsAWSRegion:     os.Getenv("ARTIFACT_PULL_CREDENTIALS_AWS_REGION"),
+		ReleaseAutoUpdateInterval:            parseDurationDefault(getenvDefault("RELEASE_AUTO_UPDATE_INTERVAL", "60s"), 60*time.Second),
 		MaintenanceEnabled:                   parseBoolEnv("MAINTENANCE_MODE"),
 		MaintenanceMessage:                   getenvDefault("MAINTENANCE_MESSAGE", ""),
 		MaintenanceToken:                     os.Getenv("MAINTENANCE_TOKEN"),
@@ -172,12 +197,16 @@ func FromEnv() Config {
 		UpgradeUpdatesDir:                    os.Getenv("UPGRADE_UPDATES_DIR"),
 		UpgradeRunnerMode:                    getenvDefault("UPGRADE_RUNNER_MODE", "disabled"),
 		UpgradeRunnerImage:                   os.Getenv("UPGRADE_RUNNER_IMAGE"),
+		UpgradeRunnerURL:                     os.Getenv("UPGRADE_RUNNER_URL"),
+		UpgradeRunnerToken:                   os.Getenv("UPGRADE_RUNNER_TOKEN"),
 		BackupCmd:                            os.Getenv("BACKUP_CMD"),
 		BackupWorkDir:                        os.Getenv("BACKUP_WORK_DIR"),
 		BackupLogDir:                         os.Getenv("BACKUP_LOG_DIR"),
 		BackupDir:                            getenvDefault("BACKUP_DIR", "/stack/backups"),
 		BackupRunnerMode:                     getenvDefault("BACKUP_RUNNER_MODE", "disabled"),
 		BackupRunnerImage:                    os.Getenv("BACKUP_RUNNER_IMAGE"),
+		BackupRunnerURL:                      os.Getenv("BACKUP_RUNNER_URL"),
+		BackupRunnerToken:                    os.Getenv("BACKUP_RUNNER_TOKEN"),
 		BackupPostgresContainer:              os.Getenv("BACKUP_POSTGRES_CONTAINER"),
 		BackupMinioContainer:                 os.Getenv("BACKUP_MINIO_CONTAINER"),
 		BackupPostgresUser:                   getenvDefault("BACKUP_POSTGRES_USER", "hardwareops"),
@@ -196,6 +225,17 @@ func FromEnv() Config {
 		AuthMode:                             getenvDefault("AUTH_MODE", "disabled"),
 		AuthJWTSecret:                        os.Getenv("AUTH_JWT_SECRET"),
 		AuthTokenTTL:                         parseDurationDefault(getenvDefault("AUTH_TOKEN_TTL", "12h"), 12*time.Hour),
+		AuthLoginRPM:                         getenvInt("AUTH_LOGIN_RPM", 30),
+		PendingEnrollRequestRPMPerSource:     getenvInt("PENDING_ENROLL_REQUEST_RPM_PER_SOURCE", 30),
+		PendingEnrollRequestRPMPerProfile:    getenvInt("PENDING_ENROLL_REQUEST_RPM_PER_PROFILE", 120),
+		PendingEnrollMaxActive:               getenvInt("PENDING_ENROLL_MAX_ACTIVE", 1000),
+		PendingEnrollMaxActivePerProfile:     getenvInt("PENDING_ENROLL_MAX_ACTIVE_PER_PROFILE", 100),
+		PendingEnrollMaxActivePerSource:      getenvInt("PENDING_ENROLL_MAX_ACTIVE_PER_SOURCE", 10),
+		AuthLoginBackoffEnabled:              parseBoolEnvDefault("AUTH_LOGIN_BACKOFF_ENABLED", true),
+		AuthLoginBackoffThreshold:            getenvInt("AUTH_LOGIN_BACKOFF_THRESHOLD", 3),
+		AuthLoginBackoffBase:                 parseDurationDefault(getenvDefault("AUTH_LOGIN_BACKOFF_BASE", "2s"), 2*time.Second),
+		AuthLoginBackoffMax:                  parseDurationDefault(getenvDefault("AUTH_LOGIN_BACKOFF_MAX", "5m"), 5*time.Minute),
+		AuthLoginBackoffWindow:               parseDurationDefault(getenvDefault("AUTH_LOGIN_BACKOFF_WINDOW", "15m"), 15*time.Minute),
 		AuthIssuer:                           getenvDefault("AUTH_ISSUER", "hardwareops"),
 		AuthBootstrapEmail:                   os.Getenv("AUTH_BOOTSTRAP_EMAIL"),
 		AuthBootstrapPassword:                os.Getenv("AUTH_BOOTSTRAP_PASSWORD"),

@@ -123,7 +123,7 @@ All paths below are full paths.
 | GET | `/api/v1/enrollment-profiles` | operator | list first-contact profiles |
 | POST | `/api/v1/enrollment-profiles` | operator | create profile |
 | PATCH | `/api/v1/enrollment-profiles/{profileId}` | operator | edit profile without rotating token |
-| POST | `/api/v1/enrollment-profiles/{profileId}/rotate` | operator | rotate profile bootstrap token |
+| POST | `/api/v1/enrollment-profiles/{profileId}/rotate` | operator | rotate profile bootstrap token (optional body: `reason`, `gracePeriodSec` up to 86400) |
 | POST | `/api/v1/enrollment-profiles/{profileId}/disable` | operator | disable profile |
 | POST | `/api/v1/enrollment-profiles/{profileId}/enable` | operator | enable profile |
 | POST | `/api/v1/pending-enrollments/request` | profile token | submit pending request (rate limited + guarded) |
@@ -232,6 +232,11 @@ Response:
 3. Operator approves/denies (`POST /api/v1/pending-enrollments/{id}/approve|deny`).
 4. Agent polls claim (`POST /api/v1/pending-enrollments/claim`).
 5. On `status=issued`, agent persists `deviceId`, `certPem`, `caCertPem`, then moves to check-in loop.
+
+Token reissue policy:
+- Profile token rotation supports an optional grace window (`gracePeriodSec`) where the immediately previous token remains valid.
+- Use short grace windows for staged rollout (for example 300 seconds), then rely on the new token only.
+- Rotation audit records include the operator reason and grace window.
 
 Claim statuses:
 - `pending`: keep polling after `pollAfterSec`

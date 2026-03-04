@@ -3,6 +3,7 @@ package artifactingest
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -11,10 +12,11 @@ import (
 
 type HTTPPullAdapter struct {
 	allowedHosts []string
+	allowHTTP    bool
 	client       *http.Client
 }
 
-func NewHTTPPullAdapter(allowedHosts []string, timeout time.Duration) *HTTPPullAdapter {
+func NewHTTPPullAdapter(allowedHosts []string, timeout time.Duration, allowInsecureHTTP bool) *HTTPPullAdapter {
 	normalizedHosts := make([]string, 0, len(allowedHosts))
 	for _, host := range allowedHosts {
 		host = strings.TrimSpace(strings.ToLower(host))
@@ -28,6 +30,7 @@ func NewHTTPPullAdapter(allowedHosts []string, timeout time.Duration) *HTTPPullA
 	}
 	return &HTTPPullAdapter{
 		allowedHosts: normalizedHosts,
+		allowHTTP:    allowInsecureHTTP,
 		client: &http.Client{
 			Timeout: timeout,
 		},
@@ -50,7 +53,14 @@ func (a *HTTPPullAdapter) Pull(ctx context.Context, req PullRequest) (PullRespon
 	if parsedURL.Scheme != "https" && parsedURL.Scheme != "http" {
 		return PullResponse{}, fmt.Errorf("%w: scheme must be http/https", ErrInvalidSource)
 	}
-	if len(a.allowedHosts) > 0 && !hostAllowed(parsedURL.Hostname(), a.allowedHosts) {
+	if parsedURL.Scheme == "http" && !a.allowHTTP {
+		return PullResponse{}, fmt.Errorf("%w: insecure http scheme disabled", ErrInvalidSource)
+	}
+	allowedHost := hostAllowed(parsedURL.Hostname(), a.allowedHosts)
+	if isPrivateOrLoopbackHost(parsedURL.Hostname()) && !allowedHost {
+		return PullResponse{}, fmt.Errorf("%w: host %q", ErrSourceNotAllowed, parsedURL.Hostname())
+	}
+	if len(a.allowedHosts) > 0 && !allowedHost {
 		return PullResponse{}, fmt.Errorf("%w: host %q", ErrSourceNotAllowed, parsedURL.Hostname())
 	}
 
@@ -90,6 +100,24 @@ func hostAllowed(host string, allowedHosts []string) bool {
 		if strings.HasPrefix(allow, ".") && strings.HasSuffix(normalized, allow) {
 			return true
 		}
+	}
+	return false
+}
+
+func isPrivateOrLoopbackHost(host string) bool {
+	normalized := strings.TrimSpace(strings.ToLower(host))
+	if normalized == "" {
+		return false
+	}
+	if normalized == "localhost" || strings.HasSuffix(normalized, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(normalized)
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
+		return true
 	}
 	return false
 }

@@ -14,32 +14,34 @@ import (
 )
 
 type Metrics struct {
-	registry             *prometheus.Registry
-	httpRequests         *prometheus.CounterVec
-	httpDuration         *prometheus.HistogramVec
-	deviceStatus         *prometheus.GaugeVec
-	deviceTotal          prometheus.Gauge
-	dbOpenConns          prometheus.Gauge
-	dbInUse              prometheus.Gauge
-	dbWaitCount          prometheus.Gauge
-	s3ObjectsTotal       prometheus.Gauge
-	s3BytesTotal         prometheus.Gauge
-	checkinTotal         *prometheus.CounterVec
-	enrollTokenTotal     *prometheus.CounterVec
-	enrollTotal          *prometheus.CounterVec
-	applyTotal           *prometheus.CounterVec
-	preApplyTotal        *prometheus.CounterVec
-	artifactUploadTotal  *prometheus.CounterVec
-	artifactPresignTotal *prometheus.CounterVec
-	artifactPruneTotal   *prometheus.CounterVec
-	artifactPruneDeleted prometheus.Counter
-	artifactPruneSkipped *prometheus.CounterVec
-	artifactPruneLastRun prometheus.Gauge
-	artifactPruneFails   prometheus.Gauge
-	rateLimitTotal       *prometheus.CounterVec
-	upgradeTotal         *prometheus.CounterVec
-	backupTotal          *prometheus.CounterVec
-	pendingActionsTotal  *prometheus.CounterVec
+	registry              *prometheus.Registry
+	httpRequests          *prometheus.CounterVec
+	httpDuration          *prometheus.HistogramVec
+	deviceStatus          *prometheus.GaugeVec
+	deviceTotal           prometheus.Gauge
+	dbOpenConns           prometheus.Gauge
+	dbInUse               prometheus.Gauge
+	dbWaitCount           prometheus.Gauge
+	s3ObjectsTotal        prometheus.Gauge
+	s3BytesTotal          prometheus.Gauge
+	checkinTotal          *prometheus.CounterVec
+	enrollTokenTotal      *prometheus.CounterVec
+	enrollTotal           *prometheus.CounterVec
+	pendingEnrollActive   prometheus.Gauge
+	pendingEnrollThrottle *prometheus.CounterVec
+	applyTotal            *prometheus.CounterVec
+	preApplyTotal         *prometheus.CounterVec
+	artifactUploadTotal   *prometheus.CounterVec
+	artifactPresignTotal  *prometheus.CounterVec
+	artifactPruneTotal    *prometheus.CounterVec
+	artifactPruneDeleted  prometheus.Counter
+	artifactPruneSkipped  *prometheus.CounterVec
+	artifactPruneLastRun  prometheus.Gauge
+	artifactPruneFails    prometheus.Gauge
+	rateLimitTotal        *prometheus.CounterVec
+	upgradeTotal          *prometheus.CounterVec
+	backupTotal           *prometheus.CounterVec
+	pendingActionsTotal   *prometheus.CounterVec
 }
 
 func New() *Metrics {
@@ -96,6 +98,14 @@ func New() *Metrics {
 		Name: "hwops_enroll_total",
 		Help: "Device enrollments by status and reason.",
 	}, []string{"status", "reason"})
+	pendingEnrollActive := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "hwops_pending_enroll_active_total",
+		Help: "Active pending enrollment requests awaiting action or claim.",
+	})
+	pendingEnrollThrottle := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hwops_pending_enroll_throttle_total",
+		Help: "Pending enrollment throttles by reason.",
+	}, []string{"reason"})
 	applyTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "hwops_apply_total",
 		Help: "Apply results by status and component.",
@@ -149,35 +159,38 @@ func New() *Metrics {
 		Help: "Pending actions issued to devices by type.",
 	}, []string{"type"})
 
-	reg.MustRegister(httpRequests, httpDuration, deviceTotal, deviceStatus, dbOpenConns, dbInUse, dbWaitCount, s3ObjectsTotal, s3BytesTotal, checkinTotal, enrollTokenTotal, enrollTotal, applyTotal, preApplyTotal, artifactUploadTotal, artifactPresignTotal, artifactPruneTotal, artifactPruneDeleted, artifactPruneSkipped, artifactPruneLastRun, artifactPruneFails, rateLimitTotal, upgradeTotal, backupTotal, pendingActionsTotal)
+	reg.MustRegister(httpRequests, httpDuration, deviceTotal, deviceStatus, dbOpenConns, dbInUse, dbWaitCount, s3ObjectsTotal, s3BytesTotal, checkinTotal, enrollTokenTotal, enrollTotal, pendingEnrollActive, pendingEnrollThrottle, applyTotal, preApplyTotal, artifactUploadTotal, artifactPresignTotal, artifactPruneTotal, artifactPruneDeleted, artifactPruneSkipped, artifactPruneLastRun, artifactPruneFails, rateLimitTotal, upgradeTotal, backupTotal, pendingActionsTotal)
+	pendingEnrollActive.Set(0)
 
 	return &Metrics{
-		registry:             reg,
-		httpRequests:         httpRequests,
-		httpDuration:         httpDuration,
-		deviceTotal:          deviceTotal,
-		deviceStatus:         deviceStatus,
-		dbOpenConns:          dbOpenConns,
-		dbInUse:              dbInUse,
-		dbWaitCount:          dbWaitCount,
-		s3ObjectsTotal:       s3ObjectsTotal,
-		s3BytesTotal:         s3BytesTotal,
-		checkinTotal:         checkinTotal,
-		enrollTokenTotal:     enrollTokenTotal,
-		enrollTotal:          enrollTotal,
-		applyTotal:           applyTotal,
-		preApplyTotal:        preApplyTotal,
-		artifactUploadTotal:  artifactUploadTotal,
-		artifactPresignTotal: artifactPresignTotal,
-		artifactPruneTotal:   artifactPruneTotal,
-		artifactPruneDeleted: artifactPruneDeleted,
-		artifactPruneSkipped: artifactPruneSkipped,
-		artifactPruneLastRun: artifactPruneLastRun,
-		artifactPruneFails:   artifactPruneFails,
-		rateLimitTotal:       rateLimitTotal,
-		upgradeTotal:         upgradeTotal,
-		backupTotal:          backupTotal,
-		pendingActionsTotal:  pendingActionsTotal,
+		registry:              reg,
+		httpRequests:          httpRequests,
+		httpDuration:          httpDuration,
+		deviceTotal:           deviceTotal,
+		deviceStatus:          deviceStatus,
+		dbOpenConns:           dbOpenConns,
+		dbInUse:               dbInUse,
+		dbWaitCount:           dbWaitCount,
+		s3ObjectsTotal:        s3ObjectsTotal,
+		s3BytesTotal:          s3BytesTotal,
+		checkinTotal:          checkinTotal,
+		enrollTokenTotal:      enrollTokenTotal,
+		enrollTotal:           enrollTotal,
+		pendingEnrollActive:   pendingEnrollActive,
+		pendingEnrollThrottle: pendingEnrollThrottle,
+		applyTotal:            applyTotal,
+		preApplyTotal:         preApplyTotal,
+		artifactUploadTotal:   artifactUploadTotal,
+		artifactPresignTotal:  artifactPresignTotal,
+		artifactPruneTotal:    artifactPruneTotal,
+		artifactPruneDeleted:  artifactPruneDeleted,
+		artifactPruneSkipped:  artifactPruneSkipped,
+		artifactPruneLastRun:  artifactPruneLastRun,
+		artifactPruneFails:    artifactPruneFails,
+		rateLimitTotal:        rateLimitTotal,
+		upgradeTotal:          upgradeTotal,
+		backupTotal:           backupTotal,
+		pendingActionsTotal:   pendingActionsTotal,
 	}
 }
 
@@ -271,6 +284,26 @@ func (m *Metrics) IncEnroll(status, reason string) {
 		reason = "unknown"
 	}
 	m.enrollTotal.WithLabelValues(status, reason).Inc()
+}
+
+func (m *Metrics) SetPendingEnrollActive(total int) {
+	if m == nil {
+		return
+	}
+	if total < 0 {
+		total = 0
+	}
+	m.pendingEnrollActive.Set(float64(total))
+}
+
+func (m *Metrics) IncPendingEnrollThrottle(reason string) {
+	if m == nil {
+		return
+	}
+	if reason == "" {
+		reason = "unknown"
+	}
+	m.pendingEnrollThrottle.WithLabelValues(reason).Inc()
 }
 
 func (m *Metrics) IncApply(status, component string) {
