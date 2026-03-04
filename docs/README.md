@@ -5,6 +5,7 @@ Use these canonical docs first:
 - `deploy.md` - end-to-end deployment guide (on-prem + AWS + hardening baseline).
 - `operations.md` - day-2 operations (backup/restore, upgrades, cert rotation, metrics checks).
 - `local-dev-wsl.md` - local WSL dev workflow.
+- `icd.md` - living Integration Control Document (API + headless integration contract).
 - `development/roadmap.md` - implementation roadmap and phase status.
 
 Rule of thumb:
@@ -31,6 +32,12 @@ Rule of thumb:
 - `development/upgrade-strategy.md` - staged apply and rollback strategy.
 - `development/metrics-health.md` - metrics catalog and health model.
 
+## Validation labs
+
+- `testing/README.md` - testing index and script locations.
+- `testing/prod-docker-lab.md` - production-like on-prem validation stack using Docker.
+- `testing/prod-docker-test-plan.md` - feature + edge + security validation checklist for that lab.
+
 ## Product + platform references
 
 - `agent-systemd.md` - systemd agent install/enrollment.
@@ -51,6 +58,11 @@ Rule of thumb:
 - `../scripts/multi-app-artifacts.sh` - build/upload multi-component demo artifacts.
 - `../scripts/aws-demo-image.sh` - build/push demo-agent image to ECR.
 - `../scripts/aws-demo-seed.sh` - seed signed demo artifacts in AWS stack.
+- `../scripts/testing/prod-lab-init.sh` - initialize hardened production-like Docker lab.
+- `../scripts/testing/prod-lab-up.sh` - start production-like Docker lab.
+- `../scripts/testing/prod-lab-seed.sh` - seed demo devices and signed artifacts in the prod-like lab.
+- `../scripts/testing/prod-lab-smoke.sh` - smoke test lab health/auth/metrics.
+- `../scripts/testing/prod-lab-down.sh` - stop/wipe production-like Docker lab.
 - `../scripts/test-artifact-ingest.sh` - push/pull ingest smoke test.
 - `../scripts/reload-pull-credentials.sh` - reload pull credential resolver from configured sources without restarting control-plane.
 - `../scripts/setup-artifactory-demo.sh` - local Artifactory setup for pull adapter tests.
