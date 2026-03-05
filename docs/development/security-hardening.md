@@ -69,6 +69,7 @@ Scope reviewed: control-plane security model, auth/RBAC posture, certificate mod
 
 6) Complete role-aware UI enforcement
 - Enforce role-based hiding/disable across all mutating actions.
+- Backend route coverage now includes explicit viewer/operator/admin matrix tests and `artifact.publish` service-token checks; remaining work is UI parity.
 - Acceptance: viewer role cannot trigger writes from UI; operator/admin split is consistent.
 
 ## Production Exit Criteria (Security)
@@ -78,4 +79,3 @@ Scope reviewed: control-plane security model, auth/RBAC posture, certificate mod
 - ECS exec disabled by default in production.
 - Security alarms active with tested paging path.
 - RBAC enforced consistently in API and UI.
-

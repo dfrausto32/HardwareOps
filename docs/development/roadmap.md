@@ -56,6 +56,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 - ✅ AWS per-customer Terraform scaffold + CLI wrapper + deployment runbook + demo fleet baseline.
 - ✅ Artifact ingest validation harness (push + pull local smoke test + operator test runbook).
 - ✅ Artifactory pull adapter (provider plugin) + signed local demo workflow (`setup-artifactory-demo.sh` / `test-artifactory-adapter.sh`).
+- ✅ Backend RBAC matrix coverage for representative viewer/operator/admin endpoints plus `artifact.publish` service-token gating on publish flows.
 - ✅ License anti-cheat hardening close-out (transactional cap checks + identity enforcement + hardened profile + auditable decommission).
 - ✅ Device identity hardening v1 (`DEVICE_IDENTITY_MODE` audit/enforce + hardware identity conflict detection on enroll/check-in).
 - ✅ Artifact auto-version tracking (global default + per-component override, semver `W.X.Y[.Z]`, signed/active eligibility, periodic + ingest-triggered desired-state updates).
@@ -392,7 +393,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 - **Dependencies:** Auth middleware + policy checks.
 - **Risks:** Role creep.
 - **Acceptance:** Endpoints and UI gated correctly.
-- **Notes:** API role enforcement added; UI gating partially implemented.
+- **Notes:** API role enforcement is in place and backend matrix tests now cover representative viewer/operator/admin routes plus `artifact.publish` service-token publish paths. UI gating remains partially implemented.
 
 #### Role-aware UI
 - **Status:** 🟡 In progress
