@@ -1514,6 +1514,16 @@ func (s *Store) CreateServiceToken(token store.ServiceToken) error {
 	return nil
 }
 
+func (s *Store) GetServiceToken(tokenID string) (store.ServiceToken, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	token, ok := s.serviceTokens[tokenID]
+	if !ok {
+		return store.ServiceToken{}, false, nil
+	}
+	return token, true, nil
+}
+
 func (s *Store) GetServiceTokenByTokenHash(tokenHash string) (store.ServiceToken, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

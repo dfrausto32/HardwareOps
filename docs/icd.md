@@ -82,7 +82,8 @@ All paths below are full paths.
 | POST | `/api/v1/auth/vouchers` | admin | create registration voucher |
 | POST | `/api/v1/auth/service-tokens` | admin | create service token |
 | GET | `/api/v1/auth/service-tokens` | admin | list service tokens |
-| POST | `/api/v1/auth/service-tokens/{tokenId}/revoke` | admin | revoke service token |
+| POST | `/api/v1/auth/service-tokens/{tokenId}/revoke` | operator | break-glass revoke; JSON body requires `reason` |
+| POST | `/api/v1/auth/service-tokens/{tokenId}/rotate` | operator | break-glass rotate; JSON body requires `reason`, optional `ttlHours` |
 | POST | `/api/v1/users` | admin | create local user |
 | GET | `/api/v1/users` | admin | list users |
 | PATCH | `/api/v1/users/{userId}` | admin | update user |
@@ -164,9 +165,9 @@ All paths below are full paths.
 | PUT | `/api/v1/release-auto-update` | admin | update auto-update policy |
 | POST | `/api/v1/release-auto-update/run` | admin | force auto-update evaluation |
 | GET | `/api/v1/cert-rotation` | viewer | CA rotation status |
-| POST | `/api/v1/cert-rotation/reload` | admin | reload CA bundle/files |
-| POST | `/api/v1/cert-rotation/rotate` | admin | create/switch active CA |
-| POST | `/api/v1/cert-rotation/cleanup` | admin | cleanup old/inactive CAs |
+| POST | `/api/v1/cert-rotation/reload` | operator | break-glass reload; JSON body requires `reason` |
+| POST | `/api/v1/cert-rotation/rotate` | operator | break-glass rotate; JSON body requires `reason` |
+| POST | `/api/v1/cert-rotation/cleanup` | operator | break-glass cleanup; JSON body requires `reason` |
 | GET | `/api/v1/audit` | admin | list audit events |
 | GET | `/api/v1/audit.csv` | admin | CSV export |
 | GET | `/api/v1/audit/retention` | admin | audit retention config |

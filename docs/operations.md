@@ -67,8 +67,13 @@ For strategy and rollback behavior, see:
 ### 3.1 Rotation methods
 
 - **UI:** Security page -> Certificate Rotation
-- **API:** `POST /api/v1/cert-rotation/rotate`
+- **API:** `POST /api/v1/cert-rotation/rotate` with JSON body `{"reason":"<why this break-glass rotation is required>"}`
 - **Script:** `scripts/rotate--ca.sh`
+
+All break-glass certificate endpoints require operator or admin auth plus a JSON `reason`:
+- `POST /api/v1/cert-rotation/reload`
+- `POST /api/v1/cert-rotation/rotate`
+- `POST /api/v1/cert-rotation/cleanup`
 
 ### 3.2 Verify devices moved to active CA
 

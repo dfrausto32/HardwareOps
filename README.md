@@ -224,6 +224,52 @@ curl -s http://localhost:8080/api/v1/audit/retention
 curl -s -X PUT http://localhost:8080/api/v1/audit/retention -H "Content-Type: application/json" -d '{"days":30}'
 ```
 
+### Break-glass workflows
+Emergency revoke/rotate actions now require operator-or-admin auth plus a JSON `reason`, and each action is audited with `breakGlass=true`.
+
+Service token examples:
+```bash
+curl --cacert ./dev-ca.crt \
+  -H "Authorization: Bearer <operator-jwt>" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d '{"reason":"credential suspected compromised"}' \
+  https://localhost:8080/api/v1/auth/service-tokens/<token-id>/revoke
+
+curl --cacert ./dev-ca.crt \
+  -H "Authorization: Bearer <operator-jwt>" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d '{"reason":"token leaked","ttlHours":1}' \
+  https://localhost:8080/api/v1/auth/service-tokens/<token-id>/rotate
+```
+
+Certificate rotation examples:
+```bash
+curl --cacert ./dev-ca.crt \
+  -H "Authorization: Bearer <operator-jwt>" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d '{"reason":"reload CA bundle after emergency file update"}' \
+  https://localhost:8080/api/v1/cert-rotation/reload
+
+curl --cacert ./dev-ca.crt \
+  -H "Authorization: Bearer <operator-jwt>" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d '{"reason":"break-glass CA rotation after suspected compromise"}' \
+  https://localhost:8080/api/v1/cert-rotation/rotate
+
+curl --cacert ./dev-ca.crt \
+  -H "Authorization: Bearer <operator-jwt>" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d '{"reason":"cleanup previous CA after rotation coverage verified"}' \
+  https://localhost:8080/api/v1/cert-rotation/cleanup
+```
+
+See `docs/operations.md`, `docs/certs.md`, and `docs/icd.md` for the canonical contract and runbook detail.
+
 ### Demo: Agent Container With Live Service
 This demo runs the control-plane normally, starts an agent container that serves `index.html` from the active artifact, then updates the artifact so the page content changes.
 For a full end-to-end walkthrough (including pre-apply), see `docs/preapply-demo.md`.
@@ -492,13 +538,15 @@ CONTROL_PLANE_URL=http://host.docker.internal:8080 ./scripts/run-agents.sh -d
 ```
 
 ### Endpoints (v1)
+- `POST /api/v1/auth/service-tokens/{tokenId}/revoke` break-glass service token revoke (`reason` required; operator+)
+- `POST /api/v1/auth/service-tokens/{tokenId}/rotate` break-glass service token rotate (`reason` required; optional `ttlHours`; operator+)
 - `POST /api/v1/enrollments` create enrollment token
 - `POST /api/v1/devices/enroll` exchange token + CSR for device cert
 - `POST /api/v1/devices/checkin` device heartbeat + state
 - `POST /api/v1/devices/{deviceId}/apply-result` agent apply result (success/error)
 - `GET /api/v1/devices` list devices
 - `GET /api/v1/devices/{deviceId}` device detail
-- `DELETE /api/v1/devices/{deviceId}` delete device
+- `DELETE /api/v1/devices/{deviceId}` delete device (disabled; use decommission workflow)
 - `PATCH /api/v1/devices/{deviceId}` update device labels/metadata
 - `GET /api/v1/groups` list groups
 - `PUT /api/v1/groups/{groupId}` create/update group selector
@@ -515,6 +563,9 @@ CONTROL_PLANE_URL=http://host.docker.internal:8080 ./scripts/run-agents.sh -d
 - `GET /api/v1/audit.csv` export audit events (CSV)
 - `GET /api/v1/audit/retention` get retention days
 - `PUT /api/v1/audit/retention` update retention days
+- `POST /api/v1/cert-rotation/reload` break-glass cert reload (`reason` required; operator+)
+- `POST /api/v1/cert-rotation/rotate` break-glass cert rotate (`reason` required; operator+)
+- `POST /api/v1/cert-rotation/cleanup` break-glass cert cleanup (`reason` required; operator+)
 - `GET /api/v1/logs/{deviceId}` download device logs (CSV)
 - `GET /api/v1/events` WebSocket stream of device check-ins + apply results
 - `GET /healthz`
@@ -533,6 +584,7 @@ CONTROL_PLANE_URL=http://host.docker.internal:8080 ./scripts/run-agents.sh -d
 - Stale device cleanup: `DEVICE_STALE_TTL` (default `1h`) and `DEVICE_CLEANUP_INTERVAL` (default `5m`).
 - Cleanup uses `last_seen`; devices that never checked in are not auto-removed.
 - Audit retention cleanup: `AUDIT_RETENTION_DAYS` (default `90`) and `AUDIT_RETENTION_CLEANUP_INTERVAL` (default `1h`).
+- Break-glass revoke/rotate/reload/cleanup endpoints require a JSON `reason` and emit explicit audit metadata for success and failure paths.
 
 ### Event Stream (WebSocket)
 The control-plane broadcasts device check-ins and apply results on a WebSocket stream.

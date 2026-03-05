@@ -46,7 +46,7 @@ Cons: needs credentials + network access.
   - `POST /api/v1/auth/service-tokens` (admin)
 - Scope for v1:
   - `artifact.publish`
-- Service tokens are expiring and revocable (`POST /api/v1/auth/service-tokens/{tokenId}/revoke`).
+- Service tokens are expiring and support break-glass revoke/rotate workflows (`POST /api/v1/auth/service-tokens/{tokenId}/revoke|rotate`) with operator-authenticated reason capture.
 
 ### CI helper script (implemented)
 Use:

@@ -547,7 +547,7 @@ Hint: active CA cert/key mismatch detected:
 Copy a matching cert/key pair and reload cert rotation:
   cp dev-ca.crt dev-ca-active.crt
   cp dev-ca.key dev-ca-active.key
-  curl --cacert ./dev-ca.crt -H "Authorization: Bearer <token>" -X POST $HOST_URL/api/v1/cert-rotation/reload
+  curl --cacert ./dev-ca.crt -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -X POST $HOST_URL/api/v1/cert-rotation/reload -d '{"reason":"reload active CA after cert/key repair"}'
 EOF
             fi
           fi

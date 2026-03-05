@@ -66,7 +66,11 @@ if [ -n "$AUTH_TOKEN" ]; then
   curl_opts+=(-H "Authorization: Bearer $AUTH_TOKEN")
 fi
 
-if ! curl -sS "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/cert-rotation/reload" >/dev/null; then
+if ! curl -sS "${curl_opts[@]}" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d '{"reason":"rotate--ca.sh reload"}' \
+  "$BASE_URL/api/v1/cert-rotation/reload" >/dev/null; then
   echo "Reload failed. Ensure the control-plane is configured with:" >&2
   echo "  CA_BUNDLE_PATH=$CA_BUNDLE_PATH" >&2
   echo "  ACTIVE_CA_CERT_PATH=$ACTIVE_CA_CERT" >&2

@@ -73,18 +73,36 @@ func GetCertRotationStatus(logger *log.Logger, st store.Store, mgr *certs.Manage
 
 func ReloadCertRotation(logger *log.Logger, st store.Store, mgr *certs.Manager, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		var req BreakglassRequest
+		if err := decodeBreakglassRequest(r, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "certs.reload", "certs", "")
 		if mgr == nil {
+			auditBreakglassFailure(logger, st, event, "error", "cert_manager_not_configured", req.Reason, nil)
 			http.Error(w, "cert manager not configured", http.StatusServiceUnavailable)
 			return
 		}
 		if _, err := mgr.Reload(); err != nil {
 			logger.Printf("cert reload error: %v", err)
+			auditBreakglassFailure(logger, st, event, "error", "reload_failed", req.Reason, nil)
 			http.Error(w, fmt.Sprintf("reload failed: %v", err), http.StatusInternalServerError)
 			return
 		}
-		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "certs.reload", "certs", "")
-		writeAudit(logger, st, event, nil)
 		status := buildRotationStatus(logger, st, mgr)
+		event.MetadataJSON = breakglassMetadata(req.Reason, map[string]any{
+			"activeFingerprint":  status.ActiveCA.Fingerprint,
+			"bundleContainsCA":   status.ClientCA.ContainsActive,
+			"clientBundleCerts":  status.ClientCA.CertCount,
+			"cleanupEligibility": status.Cleanup.Reason,
+		})
+		event.AfterJSON = auditJSON(map[string]any{
+			"activeFingerprint": status.ActiveCA.Fingerprint,
+			"clientCaPath":      status.ClientCA.Path,
+			"clientCaCertCount": status.ClientCA.CertCount,
+		})
+		writeAudit(logger, st, event, nil)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(status)
 	}
@@ -92,24 +110,35 @@ func ReloadCertRotation(logger *log.Logger, st store.Store, mgr *certs.Manager, 
 
 func RotateCertRotation(logger *log.Logger, st store.Store, mgr *certs.Manager, trustProxy bool, gracePeriod time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		var req BreakglassRequest
+		if err := decodeBreakglassRequest(r, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "certs.rotate", "certs", "")
 		if mgr == nil {
+			auditBreakglassFailure(logger, st, event, "error", "cert_manager_not_configured", req.Reason, nil)
 			http.Error(w, "cert manager not configured", http.StatusServiceUnavailable)
 			return
 		}
 		state := mgr.State()
 		if state.ActiveCertPath == "" || state.ActiveKeyPath == "" {
+			auditBreakglassFailure(logger, st, event, "error", "active_ca_paths_not_set", req.Reason, nil)
 			http.Error(w, "ACTIVE_CA_CERT_PATH/ACTIVE_CA_KEY_PATH not set", http.StatusBadRequest)
 			return
 		}
 		if state.ClientCAPath == "" {
+			auditBreakglassFailure(logger, st, event, "error", "ca_bundle_path_not_set", req.Reason, nil)
 			http.Error(w, "CA_BUNDLE_PATH not set", http.StatusBadRequest)
 			return
 		}
 		if state.ActiveCertPEM == nil || len(state.ActiveCertPEM) == 0 {
+			auditBreakglassFailure(logger, st, event, "error", "active_ca_not_loaded", req.Reason, nil)
 			http.Error(w, "active CA cert not loaded", http.StatusBadRequest)
 			return
 		}
 		if samePath(state.ActiveCertPath, state.ClientCAPath) {
+			auditBreakglassFailure(logger, st, event, "error", "ca_bundle_path_matches_active_ca", req.Reason, nil)
 			http.Error(w, "CA_BUNDLE_PATH must be different from ACTIVE_CA_CERT_PATH", http.StatusBadRequest)
 			return
 		}
@@ -118,23 +147,37 @@ func RotateCertRotation(logger *log.Logger, st store.Store, mgr *certs.Manager, 
 		newCertPEM, newKeyPEM, err := generateRotationCA(state.ActiveCert)
 		if err != nil {
 			logger.Printf("cert rotate generate error: %v", err)
+			auditBreakglassFailure(logger, st, event, "error", "generate_ca_failed", req.Reason, map[string]any{
+				"previousFingerprint": oldFingerprint,
+			})
 			http.Error(w, fmt.Sprintf("generate CA failed: %v", err), http.StatusInternalServerError)
 			return
 		}
 		newFingerprint, _, err := caFingerprintFromPEM(newCertPEM)
 		if err != nil {
 			logger.Printf("cert rotate fingerprint error: %v", err)
+			auditBreakglassFailure(logger, st, event, "error", "fingerprint_ca_failed", req.Reason, map[string]any{
+				"previousFingerprint": oldFingerprint,
+			})
 			http.Error(w, fmt.Sprintf("fingerprint CA failed: %v", err), http.StatusInternalServerError)
 			return
 		}
 
 		if err := writeFileSecure(state.ActiveCertPath, newCertPEM, 0644); err != nil {
 			logger.Printf("cert rotate write cert error: %v", err)
+			auditBreakglassFailure(logger, st, event, "error", "write_active_ca_cert_failed", req.Reason, map[string]any{
+				"previousFingerprint": oldFingerprint,
+				"nextFingerprint":     newFingerprint,
+			})
 			http.Error(w, fmt.Sprintf("write active CA cert failed: %v", err), http.StatusInternalServerError)
 			return
 		}
 		if err := writeFileSecure(state.ActiveKeyPath, newKeyPEM, 0600); err != nil {
 			logger.Printf("cert rotate write key error: %v", err)
+			auditBreakglassFailure(logger, st, event, "error", "write_active_ca_key_failed", req.Reason, map[string]any{
+				"previousFingerprint": oldFingerprint,
+				"nextFingerprint":     newFingerprint,
+			})
 			http.Error(w, fmt.Sprintf("write active CA key failed: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -147,12 +190,20 @@ func RotateCertRotation(logger *log.Logger, st store.Store, mgr *certs.Manager, 
 		bundle.Write(newCertPEM)
 		if err := writeFileSecure(state.ClientCAPath, bundle.Bytes(), 0644); err != nil {
 			logger.Printf("cert rotate write bundle error: %v", err)
+			auditBreakglassFailure(logger, st, event, "error", "write_ca_bundle_failed", req.Reason, map[string]any{
+				"previousFingerprint": oldFingerprint,
+				"nextFingerprint":     newFingerprint,
+			})
 			http.Error(w, fmt.Sprintf("write CA bundle failed: %v", err), http.StatusInternalServerError)
 			return
 		}
 
 		if _, err := mgr.Reload(); err != nil {
 			logger.Printf("cert rotate reload error: %v", err)
+			auditBreakglassFailure(logger, st, event, "error", "reload_failed", req.Reason, map[string]any{
+				"previousFingerprint": oldFingerprint,
+				"nextFingerprint":     newFingerprint,
+			})
 			http.Error(w, fmt.Sprintf("reload failed: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -172,10 +223,18 @@ func RotateCertRotation(logger *log.Logger, st store.Store, mgr *certs.Manager, 
 			}
 		}
 
-		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "certs.rotate", "certs", "")
-		writeAudit(logger, st, event, nil)
-
 		status := buildRotationStatus(logger, st, mgr)
+		event.MetadataJSON = breakglassMetadata(req.Reason, map[string]any{
+			"previousFingerprint": oldFingerprint,
+			"nextFingerprint":     newFingerprint,
+			"gracePeriodSec":      int64(gracePeriod.Seconds()),
+		})
+		event.AfterJSON = auditJSON(map[string]any{
+			"activeFingerprint": status.ActiveCA.Fingerprint,
+			"clientCaCertCount": status.ClientCA.CertCount,
+			"cleanupReason":     status.Cleanup.Reason,
+		})
+		writeAudit(logger, st, event, nil)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(status)
 	}
@@ -183,46 +242,66 @@ func RotateCertRotation(logger *log.Logger, st store.Store, mgr *certs.Manager, 
 
 func CleanupCertRotation(logger *log.Logger, st store.Store, mgr *certs.Manager, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		var req BreakglassRequest
+		if err := decodeBreakglassRequest(r, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "certs.cleanup", "certs", "")
 		if mgr == nil {
+			auditBreakglassFailure(logger, st, event, "error", "cert_manager_not_configured", req.Reason, nil)
 			http.Error(w, "cert manager not configured", http.StatusServiceUnavailable)
 			return
 		}
 		state := mgr.State()
 		if state.ClientCAPath == "" {
+			auditBreakglassFailure(logger, st, event, "error", "ca_bundle_path_not_set", req.Reason, nil)
 			http.Error(w, "CA_BUNDLE_PATH not set", http.StatusBadRequest)
 			return
 		}
 		if state.ActiveCertPath == "" || state.ActiveCertPEM == nil {
+			auditBreakglassFailure(logger, st, event, "error", "active_ca_not_loaded", req.Reason, nil)
 			http.Error(w, "active CA cert not loaded", http.StatusBadRequest)
 			return
 		}
 		if samePath(state.ActiveCertPath, state.ClientCAPath) {
+			auditBreakglassFailure(logger, st, event, "error", "ca_bundle_path_matches_active_ca", req.Reason, nil)
 			http.Error(w, "CA_BUNDLE_PATH must be different from ACTIVE_CA_CERT_PATH", http.StatusBadRequest)
 			return
 		}
 		if st == nil {
+			auditBreakglassFailure(logger, st, event, "error", "store_not_configured", req.Reason, nil)
 			http.Error(w, "store not configured", http.StatusServiceUnavailable)
 			return
 		}
 		rotationState, ok, err := st.GetCertRotationState()
 		if err != nil {
 			logger.Printf("cert cleanup state error: %v", err)
+			auditBreakglassFailure(logger, st, event, "error", "rotation_state_error", req.Reason, nil)
 			http.Error(w, "rotation state error", http.StatusInternalServerError)
 			return
 		}
 		if !ok || rotationState.PreviousFingerprint == "" {
+			auditBreakglassFailure(logger, st, event, "denied", "rotation_state_not_found", req.Reason, nil)
 			http.Error(w, "rotation state not found", http.StatusBadRequest)
 			return
 		}
 		counts, err := countRotationDevices(st)
 		if err != nil {
 			logger.Printf("cert cleanup count error: %v", err)
+			auditBreakglassFailure(logger, st, event, "error", "device_count_error", req.Reason, nil)
 			http.Error(w, "device count error", http.StatusInternalServerError)
 			return
 		}
 
 		cleanup := evaluateCleanup(rotationState, counts, state.ActiveFingerprint)
 		if !cleanup.Eligible {
+			auditBreakglassFailure(logger, st, event, "denied", cleanup.Reason, req.Reason, map[string]any{
+				"cleanupReason":       cleanup.Reason,
+				"activeFingerprint":   cleanup.ActiveFingerprint,
+				"previousFingerprint": cleanup.PreviousFingerprint,
+				"graceRemainingSec":   cleanup.GraceRemainingSec,
+			})
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusConflict)
 			_ = json.NewEncoder(w).Encode(CertRotationStatus{
@@ -237,11 +316,17 @@ func CleanupCertRotation(logger *log.Logger, st store.Store, mgr *certs.Manager,
 
 		if err := writeFileSecure(state.ClientCAPath, state.ActiveCertPEM, 0644); err != nil {
 			logger.Printf("cert cleanup write error: %v", err)
+			auditBreakglassFailure(logger, st, event, "error", "write_ca_bundle_failed", req.Reason, map[string]any{
+				"cleanupReason": cleanup.Reason,
+			})
 			http.Error(w, fmt.Sprintf("write CA bundle failed: %v", err), http.StatusInternalServerError)
 			return
 		}
 		if _, err := mgr.Reload(); err != nil {
 			logger.Printf("cert cleanup reload error: %v", err)
+			auditBreakglassFailure(logger, st, event, "error", "reload_failed", req.Reason, map[string]any{
+				"cleanupReason": cleanup.Reason,
+			})
 			http.Error(w, fmt.Sprintf("reload failed: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -253,10 +338,19 @@ func CleanupCertRotation(logger *log.Logger, st store.Store, mgr *certs.Manager,
 			logger.Printf("cert cleanup state update error: %v", err)
 		}
 
-		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "certs.cleanup", "certs", "")
-		writeAudit(logger, st, event, nil)
-
 		status := buildRotationStatus(logger, st, mgr)
+		event.MetadataJSON = breakglassMetadata(req.Reason, map[string]any{
+			"cleanupReason":       cleanup.Reason,
+			"activeFingerprint":   cleanup.ActiveFingerprint,
+			"previousFingerprint": cleanup.PreviousFingerprint,
+		})
+		event.AfterJSON = auditJSON(map[string]any{
+			"cleanedAt":           status.Cleanup.CleanedAt,
+			"cleanedReason":       status.Cleanup.CleanedReason,
+			"activeFingerprint":   status.Cleanup.ActiveFingerprint,
+			"previousFingerprint": status.Cleanup.PreviousFingerprint,
+		})
+		writeAudit(logger, st, event, nil)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(status)
 	}

@@ -21,19 +21,18 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Phase B — Operational Maturity | 🟢 Complete | Audit/metrics/events/lifecycle/CI ingest/bulk ops shipped and operational. |
 | Phase B Extension — UX + Realtime | 🟢 Complete | Bulk actions + realtime updates + auth-session UX reset shipped. |
 | Operational Hardening (between B and C) | 🟡 In progress | Most hardening tracks are complete; trusted-proxy CIDR tightening is still open. |
-| Phase C — Enterprise Readiness | 🟡 In progress | First-contact onboarding + break-glass + RBAC are partially complete; key closeout items remain. |
+| Phase C — Enterprise Readiness | 🟡 In progress | First-contact onboarding and break-glass APIs are in place; RBAC/UI closeout items remain. |
 | Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment exists; production hardening and cloud maturity items remain. |
 
 ### Active work queue (what is still to do)
 1. **C-RBAC-CLOSEOUT** — Complete role-aware UI gating and verify endpoint/UI parity across pages.
-2. **C-BREAKGLASS-ROTATION** — Complete break-glass credential/token forced-rotation + revocation workflow.
-3. **HARDENING-PROXY-CIDR** — Tighten and validate trusted-proxy CIDR policy in hardened deployments.
-4. **D-AWS-HARDENING** — Finish least-privilege IAM/WAF/exec guardrails and production hardening pack acceptance checks.
+2. **HARDENING-PROXY-CIDR** — Tighten and validate trusted-proxy CIDR policy in hardened deployments.
+3. **D-AWS-HARDENING** — Finish least-privilege IAM/WAF/exec guardrails and production hardening pack acceptance checks.
 
 ### Ready for parallel execution
 - Lane A: `C-RBAC-CLOSEOUT` + role-aware UI cleanup.
 - Lane B: `D-AWS-HARDENING` + Terraform/runbook hardening acceptance.
-- Lane C: `C-BREAKGLASS-ROTATION` + emergency credential/token workflows.
+- Lane C: `HARDENING-PROXY-CIDR` + trusted-proxy deployment validation.
 
 ---
 
@@ -476,12 +475,12 @@ Use this section as the single source of truth for "what is done" vs "what is le
 - **Notes:** AWS Secrets Manager-backed pull credential resolver is in place for CI pull ingest (`ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID`) from Phase B. Phase C expands this with a HashiCorp Vault resolver backend (plus auth/rotation runbook) so customers can use Vault as the source of pull credentials and related control-plane secrets.
 
 #### Break-glass workflows
-- **Status:** 🟡 In progress
+- **Status:** 🟢 Complete
 - **Scope:** Bootstrap admin + forced rotation + audit trail.
 - **Dependencies:** Audit logging, auth.
 - **Risks:** Misuse.
 - **Acceptance:** Emergency access is possible and auditable.
-- **Notes:** Bootstrap admin + voucher onboarding implemented; rotation + revocation workflows remain.
+- **Notes:** Bootstrap admin + voucher onboarding are in place. Break-glass service-token revoke/rotate and cert reload/rotate/cleanup APIs now require operator-authenticated reason capture and emit success/denied/error audit records.
 
 #### Agent first-contact approval onboarding (no pre-shipped client cert)
 - **Status:** 🟡 In progress

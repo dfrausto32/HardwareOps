@@ -397,6 +397,7 @@ type Store interface {
 	GetAuthVoucherByTokenHash(tokenHash string) (AuthVoucher, bool, error)
 	MarkAuthVoucherUsed(voucherID, usedBy string, at time.Time) (bool, error)
 	CreateServiceToken(token ServiceToken) error
+	GetServiceToken(tokenID string) (ServiceToken, bool, error)
 	GetServiceTokenByTokenHash(tokenHash string) (ServiceToken, bool, error)
 	ListServiceTokens(limit, offset int) ([]ServiceToken, error)
 	SetServiceTokenLastUsed(tokenID string, at time.Time) error
