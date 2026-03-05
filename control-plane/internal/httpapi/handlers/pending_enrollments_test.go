@@ -6,9 +6,13 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/hardwareops/control-plane/internal/metrics"
 	"github.com/hardwareops/control-plane/internal/store"
 	"github.com/hardwareops/control-plane/internal/store/memory"
 )
@@ -705,9 +709,10 @@ func TestRequestPendingEnrollment_ChallengeRequired(t *testing.T) {
 func TestRequestPendingEnrollment_RateLimitedPerSource(t *testing.T) {
 	logger := log.New(&bytes.Buffer{}, "", 0)
 	mem := memory.New()
+	metricsCollector := metrics.New()
 	guard := NewPendingEnrollmentGuard(PendingEnrollmentGuardConfig{
 		RequestRPMPerSource: 1,
-	}, nil)
+	}, metricsCollector)
 
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/enrollment-profiles", bytes.NewReader([]byte(`{"name":"line-a","expiresInSec":3600}`)))
 	createW := httptest.NewRecorder()
@@ -724,7 +729,7 @@ func TestRequestPendingEnrollment_RateLimitedPerSource(t *testing.T) {
 	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/pending-enrollments/request", bytes.NewReader(requestBody))
 	req1.RemoteAddr = "198.51.100.10:1234"
 	w1 := httptest.NewRecorder()
-	RequestPendingEnrollment(logger, mem, DeviceIdentityPolicy{}, false, nil, nil, guard).ServeHTTP(w1, req1)
+	RequestPendingEnrollment(logger, mem, DeviceIdentityPolicy{}, false, metricsCollector, nil, guard).ServeHTTP(w1, req1)
 	if w1.Code != http.StatusAccepted {
 		t.Fatalf("first request expected 202, got %d: %s", w1.Code, w1.Body.String())
 	}
@@ -732,18 +737,23 @@ func TestRequestPendingEnrollment_RateLimitedPerSource(t *testing.T) {
 	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/pending-enrollments/request", bytes.NewReader(requestBody))
 	req2.RemoteAddr = "198.51.100.10:9999"
 	w2 := httptest.NewRecorder()
-	RequestPendingEnrollment(logger, mem, DeviceIdentityPolicy{}, false, nil, nil, guard).ServeHTTP(w2, req2)
+	RequestPendingEnrollment(logger, mem, DeviceIdentityPolicy{}, false, metricsCollector, nil, guard).ServeHTTP(w2, req2)
 	if w2.Code != http.StatusTooManyRequests {
 		t.Fatalf("second request expected 429, got %d: %s", w2.Code, w2.Body.String())
+	}
+	body := scrapeMetrics(t, metricsCollector)
+	if got := metricValue(t, body, `hwops_pending_enroll_throttle_total{reason="pending_enroll_source"}`); got != 1 {
+		t.Fatalf("pending_enroll_source throttle expected 1, got %v", got)
 	}
 }
 
 func TestRequestPendingEnrollment_QueueFullPerSource(t *testing.T) {
 	logger := log.New(&bytes.Buffer{}, "", 0)
 	mem := memory.New()
+	metricsCollector := metrics.New()
 	guard := NewPendingEnrollmentGuard(PendingEnrollmentGuardConfig{
 		MaxActivePerSource: 1,
-	}, nil)
+	}, metricsCollector)
 
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/enrollment-profiles", bytes.NewReader([]byte(`{"name":"line-a","expiresInSec":3600}`)))
 	createW := httptest.NewRecorder()
@@ -760,7 +770,7 @@ func TestRequestPendingEnrollment_QueueFullPerSource(t *testing.T) {
 	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/pending-enrollments/request", bytes.NewReader(requestBody))
 	req1.RemoteAddr = "198.51.100.11:1234"
 	w1 := httptest.NewRecorder()
-	RequestPendingEnrollment(logger, mem, DeviceIdentityPolicy{}, false, nil, nil, guard).ServeHTTP(w1, req1)
+	RequestPendingEnrollment(logger, mem, DeviceIdentityPolicy{}, false, metricsCollector, nil, guard).ServeHTTP(w1, req1)
 	if w1.Code != http.StatusAccepted {
 		t.Fatalf("first request expected 202, got %d: %s", w1.Code, w1.Body.String())
 	}
@@ -768,15 +778,20 @@ func TestRequestPendingEnrollment_QueueFullPerSource(t *testing.T) {
 	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/pending-enrollments/request", bytes.NewReader(requestBody))
 	req2.RemoteAddr = "198.51.100.11:9999"
 	w2 := httptest.NewRecorder()
-	RequestPendingEnrollment(logger, mem, DeviceIdentityPolicy{}, false, nil, nil, guard).ServeHTTP(w2, req2)
+	RequestPendingEnrollment(logger, mem, DeviceIdentityPolicy{}, false, metricsCollector, nil, guard).ServeHTTP(w2, req2)
 	if w2.Code != http.StatusTooManyRequests {
 		t.Fatalf("second request expected 429, got %d: %s", w2.Code, w2.Body.String())
+	}
+	body := scrapeMetrics(t, metricsCollector)
+	if got := metricValue(t, body, `hwops_pending_enroll_throttle_total{reason="queue_full_source"}`); got != 1 {
+		t.Fatalf("queue_full_source throttle expected 1, got %v", got)
 	}
 }
 
 func TestApprovePendingEnrollment_ApprovalDelay(t *testing.T) {
 	logger := log.New(&bytes.Buffer{}, "", 0)
 	mem := memory.New()
+	metricsCollector := metrics.New()
 
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/enrollment-profiles", bytes.NewReader([]byte(`{
 		"name":"line-a",
@@ -795,15 +810,114 @@ func TestApprovePendingEnrollment_ApprovalDelay(t *testing.T) {
 	requestBody, _ := json.Marshal(requestPayload)
 	requestReq := httptest.NewRequest(http.MethodPost, "/api/v1/pending-enrollments/request", bytes.NewReader(requestBody))
 	requestW := httptest.NewRecorder()
-	RequestPendingEnrollment(logger, mem, DeviceIdentityPolicy{}, false, nil, nil, nil).ServeHTTP(requestW, requestReq)
+	RequestPendingEnrollment(logger, mem, DeviceIdentityPolicy{}, false, metricsCollector, nil, nil).ServeHTTP(requestW, requestReq)
 	var pendingResp PendingEnrollmentRequestResponse
 	_ = json.Unmarshal(requestW.Body.Bytes(), &pendingResp)
 
 	approveReq := httptest.NewRequest(http.MethodPost, "/api/v1/pending-enrollments/"+pendingResp.RequestID+"/approve", nil)
 	approveReq = withURLParam(approveReq, "requestId", pendingResp.RequestID)
 	approveW := httptest.NewRecorder()
-	ApprovePendingEnrollment(logger, mem, false, nil).ServeHTTP(approveW, approveReq)
+	ApprovePendingEnrollment(logger, mem, false, metricsCollector).ServeHTTP(approveW, approveReq)
 	if approveW.Code != http.StatusTooManyRequests {
 		t.Fatalf("approve expected 429, got %d: %s", approveW.Code, approveW.Body.String())
 	}
+	body := scrapeMetrics(t, metricsCollector)
+	if got := metricValue(t, body, `hwops_pending_enroll_throttle_total{reason="approval_delay"}`); got != 1 {
+		t.Fatalf("approval_delay throttle expected 1, got %v", got)
+	}
+}
+
+func TestRefreshPendingEnrollmentMetrics_QueueAgeBuckets(t *testing.T) {
+	mem := memory.New()
+	metricsCollector := metrics.New()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	profileToken := "profile-token"
+	profile := store.EnrollmentProfile{
+		ProfileID:        uuid.NewString(),
+		Name:             "line-a",
+		TokenHash:        hashToken(profileToken),
+		RequireApproval:  true,
+		ExpiresAt:        now.Add(time.Hour),
+		CreatedAt:        now,
+		ApprovalDelaySec: 0,
+	}
+	if err := mem.CreateEnrollmentProfile(profile); err != nil {
+		t.Fatalf("create profile: %v", err)
+	}
+
+	createPending := func(createdAt, expiresAt time.Time) {
+		t.Helper()
+		_, err := mem.CreatePendingEnrollmentForProfileToken(hashToken(profileToken), store.PendingEnrollment{
+			RequestID:      uuid.NewString(),
+			Status:         "pending",
+			CSR:            "csr",
+			ClaimTokenHash: hashToken(uuid.NewString()),
+			CreatedAt:      createdAt,
+			ExpiresAt:      expiresAt,
+		})
+		if err != nil {
+			t.Fatalf("create pending enrollment: %v", err)
+		}
+	}
+
+	createPending(now.Add(-30*time.Second), now.Add(10*time.Minute))
+	createPending(now.Add(-2*time.Minute), now.Add(10*time.Minute))
+	createPending(now.Add(-7*time.Minute), now.Add(10*time.Minute))
+	createPending(now.Add(-30*time.Minute), now.Add(10*time.Minute))
+	createPending(now.Add(-2*time.Hour), now.Add(10*time.Minute))
+	createPending(now.Add(-45*time.Second), now.Add(-1*time.Minute))
+
+	refreshPendingEnrollmentMetrics(mem, metricsCollector, now)
+	body := scrapeMetrics(t, metricsCollector)
+
+	if got := metricValue(t, body, "hwops_pending_enroll_active_total"); got != 5 {
+		t.Fatalf("active pending expected 5, got %v", got)
+	}
+	if got := metricValue(t, body, `hwops_pending_enroll_queue_age_total{bucket="lt_1m"}`); got != 1 {
+		t.Fatalf("lt_1m expected 1, got %v", got)
+	}
+	if got := metricValue(t, body, `hwops_pending_enroll_queue_age_total{bucket="1m_5m"}`); got != 1 {
+		t.Fatalf("1m_5m expected 1, got %v", got)
+	}
+	if got := metricValue(t, body, `hwops_pending_enroll_queue_age_total{bucket="5m_15m"}`); got != 1 {
+		t.Fatalf("5m_15m expected 1, got %v", got)
+	}
+	if got := metricValue(t, body, `hwops_pending_enroll_queue_age_total{bucket="15m_1h"}`); got != 1 {
+		t.Fatalf("15m_1h expected 1, got %v", got)
+	}
+	if got := metricValue(t, body, `hwops_pending_enroll_queue_age_total{bucket="gte_1h"}`); got != 1 {
+		t.Fatalf("gte_1h expected 1, got %v", got)
+	}
+	oldest := metricValue(t, body, "hwops_pending_enroll_oldest_age_seconds")
+	if oldest < 7199 || oldest > 7201 {
+		t.Fatalf("oldest age expected ~7200s, got %v", oldest)
+	}
+}
+
+func scrapeMetrics(t *testing.T, metricsCollector *metrics.Metrics) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	w := httptest.NewRecorder()
+	metricsCollector.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("scrape metrics expected 200, got %d", w.Code)
+	}
+	return w.Body.String()
+}
+
+func metricValue(t *testing.T, body, linePrefix string) float64 {
+	t.Helper()
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, linePrefix+" ") {
+			raw := strings.TrimSpace(strings.TrimPrefix(line, linePrefix))
+			val, err := strconv.ParseFloat(raw, 64)
+			if err != nil {
+				t.Fatalf("parse metric %q: %v", linePrefix, err)
+			}
+			return val
+		}
+	}
+	t.Fatalf("metric line not found: %s", linePrefix)
+	return 0
 }
