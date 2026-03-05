@@ -633,7 +633,7 @@ AUTH_PASSWORD=change-me \
 - `429`: rate limit triggered, queue cap reached, or approval delay window still active.
 - `500`: internal/storage/signing errors.
 
-## Audit, events, metrics (proposed)
+## Audit, events, metrics
 Audit actions:
 - `pending_enrollment.request`
 - `pending_enrollment.approve`
@@ -648,10 +648,10 @@ Runtime events:
 - `device.enroll`
 
 Metrics:
-- `hwops_pending_enroll_total{status,reason}`
-- `hwops_pending_enroll_approval_latency_seconds`
-- `hwops_pending_enroll_queue_size`
+- `hwops_enroll_total{status,reason}`
 - `hwops_pending_enroll_active_total`
+- `hwops_pending_enroll_queue_age_total{bucket}` (`lt_1m`, `1m_5m`, `5m_15m`, `15m_1h`, `gte_1h`)
+- `hwops_pending_enroll_oldest_age_seconds`
 - `hwops_pending_enroll_throttle_total{reason}`
 
 ## Backward compatibility and rollout

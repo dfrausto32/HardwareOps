@@ -24,6 +24,15 @@ const (
 	defaultPendingEnrollTTL     = 15 * time.Minute
 	maxPendingListLimit         = 500
 	maxProfileRotateGrace       = 24 * time.Hour
+	pendingMetricsBatchSize     = 200
+)
+
+const (
+	ageBucketLT1M = iota
+	ageBucketM1To5M
+	ageBucketM5To15M
+	ageBucketM15To1H
+	ageBucketGTE1H
 )
 
 type CreateEnrollmentProfilePayload struct {
@@ -1217,4 +1226,77 @@ func refreshPendingEnrollmentMetrics(st store.Store, metricsCollector *metrics.M
 		return
 	}
 	metricsCollector.SetPendingEnrollActive(count)
+	if count <= 0 {
+		metricsCollector.SetPendingEnrollQueueAgeBuckets(0, 0, 0, 0, 0)
+		metricsCollector.SetPendingEnrollOldestAgeSeconds(0)
+		return
+	}
+	buckets := [5]int{}
+	oldestAgeSeconds := 0.0
+	remaining := count
+	offset := 0
+	for remaining > 0 {
+		limit := pendingMetricsBatchSize
+		if remaining < limit {
+			limit = remaining
+		}
+		rows, err := st.ListPendingEnrollments(store.PendingEnrollmentFilter{
+			Status: "pending",
+			Limit:  limit,
+			Offset: offset,
+		})
+		if err != nil {
+			return
+		}
+		if len(rows) == 0 {
+			break
+		}
+		offset += len(rows)
+		for _, row := range rows {
+			if row.Status != "pending" {
+				continue
+			}
+			if !row.ExpiresAt.IsZero() && !row.ExpiresAt.After(now) {
+				continue
+			}
+			age := now.Sub(row.CreatedAt)
+			if age < 0 {
+				age = 0
+			}
+			buckets[pendingQueueAgeBucket(age)]++
+			remaining--
+			if age.Seconds() > oldestAgeSeconds {
+				oldestAgeSeconds = age.Seconds()
+			}
+			if remaining == 0 {
+				break
+			}
+		}
+		if len(rows) < limit {
+			break
+		}
+	}
+	metricsCollector.SetPendingEnrollQueueAgeBuckets(
+		buckets[ageBucketLT1M],
+		buckets[ageBucketM1To5M],
+		buckets[ageBucketM5To15M],
+		buckets[ageBucketM15To1H],
+		buckets[ageBucketGTE1H],
+	)
+	metricsCollector.SetPendingEnrollOldestAgeSeconds(oldestAgeSeconds)
+}
+
+func pendingQueueAgeBucket(age time.Duration) int {
+	switch {
+	case age < time.Minute:
+		return ageBucketLT1M
+	case age < 5*time.Minute:
+		return ageBucketM1To5M
+	case age < 15*time.Minute:
+		return ageBucketM5To15M
+	case age < time.Hour:
+		return ageBucketM15To1H
+	default:
+		return ageBucketGTE1H
+	}
 }

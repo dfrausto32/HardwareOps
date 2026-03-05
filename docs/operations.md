@@ -162,6 +162,8 @@ Focus on:
 - check-in errors
 - DB pool pressure (`hwops_db_open_conns`, `hwops_db_in_use`, `hwops_db_wait_count`)
 - storage growth (`hwops_s3_objects_total`, `hwops_s3_bytes_total`)
+- pending-enrollment queue pressure (`hwops_pending_enroll_active_total`, `hwops_pending_enroll_queue_age_total`, `hwops_pending_enroll_oldest_age_seconds`)
+- pending-enrollment abuse/throttle reasons (`hwops_pending_enroll_throttle_total{reason}`)
 
 For metric definitions and dashboard details:
 - `development/metrics-health.md`
