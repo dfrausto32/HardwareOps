@@ -136,17 +136,25 @@ ACTIVE_CA_KEY_PATH=/opt/hardwareops/certs/ca-active.key
 ```
 Restart the control‑plane.
 
-### Optional: reload without restart (admin)
+### Optional: reload without restart (operator/admin)
 If you want to rotate without restarting, use the reload endpoint or the UI button:
 ```
-curl --cacert /opt/hardwareops/certs/ca.crt -X POST \
+curl --cacert /opt/hardwareops/certs/ca.crt \
+  -H "Authorization: Bearer <operator-or-admin-jwt>" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d '{"reason":"reload CA bundle after emergency file update"}' \
   https://hardwareops.internal/api/v1/cert-rotation/reload
 ```
 This reloads the active CA + client bundle in‑process.
 
-### Rotate (admin, generates new CA + bundle + reload)
+### Rotate (operator/admin, generates new CA + bundle + reload)
 ```
-curl --cacert /opt/hardwareops/certs/ca.crt -X POST \
+curl --cacert /opt/hardwareops/certs/ca.crt \
+  -H "Authorization: Bearer <operator-or-admin-jwt>" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d '{"reason":"break-glass CA rotation after suspected compromise"}' \
   https://hardwareops.internal/api/v1/cert-rotation/rotate
 ```
 This generates a new active CA, rebuilds the bundle, and reloads without restart.
@@ -196,7 +204,11 @@ After all devices are active on the new CA (or after the grace window), prune th
 
 **UI / API (hybrid cleanup)**
 ```
-curl --cacert /opt/hardwareops/certs/ca.crt -X POST \
+curl --cacert /opt/hardwareops/certs/ca.crt \
+  -H "Authorization: Bearer <operator-or-admin-jwt>" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d '{"reason":"cleanup previous CA after rotation coverage verified"}' \
   https://hardwareops.internal/api/v1/cert-rotation/cleanup
 ```
 

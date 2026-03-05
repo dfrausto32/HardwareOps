@@ -2624,6 +2624,38 @@ func (s *Store) CreateServiceToken(token store.ServiceToken) error {
 	return err
 }
 
+func (s *Store) GetServiceToken(tokenID string) (store.ServiceToken, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var token store.ServiceToken
+	var lastUsedAt sql.NullTime
+	var revokedAt sql.NullTime
+	var revokedBy sql.NullString
+	err := s.pool.QueryRow(ctx, `
+		SELECT token_id, name, token_hash, COALESCE(scopes, '[]'::jsonb),
+		       expires_at, created_at, COALESCE(created_by, ''), last_used_at, revoked_at, revoked_by
+		FROM service_tokens
+		WHERE token_id = $1
+	`, tokenID).Scan(&token.TokenID, &token.Name, &token.TokenHash, &token.ScopesJSON,
+		&token.ExpiresAt, &token.CreatedAt, &token.CreatedBy, &lastUsedAt, &revokedAt, &revokedBy)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.ServiceToken{}, false, nil
+	}
+	if err != nil {
+		return store.ServiceToken{}, false, err
+	}
+	if lastUsedAt.Valid {
+		token.LastUsedAt = lastUsedAt.Time
+	}
+	if revokedAt.Valid {
+		token.RevokedAt = revokedAt.Time
+	}
+	if revokedBy.Valid {
+		token.RevokedBy = revokedBy.String
+	}
+	return token, true, nil
+}
+
 func (s *Store) GetServiceTokenByTokenHash(tokenHash string) (store.ServiceToken, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
