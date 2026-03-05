@@ -20,6 +20,7 @@ type Config struct {
 	TLSClientCA                          string
 	TrustProxy                           bool
 	TrustedProxyCIDRs                    []string
+	TrustedProxyCIDRsExplicit            bool
 	ClientCertHeader                     string
 	AutoMigrate                          bool
 	MigrationsDir                        string
@@ -124,11 +125,14 @@ type Config struct {
 	HardenedProfile                      bool
 }
 
+const defaultTrustedProxyCIDRs = "127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fc00::/7,fe80::/10"
+
 func FromEnv() Config {
 	addr := os.Getenv("HTTP_ADDR")
 	if addr == "" {
 		addr = ":8080"
 	}
+	trustedProxyCIDRs, trustedProxyCIDRsExplicit := trustedProxyCIDRsFromEnv()
 
 	staleAfter := parseDurationDefault(getenvDefault("DEVICE_STATUS_STALE_AFTER", "2m"), 2*time.Minute)
 	offlineAfter := parseDurationDefault(getenvDefault("DEVICE_STATUS_OFFLINE_AFTER", "10m"), 10*time.Minute)
@@ -149,7 +153,8 @@ func FromEnv() Config {
 		TLSKeyPath:                           os.Getenv("TLS_KEY_PATH"),
 		TLSClientCA:                          os.Getenv("TLS_CLIENT_CA_PATH"),
 		TrustProxy:                           os.Getenv("TRUST_PROXY") == "1",
-		TrustedProxyCIDRs:                    parseCSV(getenvDefault("TRUST_PROXY_CIDRS", "127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fc00::/7,fe80::/10")),
+		TrustedProxyCIDRs:                    trustedProxyCIDRs,
+		TrustedProxyCIDRsExplicit:            trustedProxyCIDRsExplicit,
 		ClientCertHeader:                     getenvDefault("CLIENT_CERT_HEADER", "X-Client-Cert"),
 		AutoMigrate:                          os.Getenv("AUTO_MIGRATE") == "1",
 		MigrationsDir:                        getenvDefault("MIGRATIONS_DIR", "./migrations"),
@@ -253,6 +258,14 @@ func FromEnv() Config {
 		DeviceIdentityRequireOnCheckin:       parseBoolEnvDefault("DEVICE_IDENTITY_REQUIRE_ON_CHECKIN", false),
 		HardenedProfile:                      parseBoolEnvDefault("HARDENED_PROFILE", false),
 	}
+}
+
+func trustedProxyCIDRsFromEnv() ([]string, bool) {
+	raw, ok := os.LookupEnv("TRUST_PROXY_CIDRS")
+	if !ok {
+		return parseCSV(defaultTrustedProxyCIDRs), false
+	}
+	return parseCSV(raw), true
 }
 
 func getenvDefault(key, def string) string {

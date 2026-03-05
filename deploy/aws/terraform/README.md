@@ -53,7 +53,7 @@ CLI helper: `../../../scripts/aws-customer.sh`.
 - The app listener is `443`; the devices listener is `8443` to keep human/UI traffic separated from mTLS device traffic on ALB.
 - If you need both endpoints on port `443`, use separate ALBs or front-door routing pattern in a later iteration.
 - Secret values should come from Secrets Manager (`*_secret_arns` maps), not plaintext tfvars.
-- Proxy header trust is locked to trusted proxy CIDRs; by default this is set to the stack `vpc_cidr` via `TRUST_PROXY_CIDRS`.
+- Proxy header trust is locked to trusted proxy CIDRs; by default this is set to the ECS private subnet CIDRs via `TRUST_PROXY_CIDRS`.
 - `artifact_pull_credentials_aws_secret_id` can be set to a secret **name or ARN**, but ARN is recommended for least-privilege IAM policy generation.
 - For local auth mode, ensure `AUTH_JWT_SECRET` and bootstrap credentials are set in `control_plane_env`.
 - For token-based first-time enrollment, start with `device_mtls_mode = "passthrough"`, enroll devices, then switch to `device_mtls_mode = "verify"` and re-apply.

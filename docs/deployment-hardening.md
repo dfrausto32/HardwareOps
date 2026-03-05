@@ -25,15 +25,15 @@ If this is misconfigured, attackers can spoof source IP/cert headers and bypass 
 
 Terraform module default env for control-plane includes:
 - `TRUST_PROXY=1`
-- `TRUST_PROXY_CIDRS=<vpc_cidr>`
+- `TRUST_PROXY_CIDRS=<private_subnet_cidrs>`
 
 Source: `deploy/aws/terraform/modules/customer_stack/main.tf`.
 
-That means only traffic forwarded by resources inside the stack VPC (ALB/gateway path) is trusted for forwarded headers.
+That means only traffic forwarded by gateway tasks running from the ECS private subnets is trusted for forwarded headers.
 
 ### Optional stricter override
 
-You can set `control_plane_env` in `terraform.tfvars` to narrower CIDRs (for example private ingress subnets only):
+You can set `control_plane_env` in `terraform.tfvars` to narrower CIDRs (for example dedicated gateway subnets only):
 
 ```hcl
 control_plane_env = {
@@ -52,7 +52,7 @@ aws ecs describe-task-definition --task-definition <task-def-arn> \
 
 2) Confirm values include:
 - `TRUST_PROXY=1`
-- `TRUST_PROXY_CIDRS` matches expected network ranges
+- `TRUST_PROXY_CIDRS` matches the private subnet CIDRs (or your explicit override)
 
 3) Validate behavior:
 - Requests from untrusted remote IP with spoofed `X-Forwarded-For` must not change rate-limit/audit source IP.
@@ -98,9 +98,17 @@ BACKUP_RUNNER_URL=http://maintenance-runner:8090
 BACKUP_RUNNER_TOKEN=<16+ char random token>
 ```
 
+With `HARDENED_PROFILE=1`, `TRUST_PROXY=1` now requires `TRUST_PROXY_CIDRS` to be explicitly set. Do not rely on broad private-network fallbacks.
+
 Do **not** use:
 - `TRUST_PROXY_CIDRS=0.0.0.0/0`
 - `TRUST_PROXY_CIDRS=::/0`
+- `TRUST_PROXY_CIDRS=10.0.0.0/8`
+- `TRUST_PROXY_CIDRS=172.16.0.0/12`
+- `TRUST_PROXY_CIDRS=192.168.0.0/16`
+- `TRUST_PROXY_CIDRS=100.64.0.0/10`
+- `TRUST_PROXY_CIDRS=fc00::/7`
+- `TRUST_PROXY_CIDRS=fe80::/10`
 - Placeholder secrets/tokens such as `change-me`, `dev-token`, or `password`
 
 Use only your reverse proxy host/subnet(s).

@@ -7,6 +7,24 @@ import (
 	"time"
 )
 
+type trustedProxyCIDRValidationOptions struct {
+	rejectWildcard  bool
+	rejectOverbroad bool
+}
+
+var blockedHardenedTrustedProxyCIDRs = map[string]struct{}{
+	"0.0.0.0/0":      {},
+	"::/0":           {},
+	"10.0.0.0/8":     {},
+	"100.64.0.0/10":  {},
+	"127.0.0.0/8":    {},
+	"169.254.0.0/16": {},
+	"172.16.0.0/12":  {},
+	"192.168.0.0/16": {},
+	"fc00::/7":       {},
+	"fe80::/10":      {},
+}
+
 // ValidateHardening enforces strict runtime guardrails when HARDENED_PROFILE=1.
 func ValidateHardening(cfg Config) error {
 	if !cfg.HardenedProfile {
@@ -111,12 +129,18 @@ func ValidateHardening(cfg Config) error {
 	if strings.TrimSpace(cfg.ArtifactSignatureKeyID) == "" {
 		return fmt.Errorf("HARDENED_PROFILE requires ARTIFACT_SIGNATURE_KEY_ID")
 	}
+	trustedProxyValidation := trustedProxyCIDRValidationOptions{}
 	if cfg.TrustProxy {
+		if !cfg.TrustedProxyCIDRsExplicit {
+			return fmt.Errorf("HARDENED_PROFILE requires TRUST_PROXY_CIDRS to be explicitly set when TRUST_PROXY=1")
+		}
 		if len(cfg.TrustedProxyCIDRs) == 0 {
 			return fmt.Errorf("HARDENED_PROFILE requires TRUST_PROXY_CIDRS when TRUST_PROXY=1")
 		}
+		trustedProxyValidation.rejectWildcard = true
+		trustedProxyValidation.rejectOverbroad = true
 	}
-	if err := validateTrustedProxyCIDRs(cfg.TrustedProxyCIDRs, true); err != nil {
+	if err := validateTrustedProxyCIDRs(cfg.TrustedProxyCIDRs, trustedProxyValidation); err != nil {
 		return fmt.Errorf("HARDENED_PROFILE invalid TRUST_PROXY_CIDRS: %w", err)
 	}
 	upgradeMode := strings.ToLower(strings.TrimSpace(cfg.UpgradeRunnerMode))
@@ -147,7 +171,7 @@ func ValidateHardening(cfg Config) error {
 	return nil
 }
 
-func validateTrustedProxyCIDRs(cidrs []string, rejectWildcard bool) error {
+func validateTrustedProxyCIDRs(cidrs []string, opts trustedProxyCIDRValidationOptions) error {
 	for _, raw := range cidrs {
 		entry := strings.TrimSpace(raw)
 		if entry == "" {
@@ -158,10 +182,18 @@ func validateTrustedProxyCIDRs(cidrs []string, rejectWildcard bool) error {
 			if err != nil {
 				return fmt.Errorf("invalid cidr %q", entry)
 			}
-			if rejectWildcard && network != nil {
+			if network == nil {
+				continue
+			}
+			if opts.rejectWildcard {
 				ones, _ := network.Mask.Size()
 				if ones == 0 {
 					return fmt.Errorf("wildcard cidr %q not allowed", entry)
+				}
+			}
+			if opts.rejectOverbroad {
+				if _, blocked := blockedHardenedTrustedProxyCIDRs[network.String()]; blocked {
+					return fmt.Errorf("overbroad cidr %q not allowed", entry)
 				}
 			}
 			continue

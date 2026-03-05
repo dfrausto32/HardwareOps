@@ -58,7 +58,7 @@ On-prem defaults now assume:
 Set DNS for both hostnames to the gateway host. Agent runtime endpoints are restricted to
 the `agent.*` host and require client mTLS for check-in/apply traffic.
 To block duplicate hardware identities, set `DEVICE_IDENTITY_MODE=enforce` and optionally require identity on enroll/check-in.
-For forwarded client-cert trust, keep `TRUST_PROXY=1` and restrict `TRUST_PROXY_CIDRS` to your ingress/gateway networks.
+For forwarded client-cert trust, keep `TRUST_PROXY=1` and replace the loopback-only `TRUST_PROXY_CIDRS` example with your ingress/gateway networks before enabling `HARDENED_PROFILE=1`.
 
 Server TLS vs device CA:
 - Device CA (`ca.crt`/`ca.key`) is for agent enrollment + mTLS.
