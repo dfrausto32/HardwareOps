@@ -3,6 +3,7 @@ package metrics
 import (
 	"bufio"
 	"errors"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
@@ -28,6 +29,8 @@ type Metrics struct {
 	enrollTokenTotal      *prometheus.CounterVec
 	enrollTotal           *prometheus.CounterVec
 	pendingEnrollActive   prometheus.Gauge
+	pendingEnrollQueueAge *prometheus.GaugeVec
+	pendingEnrollOldest   prometheus.Gauge
 	pendingEnrollThrottle *prometheus.CounterVec
 	applyTotal            *prometheus.CounterVec
 	preApplyTotal         *prometheus.CounterVec
@@ -42,6 +45,22 @@ type Metrics struct {
 	upgradeTotal          *prometheus.CounterVec
 	backupTotal           *prometheus.CounterVec
 	pendingActionsTotal   *prometheus.CounterVec
+}
+
+const (
+	pendingEnrollBucketLT1M    = "lt_1m"
+	pendingEnrollBucketM1To5M  = "1m_5m"
+	pendingEnrollBucketM5To15M = "5m_15m"
+	pendingEnrollBucketM15To1H = "15m_1h"
+	pendingEnrollBucketGTE1H   = "gte_1h"
+)
+
+var pendingEnrollAgeBuckets = []string{
+	pendingEnrollBucketLT1M,
+	pendingEnrollBucketM1To5M,
+	pendingEnrollBucketM5To15M,
+	pendingEnrollBucketM15To1H,
+	pendingEnrollBucketGTE1H,
 }
 
 func New() *Metrics {
@@ -102,6 +121,14 @@ func New() *Metrics {
 		Name: "hwops_pending_enroll_active_total",
 		Help: "Active pending enrollment requests awaiting action or claim.",
 	})
+	pendingEnrollQueueAge := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "hwops_pending_enroll_queue_age_total",
+		Help: "Active pending enrollment requests grouped by queue age bucket.",
+	}, []string{"bucket"})
+	pendingEnrollOldest := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "hwops_pending_enroll_oldest_age_seconds",
+		Help: "Age in seconds of the oldest active pending enrollment request.",
+	})
 	pendingEnrollThrottle := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "hwops_pending_enroll_throttle_total",
 		Help: "Pending enrollment throttles by reason.",
@@ -159,8 +186,12 @@ func New() *Metrics {
 		Help: "Pending actions issued to devices by type.",
 	}, []string{"type"})
 
-	reg.MustRegister(httpRequests, httpDuration, deviceTotal, deviceStatus, dbOpenConns, dbInUse, dbWaitCount, s3ObjectsTotal, s3BytesTotal, checkinTotal, enrollTokenTotal, enrollTotal, pendingEnrollActive, pendingEnrollThrottle, applyTotal, preApplyTotal, artifactUploadTotal, artifactPresignTotal, artifactPruneTotal, artifactPruneDeleted, artifactPruneSkipped, artifactPruneLastRun, artifactPruneFails, rateLimitTotal, upgradeTotal, backupTotal, pendingActionsTotal)
+	reg.MustRegister(httpRequests, httpDuration, deviceTotal, deviceStatus, dbOpenConns, dbInUse, dbWaitCount, s3ObjectsTotal, s3BytesTotal, checkinTotal, enrollTokenTotal, enrollTotal, pendingEnrollActive, pendingEnrollQueueAge, pendingEnrollOldest, pendingEnrollThrottle, applyTotal, preApplyTotal, artifactUploadTotal, artifactPresignTotal, artifactPruneTotal, artifactPruneDeleted, artifactPruneSkipped, artifactPruneLastRun, artifactPruneFails, rateLimitTotal, upgradeTotal, backupTotal, pendingActionsTotal)
 	pendingEnrollActive.Set(0)
+	pendingEnrollOldest.Set(0)
+	for _, bucket := range pendingEnrollAgeBuckets {
+		pendingEnrollQueueAge.WithLabelValues(bucket).Set(0)
+	}
 
 	return &Metrics{
 		registry:              reg,
@@ -177,6 +208,8 @@ func New() *Metrics {
 		enrollTokenTotal:      enrollTokenTotal,
 		enrollTotal:           enrollTotal,
 		pendingEnrollActive:   pendingEnrollActive,
+		pendingEnrollQueueAge: pendingEnrollQueueAge,
+		pendingEnrollOldest:   pendingEnrollOldest,
 		pendingEnrollThrottle: pendingEnrollThrottle,
 		applyTotal:            applyTotal,
 		preApplyTotal:         preApplyTotal,
@@ -294,6 +327,36 @@ func (m *Metrics) SetPendingEnrollActive(total int) {
 		total = 0
 	}
 	m.pendingEnrollActive.Set(float64(total))
+}
+
+func (m *Metrics) SetPendingEnrollQueueAgeBuckets(lt1m, m1to5m, m5to15m, m15to1h, gte1h int) {
+	if m == nil {
+		return
+	}
+	counts := map[string]int{
+		pendingEnrollBucketLT1M:    lt1m,
+		pendingEnrollBucketM1To5M:  m1to5m,
+		pendingEnrollBucketM5To15M: m5to15m,
+		pendingEnrollBucketM15To1H: m15to1h,
+		pendingEnrollBucketGTE1H:   gte1h,
+	}
+	for _, bucket := range pendingEnrollAgeBuckets {
+		count := counts[bucket]
+		if count < 0 {
+			count = 0
+		}
+		m.pendingEnrollQueueAge.WithLabelValues(bucket).Set(float64(count))
+	}
+}
+
+func (m *Metrics) SetPendingEnrollOldestAgeSeconds(seconds float64) {
+	if m == nil {
+		return
+	}
+	if seconds < 0 || math.IsNaN(seconds) || math.IsInf(seconds, 0) {
+		seconds = 0
+	}
+	m.pendingEnrollOldest.Set(seconds)
 }
 
 func (m *Metrics) IncPendingEnrollThrottle(reason string) {

@@ -51,6 +51,18 @@ METRICS_REFRESH_INTERVAL=30s
   `status`: `success` or `error`  
   `reason`: `ok`, `bad_request`, `csr_invalid`, `csr_too_large`, `token_invalid`, `storage_error`, `sign_error`, `signer_missing`, `license_limit`, `license_invalid`, `license_error`
 
+### Pending enrollment queue pressure + abuse telemetry
+- `hwops_pending_enroll_active_total`  
+  Current active pending-enrollment queue depth (pending + unexpired).
+- `hwops_pending_enroll_queue_age_total{bucket}`  
+  Active queue depth split by age buckets:
+  `lt_1m`, `1m_5m`, `5m_15m`, `15m_1h`, `gte_1h`.
+- `hwops_pending_enroll_oldest_age_seconds`  
+  Age (seconds) of the oldest active pending enrollment.
+- `hwops_pending_enroll_throttle_total{reason}`  
+  Throttle/guardrail rejections by reason.
+  Common reasons: `pending_enroll_source`, `pending_enroll_profile`, `queue_full_global`, `queue_full_profile`, `queue_full_source`, `approval_delay`.
+
 ### Apply pipeline
 - `hwops_apply_total{status,component}`  
   `status`: `success` or `error`  
@@ -80,6 +92,12 @@ METRICS_REFRESH_INTERVAL=30s
   `type`: `device.reenroll`
 
 > Note: route labels use the **route pattern** (e.g., `/api/v1/devices/{deviceId}`) to avoid cardinality explosion.
+
+## Pending enrollment alert thresholds (recommended)
+- **Queue depth pressure**: alert when `hwops_pending_enroll_active_total` is sustained above 80% of `PENDING_ENROLL_MAX_ACTIVE` for 10 minutes.
+- **Approval backlog age**: alert when `hwops_pending_enroll_oldest_age_seconds > 300` for 10 minutes.
+- **Abuse/throttle spikes**: alert on rapid increase in `hwops_pending_enroll_throttle_total{reason=~"pending_enroll_.*|queue_full_.*|approval_delay"}` over 5-minute windows.
+- **Critical backlog**: page when any requests reach `bucket="gte_1h"` for sustained periods.
 
 ## Health summary API (UI)
 **Endpoint:** `GET /api/v1/health/summary`
