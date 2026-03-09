@@ -17,6 +17,10 @@ private_subnet_cidrs = {
 route53_zone_id = "Z0123456789ABCDEFG"
 app_host        = "app.customer-a.example.com"
 devices_host    = "agent.customer-a.example.com"
+# Optional split ingress controls. If unset, ingress_cidrs applies to both listeners.
+# ingress_cidrs        = ["203.0.113.0/24"]
+# app_ingress_cidrs    = ["203.0.113.0/24"]
+# device_ingress_cidrs = ["0.0.0.0/0"]
 
 acm_certificate_arn = "arn:aws:acm:us-east-1:111122223333:certificate/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
@@ -24,12 +28,16 @@ device_mtls_bucket = "customer-a-security-assets"
 device_mtls_key    = "mtls/device-ca-bundle.pem"
 # Start with "passthrough" during initial token-based enrollment, then switch to "verify".
 device_mtls_mode   = "passthrough"
+# WAF is enabled for app ingress by default. Uncomment to add a per-IP rate limit.
+# waf_rate_limit    = 2000
 
 control_plane_image = "111122223333.dkr.ecr.us-east-1.amazonaws.com/hardwareops-control-plane:latest"
 gateway_image       = "111122223333.dkr.ecr.us-east-1.amazonaws.com/hardwareops-gateway:latest"
 # Optional: Secrets Manager secret containing pull adapter credential map JSON.
 # Example value (ARN recommended):
 # artifact_pull_credentials_aws_secret_id = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/customer-a/prod/artifact-pull-credentials-AbCdEf"
+# If referenced Secrets Manager secrets use customer-managed CMKs, list those key ARNs.
+# secret_kms_key_arns = ["arn:aws:kms:us-east-1:111122223333:key/00000000-0000-0000-0000-000000000000"]
 
 db_instance_class            = "db.r6g.large"
 db_multi_az                  = true

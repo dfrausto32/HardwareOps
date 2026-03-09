@@ -48,6 +48,11 @@ output "devices_trust_store_arn" {
   value       = module.alb.devices_trust_store_arn
 }
 
+output "app_waf_web_acl_arn" {
+  description = "WAF web ACL ARN for app ingress."
+  value       = module.alb.app_waf_web_acl_arn
+}
+
 output "ecs_cluster_name" {
   description = "ECS cluster name."
   value       = module.ecs.cluster_name

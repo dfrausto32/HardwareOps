@@ -1,3 +1,8 @@
+locals {
+  effective_app_ingress_cidrs    = var.app_ingress_cidrs != null ? var.app_ingress_cidrs : var.ingress_cidrs
+  effective_device_ingress_cidrs = var.device_ingress_cidrs != null ? var.device_ingress_cidrs : var.ingress_cidrs
+}
+
 resource "aws_security_group" "alb" {
   name        = "${var.name_prefix}-alb"
   description = "Public ALB security group."
@@ -8,7 +13,7 @@ resource "aws_security_group" "alb" {
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = var.ingress_cidrs
+    cidr_blocks = local.effective_app_ingress_cidrs
   }
 
   ingress {
@@ -16,7 +21,7 @@ resource "aws_security_group" "alb" {
     from_port   = 8443
     to_port     = 8443
     protocol    = "tcp"
-    cidr_blocks = var.ingress_cidrs
+    cidr_blocks = local.effective_device_ingress_cidrs
   }
 
   egress {

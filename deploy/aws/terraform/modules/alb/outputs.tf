@@ -27,3 +27,8 @@ output "devices_trust_store_arn" {
   description = "ALB trust store ARN for device mTLS."
   value       = local.should_create_trust_store ? aws_lb_trust_store.devices[0].arn : null
 }
+
+output "app_waf_web_acl_arn" {
+  description = "WAF web ACL ARN for app traffic."
+  value       = local.waf_enabled ? aws_wafv2_web_acl.app[0].arn : null
+}

@@ -1,4 +1,5 @@
 data "aws_region" "current" {}
+data "aws_partition" "current" {}
 
 locals {
   execution_role_arn           = coalesce(var.execution_role_arn, try(aws_iam_role.execution[0].arn, null))
@@ -26,6 +27,32 @@ locals {
   demo_agent_slot_map = {
     for slot in local.demo_agent_slots : slot => tonumber(slot)
   }
+  execution_secret_arns = distinct(compact(concat(
+    values(var.control_plane_secret_arns),
+    values(var.gateway_secret_arns),
+  )))
+  task_secret_arns            = distinct(compact(var.task_secret_arns))
+  secret_kms_key_arns         = distinct(compact(var.secret_kms_key_arns))
+  artifact_bucket_access      = var.artifact_bucket_arn != null && length(var.artifact_bucket_allowed_prefixes) > 0
+  artifact_bucket_object_arns = local.artifact_bucket_access ? [for prefix in var.artifact_bucket_allowed_prefixes : "${var.artifact_bucket_arn}/${trimprefix(prefix, "/")}"] : []
+  log_group_resource_arns = compact([
+    trimsuffix(aws_cloudwatch_log_group.control_plane.arn, ":*"),
+    trimsuffix(aws_cloudwatch_log_group.gateway.arn, ":*"),
+    local.demo_agents_enabled ? trimsuffix(aws_cloudwatch_log_group.demo_agents[0].arn, ":*") : null,
+  ])
+  log_stream_resource_arns = [for arn in local.log_group_resource_arns : "${arn}:log-stream:*"]
+  image_uris = compact([
+    var.control_plane_image,
+    var.gateway_image,
+    local.demo_agents_enabled ? var.demo_agent_image : null,
+  ])
+  execution_ecr_repository_arns = distinct(flatten([
+    for image in local.image_uris : [
+      for match in regexall("^([0-9]{12})\\.dkr\\.ecr\\.([a-z0-9-]+)\\.amazonaws\\.com\\/([^@:]+(?:\\/[^@:]+)*)", image) :
+      format("arn:%s:ecr:%s:%s:repository/%s", data.aws_partition.current.partition, match[1], match[0], match[2])
+    ]
+  ]))
+  task_role_policy_required = local.artifact_bucket_access || length(local.task_secret_arns) > 0
 }
 
 resource "aws_service_discovery_private_dns_namespace" "this" {
@@ -68,13 +95,6 @@ resource "aws_iam_role" "execution" {
   tags               = var.tags
 }
 
-resource "aws_iam_role_policy_attachment" "execution_default" {
-  count = var.execution_role_arn == null ? 1 : 0
-
-  role       = aws_iam_role.execution[0].name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-}
-
 resource "aws_iam_role" "task" {
   count = var.task_role_arn == null ? 1 : 0
 
@@ -108,6 +128,178 @@ resource "aws_cloudwatch_log_group" "demo_agents" {
   name              = "/hardwareops/${var.name_prefix}/demo-agents"
   retention_in_days = 30
   tags              = var.tags
+}
+
+data "aws_iam_policy_document" "execution_inline" {
+  statement {
+    sid    = "WriteServiceLogs"
+    effect = "Allow"
+    actions = [
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+    ]
+    resources = concat(local.log_group_resource_arns, local.log_stream_resource_arns)
+  }
+
+  dynamic "statement" {
+    for_each = length(local.execution_ecr_repository_arns) > 0 ? [1] : []
+    content {
+      sid       = "GetECRAuthorizationToken"
+      effect    = "Allow"
+      actions   = ["ecr:GetAuthorizationToken"]
+      resources = ["*"]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = length(local.execution_ecr_repository_arns) > 0 ? [1] : []
+    content {
+      sid    = "PullServiceImages"
+      effect = "Allow"
+      actions = [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer",
+      ]
+      resources = local.execution_ecr_repository_arns
+    }
+  }
+
+  dynamic "statement" {
+    for_each = length(local.execution_secret_arns) > 0 ? [1] : []
+    content {
+      sid    = "ReadInjectedSecrets"
+      effect = "Allow"
+      actions = [
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:GetSecretValue",
+      ]
+      resources = local.execution_secret_arns
+    }
+  }
+
+  dynamic "statement" {
+    for_each = length(local.execution_secret_arns) > 0 && length(local.secret_kms_key_arns) > 0 ? [1] : []
+    content {
+      sid    = "DecryptInjectedSecrets"
+      effect = "Allow"
+      actions = [
+        "kms:Decrypt",
+      ]
+      resources = local.secret_kms_key_arns
+
+      condition {
+        test     = "StringEquals"
+        variable = "kms:ViaService"
+        values   = ["secretsmanager.${data.aws_region.current.region}.amazonaws.com"]
+      }
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "execution_inline" {
+  count = var.execution_role_arn == null ? 1 : 0
+
+  name   = "${var.name_prefix}-ecs-exec"
+  role   = aws_iam_role.execution[0].id
+  policy = data.aws_iam_policy_document.execution_inline.json
+}
+
+data "aws_iam_policy_document" "task_inline" {
+  dynamic "statement" {
+    for_each = local.artifact_bucket_access ? [1] : []
+    content {
+      sid    = "ListArtifactBucket"
+      effect = "Allow"
+      actions = [
+        "s3:GetBucketLocation",
+        "s3:ListBucket",
+        "s3:ListBucketMultipartUploads",
+      ]
+      resources = [var.artifact_bucket_arn]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = local.artifact_bucket_access ? [1] : []
+    content {
+      sid    = "ManageArtifactObjects"
+      effect = "Allow"
+      actions = [
+        "s3:AbortMultipartUpload",
+        "s3:DeleteObject",
+        "s3:GetObject",
+        "s3:ListMultipartUploadParts",
+        "s3:PutObject",
+      ]
+      resources = local.artifact_bucket_object_arns
+    }
+  }
+
+  dynamic "statement" {
+    for_each = local.artifact_bucket_access && var.artifact_bucket_kms_key_arn != null ? [1] : []
+    content {
+      sid    = "UseArtifactBucketKey"
+      effect = "Allow"
+      actions = [
+        "kms:Decrypt",
+        "kms:DescribeKey",
+        "kms:GenerateDataKey",
+      ]
+      resources = [var.artifact_bucket_kms_key_arn]
+
+      condition {
+        test     = "StringEquals"
+        variable = "kms:ViaService"
+        values   = ["s3.${data.aws_region.current.region}.amazonaws.com"]
+      }
+
+      condition {
+        test     = "StringLike"
+        variable = "kms:EncryptionContext:aws:s3:arn"
+        values   = local.artifact_bucket_object_arns
+      }
+    }
+  }
+
+  dynamic "statement" {
+    for_each = length(local.task_secret_arns) > 0 ? [1] : []
+    content {
+      sid    = "ReadRuntimeSecrets"
+      effect = "Allow"
+      actions = [
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:GetSecretValue",
+      ]
+      resources = local.task_secret_arns
+    }
+  }
+
+  dynamic "statement" {
+    for_each = length(local.task_secret_arns) > 0 && length(local.secret_kms_key_arns) > 0 ? [1] : []
+    content {
+      sid    = "DecryptRuntimeSecrets"
+      effect = "Allow"
+      actions = [
+        "kms:Decrypt",
+      ]
+      resources = local.secret_kms_key_arns
+
+      condition {
+        test     = "StringEquals"
+        variable = "kms:ViaService"
+        values   = ["secretsmanager.${data.aws_region.current.region}.amazonaws.com"]
+      }
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "task_inline" {
+  count = var.task_role_arn == null && local.task_role_policy_required ? 1 : 0
+
+  name   = "${var.name_prefix}-ecs-task"
+  role   = aws_iam_role.task[0].id
+  policy = data.aws_iam_policy_document.task_inline.json
 }
 
 resource "aws_ecs_cluster" "this" {

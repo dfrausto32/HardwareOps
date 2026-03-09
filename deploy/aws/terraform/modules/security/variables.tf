@@ -19,6 +19,18 @@ variable "ingress_cidrs" {
   default     = ["0.0.0.0/0"]
 }
 
+variable "app_ingress_cidrs" {
+  description = "Optional CIDR blocks allowed to reach the app listener. Falls back to ingress_cidrs when null."
+  type        = list(string)
+  default     = null
+}
+
+variable "device_ingress_cidrs" {
+  description = "Optional CIDR blocks allowed to reach the devices listener. Falls back to ingress_cidrs when null."
+  type        = list(string)
+  default     = null
+}
+
 variable "gateway_port" {
   description = "Gateway container port."
   type        = number

@@ -22,6 +22,8 @@ module "stack" {
   public_subnet_cidrs                     = var.public_subnet_cidrs
   private_subnet_cidrs                    = var.private_subnet_cidrs
   ingress_cidrs                           = var.ingress_cidrs
+  app_ingress_cidrs                       = var.app_ingress_cidrs
+  device_ingress_cidrs                    = var.device_ingress_cidrs
   acm_certificate_arn                     = var.acm_certificate_arn
   route53_zone_id                         = var.route53_zone_id
   app_host                                = var.app_host
@@ -30,6 +32,9 @@ module "stack" {
   device_mtls_key                         = var.device_mtls_key
   device_mtls_object_version              = var.device_mtls_object_version
   device_mtls_mode                        = var.device_mtls_mode
+  enable_waf                              = var.enable_waf
+  waf_rate_limit                          = var.waf_rate_limit
+  waf_managed_rule_groups                 = var.waf_managed_rule_groups
   artifact_bucket_name                    = var.artifact_bucket_name
   db_instance_class                       = var.db_instance_class
   db_multi_az                             = var.db_multi_az
@@ -41,6 +46,7 @@ module "stack" {
   gateway_desired_count                   = var.gateway_desired_count
   control_plane_env                       = var.control_plane_env
   artifact_pull_credentials_aws_secret_id = var.artifact_pull_credentials_aws_secret_id
+  secret_kms_key_arns                     = var.secret_kms_key_arns
   gateway_env                             = var.gateway_env
   control_plane_secret_arns               = var.control_plane_secret_arns
   gateway_secret_arns                     = var.gateway_secret_arns
