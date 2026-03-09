@@ -16,6 +16,8 @@ ADMIN_EMAIL=${ADMIN_EMAIL:-admin@example.com}
 LICENSE_ISSUED_TO=${LICENSE_ISSUED_TO:-prod-docker-lab}
 MAX_DEVICES=${MAX_DEVICES:-200}
 ARTIFACT_PULL_ALLOWED_HOSTS=${ARTIFACT_PULL_ALLOWED_HOSTS:-localhost,127.0.0.1,host.docker.internal}
+COMPOSE_SUBNET=${COMPOSE_SUBNET:-172.29.240.0/24}
+TRUST_PROXY_CIDRS=${TRUST_PROXY_CIDRS:-127.0.0.1/32,::1/128,$COMPOSE_SUBNET}
 FORCE=${FORCE:-0}
 
 if [ ! -f "$ENV_TEMPLATE" ]; then
@@ -71,7 +73,7 @@ python3 - "$ENV_FILE" \
   "$CERTS_DIR" "$STACK_DIR" \
   "$ADMIN_EMAIL" "$AUTH_BOOTSTRAP_PASSWORD" "$AUTH_JWT_SECRET" "$BOOTSTRAP_TOKEN" \
   "$MAINTENANCE_TOKEN" "$UPGRADE_RUNNER_TOKEN" "$BACKUP_RUNNER_TOKEN" \
-  "$ARTIFACT_SIGNATURE_KEY_ID" "$ARTIFACT_PULL_ALLOWED_HOSTS" <<'PY'
+  "$ARTIFACT_SIGNATURE_KEY_ID" "$ARTIFACT_PULL_ALLOWED_HOSTS" "$TRUST_PROXY_CIDRS" "$COMPOSE_SUBNET" <<'PY'
 import re
 import sys
 
@@ -91,6 +93,8 @@ import sys
     backup_runner_token,
     artifact_key_id,
     pull_allowed_hosts,
+    trust_proxy_cidrs,
+    compose_subnet,
 ) = sys.argv[1:]
 
 updates = {
@@ -125,6 +129,9 @@ updates = {
     "ARTIFACT_SIGNATURE_KEY_ID": artifact_key_id,
     "UPGRADE_RUNNER_MODE": "remote",
     "BACKUP_RUNNER_MODE": "remote",
+    "TRUST_PROXY": "1",
+    "TRUST_PROXY_CIDRS": trust_proxy_cidrs,
+    "COMPOSE_SUBNET": compose_subnet,
 }
 
 with open(env_file, "r", encoding="utf-8") as f:
@@ -165,6 +172,8 @@ Bootstrap admin:     $ADMIN_EMAIL
 Bootstrap password:  $AUTH_BOOTSTRAP_PASSWORD
 Artifact key id:     $ARTIFACT_SIGNATURE_KEY_ID
 License file:        $STACK_DIR/license.json
+Trusted proxies:     $TRUST_PROXY_CIDRS
+Compose subnet:      $COMPOSE_SUBNET
 
 Next steps:
   1) scripts/testing/prod-lab-up.sh

@@ -54,6 +54,7 @@ Defaults are tuned for production parity:
 - `HARDENED_PROFILE=1`
 - `LICENSE_ENFORCE=1` with generated signed lab license
 - `DEVICE_IDENTITY_MODE=enforce`
+- `TRUST_PROXY_CIDRS=127.0.0.1/32,::1/128,172.16.0.0/12` so the Docker-network gateway can forward client-cert headers
 - signature policy defaults enabled
 - remote maintenance runner mode (control-plane without docker socket)
 
@@ -108,7 +109,39 @@ This verifies:
 
 ---
 
-## 5) Verify Access Manually
+## 5) Validate First-Contact Approval Onboarding
+
+Build the packaged Linux agent bundle first:
+
+```bash
+AGENT_PLATFORMS=linux/<arch> CONTROL_PLANE_PLATFORMS=linux/<arch> BUILD_STACK=0 ./scripts/build-installers.sh
+```
+
+Use `amd64` on x86_64 hosts and `arm64` on ARM hosts.
+
+Then run the dedicated onboarding validation:
+
+```bash
+./scripts/testing/prod-lab-first-contact.sh
+```
+
+What this covers:
+- creates an enrollment profile in the running lab
+- extracts the packaged `hardwareops-agent` Linux bundle
+- runs `scripts/agent-install.sh` inside an ephemeral Ubuntu container
+- starts the real Go agent in `AGENT_ENROLL_MODE=approval`
+- verifies the request waits in the pending queue until operator approval
+- approves the request and confirms the same installed agent enters active mTLS check-in
+
+Current lab boundary:
+- the bundle/install path is real
+- the agent process is real
+- the service handoff is simulated by launching the installed agent directly after `agent-install.sh`
+  because this lab does not assume passwordless root or host systemd access
+
+---
+
+## 6) Verify Access Manually
 
 API health check:
 
@@ -124,7 +157,7 @@ UI:
 
 ---
 
-## 6) Seed Demo Load (Optional but Recommended)
+## 7) Seed Demo Load (Optional but Recommended)
 
 Seed devices + signed artifacts in one step:
 
@@ -148,7 +181,7 @@ DEMO_COUNT=3 APP_NAMES=customer,integration,ops VERSIONS=0.1.0,0.2.0,0.3.0 \
 
 ---
 
-## 7) Run the Full Validation Plan
+## 8) Run the Full Validation Plan
 
 Use:
 - `docs/testing/prod-docker-test-plan.md`
@@ -157,7 +190,7 @@ That plan includes feature checks, edge cases, and security hardening tests.
 
 ---
 
-## 8) Teardown / Reset
+## 9) Teardown / Reset
 
 Stop:
 

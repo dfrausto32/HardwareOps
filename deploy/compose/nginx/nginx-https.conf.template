@@ -49,8 +49,20 @@ http {
       proxy_pass http://$control_plane_upstream;
     }
 
-    # Enrollment remains token-based, but is only exposed on the agent host.
+    # Bootstrap enrollment remains token-based, but is only exposed on the agent host.
     location = /api/v1/devices/enroll {
+      if ($is_agent_host = 0) {
+        return 421;
+      }
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-Proto https;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Client-Cert $ssl_client_escaped_cert;
+      proxy_pass http://$control_plane_upstream;
+    }
+
+    # First-contact approval bootstrap is also agent-host only and does not require client certs.
+    location ~ ^/api/v1/pending-enrollments/(request|claim)$ {
       if ($is_agent_host = 0) {
         return 421;
       }

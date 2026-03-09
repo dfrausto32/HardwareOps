@@ -28,6 +28,7 @@ copy_common_agent_files() {
   cp -a "$BASE_DIR/scripts/agent-enroll.sh" "$stage/scripts/"
   cp -a "$BASE_DIR/scripts/install-agent-deps-ubuntu.sh" "$stage/scripts/"
   cp -a "$BASE_DIR/deploy/systemd/agent.env.example" "$stage/"
+  cp -a "$BASE_DIR/deploy/systemd/agent.env.example" "$stage/deploy/systemd/"
   cp -a "$BASE_DIR/deploy/systemd/hardwareops-agent.service" "$stage/deploy/systemd/"
   cp -a "$BASE_DIR/scripts/agent-install.sh" "$stage/scripts/"
 }
@@ -43,17 +44,36 @@ write_agent_readme() {
 HardwareOps Agent (linux)
 
 Install (systemd):
-  sudo ./scripts/agent-install.sh AGENT_SRC=./hardwareops-agent
-  sudo CONTROL_PLANE_URL=https://hardwareops.internal \
-       CA_CERT_PATH=/opt/hardwareops/certs/ca.crt \
-       ./scripts/agent-enroll.sh
-  sudo systemctl restart hardwareops-agent
+  sudo ./scripts/agent-install.sh \
+       AGENT_SRC=./hardwareops-agent \
+       CONTROL_PLANE_URL=https://agent.hardwareops.internal \
+       CONTROL_PLANE_CA_CERT_SRC=/opt/hardwareops/certs/ca.crt \
+       AGENT_ENROLL_MODE=approval \
+       ENROLLMENT_PROFILE_TOKEN=<bootstrap-token> \
+       START_SERVICE=1
+
+For public CA server trust:
+  add USE_SYSTEM_CA=1 and omit CONTROL_PLANE_CA_CERT_SRC
 
 Config:
   /etc/hardwareops/agent/agent.env
 
+Flow:
+  1. Create an enrollment profile in the control-plane Security UI or API.
+  2. Copy the bootstrap token to the device and copy the control-plane CA to
+     /opt/hardwareops/certs/ca.crt.
+  3. Run the install command above.
+  4. Approve the pending request.
+  5. Watch the agent move from approval bootstrap into normal mTLS check-in.
+
+Legacy direct enrollment:
+  sudo CONTROL_PLANE_URL=https://agent.hardwareops.internal \
+       CA_CERT_PATH=/opt/hardwareops/certs/ca.crt \
+       ./scripts/agent-enroll.sh
+
 Docs:
-  docs/agent-systemd.md (in the repo)
+  docs/agent-systemd.md
+  docs/installer-flow.md
 AGENT_LINUX
   else
     cat > "$filename" <<'AGENT_OTHER'

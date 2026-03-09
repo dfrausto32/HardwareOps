@@ -56,7 +56,22 @@ Expected:
 - login works
 - control-plane is healthy and stable
 
-### P0-2 Device connectivity
+### P0-2 First-contact approval onboarding
+
+1. Build the packaged Linux agent bundle:
+   - `AGENT_PLATFORMS=linux/<arch> CONTROL_PLANE_PLATFORMS=linux/<arch> BUILD_STACK=0 ./scripts/build-installers.sh`
+   - Use `amd64` on x86_64 hosts and `arm64` on ARM hosts.
+2. Run `./scripts/testing/prod-lab-first-contact.sh`.
+3. Capture the request ID, device ID, and final success output.
+
+Expected:
+- packaged installer path is exercised, not `run-demo-agent.sh`
+- agent stays alive in approval mode until the request is approved
+- same installed agent writes `device.crt` plus `device-id`
+- bootstrap state is cleared after issuance
+- device reaches active mTLS check-in without a second install pass
+
+### P0-3 Device connectivity
 
 1. Run `./scripts/run-demo-agent.sh` with lab CA.
 2. Confirm devices appear active in UI.
@@ -65,7 +80,7 @@ Expected:
 - check-ins every interval
 - no sustained TLS/check-in failures
 
-### P0-3 Signed artifact ingest + apply
+### P0-4 Signed artifact ingest + apply
 
 1. Upload signed artifact (or use `scripts/multi-app-artifacts.sh`).
 2. Set desired state for a connected device/group.
@@ -75,7 +90,7 @@ Expected:
 - desired/current converge
 - apply status is success with expected artifact ID
 
-### P0-4 Pull ingest hardening
+### P0-5 Pull ingest hardening
 
 1. Execute pull ingest from allowed host.
 2. Execute pull ingest from blocked host/internal IP target.
@@ -84,7 +99,7 @@ Expected:
 - allowed source succeeds
 - blocked target is rejected with policy error
 
-### P0-5 Backup + restore smoke
+### P0-6 Backup + restore smoke
 
 1. Create backup from UI (Settings -> Backups).
 2. Restore latest backup in lab.
@@ -94,7 +109,7 @@ Expected:
 - backup and restore complete
 - system returns to healthy state
 
-### P0-6 Certificate rotation smoke
+### P0-7 Certificate rotation smoke
 
 1. Trigger CA rotate from Security page.
 2. Trigger/observe agent re-enroll.
@@ -104,7 +119,7 @@ Expected:
 - new active CA fingerprint visible
 - devices continue check-ins post-rotation
 
-### P0-7 Metrics + events visible
+### P0-8 Metrics + events visible
 
 1. Check `/metrics` endpoint.
 2. Open UI Metrics page and Logs page history.

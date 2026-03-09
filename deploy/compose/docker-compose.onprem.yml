@@ -192,6 +192,12 @@ services:
       - control-plane
     restart: unless-stopped
 
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${COMPOSE_SUBNET:-172.29.240.0/24}
+
 volumes:
   pgdata:
   miniodata:
