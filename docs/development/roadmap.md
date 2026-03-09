@@ -10,7 +10,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 ---
 
 ## Program Snapshot (Parallel Session Staging)
-_Updated: 2026-03-05_
+_Updated: 2026-03-09_
 
 Use this section as the single source of truth for "what is done" vs "what is left."
 
@@ -20,19 +20,25 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Phase A — Foundation | 🟢 Complete | Core deployability, signing, upgrades, cert rotation, licensing, backup/restore are in place. |
 | Phase B — Operational Maturity | 🟢 Complete | Audit/metrics/events/lifecycle/CI ingest/bulk ops shipped and operational. |
 | Phase B Extension — UX + Realtime | 🟢 Complete | Bulk actions + realtime updates + auth-session UX reset shipped. |
-| Operational Hardening (between B and C) | 🟡 In progress | Most hardening tracks are complete; trusted-proxy CIDR tightening is still open. |
-| Phase C — Enterprise Readiness | 🟡 In progress | First-contact onboarding and break-glass APIs are in place; RBAC/UI closeout items remain. |
+| Operational Hardening (between B and C) | 🟢 Complete | Pull-boundary, token exposure, startup guardrails, break-glass backend, proxy trust policy, and abuse controls are all shipped. |
+| Phase C — Enterprise Readiness | 🟡 In progress | Backend RBAC, break-glass APIs, and first-contact backend are in place; UI parity and onboarding production closeout remain. |
 | Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment exists; production hardening and cloud maturity items remain. |
 
 ### Active work queue (what is still to do)
-1. **C-RBAC-CLOSEOUT** — Complete role-aware UI gating and verify endpoint/UI parity across pages.
-2. **HARDENING-PROXY-CIDR** — Tighten and validate trusted-proxy CIDR policy in hardened deployments.
-3. **D-AWS-HARDENING** — Finish least-privilege IAM/WAF/exec guardrails and production hardening pack acceptance checks.
+1. **C-RBAC-UI-PARITY** — Complete role-aware UI gating and verify page/action parity against backend policy.
+2. **C-ONBOARD-PROD-CLOSEOUT** — Finish first-contact onboarding production closeout: installer/bootstrap path, operator runbook, and full prod-lab validation.
+3. **D-AWS-HARDENING-IAM-WAF** — Finish least-privilege IAM, WAF attachment, and ingress policy split in Terraform.
+4. **D-AWS-HARDENING-RUNBOOK** — Finish AWS security acceptance checks, response wiring, and deployment/runbook validation.
 
-### Ready for parallel execution
-- Lane A: `C-RBAC-CLOSEOUT` + role-aware UI cleanup.
-- Lane B: `D-AWS-HARDENING` + Terraform/runbook hardening acceptance.
-- Lane C: `HARDENING-PROXY-CIDR` + trusted-proxy deployment validation.
+### Prepared next tasks (agent-scoped)
+- `agent-1` -> `C-RBAC-UI-PARITY`
+  Scope: audit every mutating UI control, hide/disable by role, and add regression coverage where missing.
+- `agent-2` -> `C-ONBOARD-PROD-CLOSEOUT`
+  Scope: production bootstrap flow for first-contact onboarding, operator runbook, and prod-docker-lab validation path.
+- `agent-3` -> `D-AWS-HARDENING-IAM-WAF`
+  Scope: least-privilege IAM, WAF wiring, and ingress CIDR split in Terraform.
+- `agent-4` -> `D-AWS-HARDENING-RUNBOOK`
+  Scope: AWS hardening verification checklist, alarm/response wiring, and deployment documentation updates.
 
 ---
 
@@ -63,6 +69,8 @@ Use this section as the single source of truth for "what is done" vs "what is le
 - ✅ Artifact signature enforcement policy (control-plane ingest guardrails + check-in applyPolicy defaults for agent-side verification).
 - ✅ Enrollment profile token reissue policy (rotate-time grace windows + rotation reason audit metadata).
 - ✅ Pending-enrollment queue telemetry closeout (`hwops_pending_enroll_queue_age_total`, `hwops_pending_enroll_oldest_age_seconds`, throttle-by-reason docs + alert thresholds).
+- ✅ Break-glass backend workflows (service-token revoke/rotate + cert rotation reason capture + audit coverage).
+- ✅ Trusted proxy CIDR hardening (strict wildcard rejection, hardened profile validation, and deployment docs/templates update).
 
 ---
 
@@ -257,15 +265,16 @@ Use this section as the single source of truth for "what is done" vs "what is le
 - **Notes:** Presigned CI push path implemented (`/artifacts/presign-upload` + `/artifacts/complete`) with scoped expiring service tokens (`artifact.publish`) and `scripts/ci-upload-artifact.sh`. Pull ingest API implemented (`/artifacts/pull`) with checksum validation + host/size/timeout guardrails plus CI helper `scripts/ci-pull-artifact.sh`. Adapter framework and backward-compatible source shape are in place (`sourceUrl` or `source.kind` + `source.uri`; current kinds=`http`,`artifactory`). Credential resolver abstraction is in place (`source.credentialRef`) with static map (`ARTIFACT_PULL_CREDENTIALS_FILE`/`ARTIFACT_PULL_CREDENTIALS_JSON`) plus AWS Secrets Manager-backed loading (`ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID`). Pull resolver operational workflow is implemented with admin status/reload endpoints (`GET/POST /api/v1/artifacts/pull-credentials*`) and helper script (`scripts/reload-pull-credentials.sh`). Artifactory adapter shipped with local docker smoke scripts (`scripts/setup-artifactory-demo.sh`, `scripts/test-artifactory-adapter.sh`) and signed artifact demo flow. Smoke coverage now validates push + pull + pull-credential reload audit path in `scripts/test-artifact-ingest.sh` (see `artifact-ingest-test-plan.md`). CI provider scaffold templates added for GitHub Actions/GitLab/Jenkins (`../../deploy/ci/README.md`). Vault resolver backend is deferred to Phase C.
 
 ### Recommended Next Sequence (Current)
-1. **RBAC closeout:** Finish `C-RBAC-CLOSEOUT` (role-aware UI parity across all pages and regression validation).
-2. **Break-glass hardening:** Implement `C-BREAKGLASS-ROTATION` (forced rotation + revoke flows with strong audit trail).
-3. **Trusted proxy hardening:** Finish `HARDENING-PROXY-CIDR` (strict CIDR validation/policy in hardened profile + deployment docs).
-4. **AWS production hardening:** Continue `D-AWS-HARDENING` acceptance checks and runbook finalization.
+1. **RBAC UI parity:** Finish `C-RBAC-UI-PARITY` so the browser matches the backend policy already enforced and tested.
+2. **First-contact production closeout:** Finish `C-ONBOARD-PROD-CLOSEOUT` so approval onboarding is documented and repeatable outside dev/demo flows.
+3. **AWS Terraform hardening:** Finish `D-AWS-HARDENING-IAM-WAF` for least-privilege IAM, WAF, and ingress segmentation.
+4. **AWS operational validation:** Finish `D-AWS-HARDENING-RUNBOOK` with acceptance checks, alarms, and response wiring.
 
 ### Suggested Next Implementation (MVP)
-1. **RBAC parity sweep:** Audit all UI actions/pages for role enforcement consistency and add missing gates.
-2. **Break-glass rotation API:** Add explicit rotate/revoke endpoints + operator UX + audit/event instrumentation.
-3. **AWS hardening acceptance pass:** Execute least-privilege IAM/WAF/exec guardrail verification and update runbooks.
+1. **Agent-1:** Role-aware UI sweep with a concrete page/action checklist.
+2. **Agent-2:** First-contact prod-lab validation and installer/bootstrap handoff path.
+3. **Agent-3:** Terraform IAM/WAF hardening implementation.
+4. **Agent-4:** AWS hardening runbook and acceptance test pass.
 
 ---
 
@@ -369,12 +378,12 @@ Use this section as the single source of truth for "what is done" vs "what is le
 - **Notes:** Control-plane now supports signature policy defaults (`ARTIFACT_SIGNATURE_REQUIRE_DEFAULT`, `ARTIFACT_SIGNATURE_KEY_ID`) that are merged into component `applyPolicy` at check-in time, so agents enforce signature verification without per-device env tuning. Optional ingest-time enforcement (`ARTIFACT_SIGNATURE_ENFORCE_INGEST=1`) blocks unsigned/wrong-key artifact registration in control-plane paths (`create`, `upload`, `pull`, `complete`).
 
 #### Trusted proxy allowlist tightening
-- **Status:** ⬜ Planned
+- **Status:** 🟢 Complete
 - **Scope:** Validate and constrain `TRUST_PROXY_CIDRS`; block wildcard/overbroad trust in hardened deployments.
 - **Dependencies:** Config validation, deployment runbooks.
 - **Risks:** Incorrect CIDRs can break real client IP/cert forwarding.
 - **Acceptance:** Forwarded headers are only honored from explicitly trusted proxy ranges.
-- **Notes:** Complements existing forwarded-header allowlist implementation.
+- **Notes:** Hardened startup now rejects insecure/wildcard proxy trust ranges, deploy templates default to explicit loopback/private CIDRs, and deployment docs now call out the on-prem/cloud trust model.
 
 ---
 
@@ -393,7 +402,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 - **Dependencies:** Auth middleware + policy checks.
 - **Risks:** Role creep.
 - **Acceptance:** Endpoints and UI gated correctly.
-- **Notes:** API role enforcement is in place and backend matrix tests now cover representative viewer/operator/admin routes plus `artifact.publish` service-token publish paths. UI gating remains partially implemented.
+- **Notes:** API role enforcement is in place and backend matrix tests now cover representative viewer/operator/admin routes plus `artifact.publish` service-token publish paths. Remaining work is browser parity and regression validation on every mutating view.
 
 #### Role-aware UI
 - **Status:** 🟡 In progress
@@ -401,7 +410,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 - **Dependencies:** RBAC roles.
 - **Risks:** Inconsistent UI behavior.
 - **Acceptance:** UI hides actions for non‑authorized roles.
-- **Notes:** Auth UI exists; remaining pages need role-aware gating.
+- **Notes:** This is the current `agent-1` task. Auth/session awareness exists; remaining work is a page-by-page parity sweep, disabled/hidden action cleanup, and regression validation.
 
 #### Custom RBAC policies
 - **Status:** ⬜ Planned
@@ -481,7 +490,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 - **Dependencies:** Audit logging, auth.
 - **Risks:** Misuse.
 - **Acceptance:** Emergency access is possible and auditable.
-- **Notes:** Bootstrap admin + voucher onboarding are in place. Break-glass service-token revoke/rotate and cert reload/rotate/cleanup APIs now require operator-authenticated reason capture and emit success/denied/error audit records.
+- **Notes:** Bootstrap admin + voucher onboarding are in place. Break-glass service-token revoke/rotate and cert reload/rotate/cleanup APIs require operator-authenticated reason capture and emit success/denied/error audit records.
 
 #### Agent first-contact approval onboarding (no pre-shipped client cert)
 - **Status:** 🟡 In progress
@@ -494,7 +503,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
   - Control-plane creates a pending enrollment record; operator can approve/deny in UI/API.
   - On approval, control-plane signs CSR and returns cert chain; agent transitions to normal mTLS check-in flow.
   - All actions (request/approve/deny/issue) are audited and subject to license/device-cap checks.
-- **Notes:** Draft API/workflow + exact agent bootstrap state machine: `agent-first-contact-onboarding.md`. Backend slices 1-2 shipped: enrollment profile creation/listing (`GET|POST /api/v1/enrollment-profiles`), profile update/edit (`PATCH /api/v1/enrollment-profiles/{profileId}`), profile token rotation (`POST /api/v1/enrollment-profiles/{profileId}/rotate`), profile enable/disable (`POST /api/v1/enrollment-profiles/{profileId}/enable|disable`), pending enrollment request (`POST /api/v1/pending-enrollments/request`), queue read (`GET /api/v1/pending-enrollments`), operator approve/deny/reset (`POST /api/v1/pending-enrollments/{requestId}/approve|deny|reset`), and agent claim (`POST /api/v1/pending-enrollments/claim`) that issues certs after approval. Conflict claim paths now persist `status=conflict`, and reset tooling reopens denied/conflict/expired requests. Anti-spam / abuse controls are now in place: optional per-profile enrollment challenge, per-source + per-profile request rate limits, active pending queue caps, explicit pending queue/throttle metrics, queue-age telemetry buckets + oldest-age gauge, approval-delay throttles surfaced in the Security UI, and approval-delay validation so profiles cannot outlive the pending request TTL. Security UI now includes enrollment profile management with labels, in-place profile editing (labels/challenge/delay), one-click copy/download for freshly issued bootstrap tokens, token rotation, a pending-enrollment queue with approve/deny/reset actions, and a global approval alert that jumps directly to Security. Dev/demo launcher supports pending mode for local testing, including profile default-label injection. The real Go agent now has an approval-mode scaffold behind `AGENT_ENROLL_MODE=approval`, with persisted `bootstrap-state.json`, CSR request/claim polling, identity materialization into `device.crt` + `device-id`, retry behavior that can resume after operator resets, reenroll CA persistence so private-CA rotation propagates correctly after `device.reenroll`, and coverage proving enrollment profile default labels drive first check-in group desired-state resolution. Token reissue policy tuning is now in place via rotate-time grace windows (`gracePeriodSec`) and rotation-reason audit metadata.
+- **Notes:** Draft API/workflow + exact agent bootstrap state machine: `agent-first-contact-onboarding.md`. Backend slices 1-2 shipped: enrollment profile creation/listing (`GET|POST /api/v1/enrollment-profiles`), profile update/edit (`PATCH /api/v1/enrollment-profiles/{profileId}`), profile token rotation (`POST /api/v1/enrollment-profiles/{profileId}/rotate`), profile enable/disable (`POST /api/v1/enrollment-profiles/{profileId}/enable|disable`), pending enrollment request (`POST /api/v1/pending-enrollments/request`), queue read (`GET /api/v1/pending-enrollments`), operator approve/deny/reset (`POST /api/v1/pending-enrollments/{requestId}/approve|deny|reset`), and agent claim (`POST /api/v1/pending-enrollments/claim`) that issues certs after approval. Conflict claim paths now persist `status=conflict`, and reset tooling reopens denied/conflict/expired requests. Anti-spam / abuse controls are now in place: optional per-profile enrollment challenge, per-source + per-profile request rate limits, active pending queue caps, explicit pending queue/throttle metrics, queue-age telemetry buckets + oldest-age gauge, approval-delay throttles surfaced in the Security UI, and approval-delay validation so profiles cannot outlive the pending request TTL. Security UI now includes enrollment profile management with labels, in-place profile editing (labels/challenge/delay), one-click copy/download for freshly issued bootstrap tokens, token rotation, a pending-enrollment queue with approve/deny/reset actions, and a global approval alert that jumps directly to Security. Dev/demo launcher supports pending mode for local testing, including profile default-label injection. The real Go agent now has an approval-mode scaffold behind `AGENT_ENROLL_MODE=approval`, with persisted `bootstrap-state.json`, CSR request/claim polling, identity materialization into `device.crt` + `device-id`, retry behavior that can resume after operator resets, reenroll CA persistence so private-CA rotation propagates correctly after `device.reenroll`, and coverage proving enrollment profile default labels drive first check-in group desired-state resolution. Token reissue policy tuning is now in place via rotate-time grace windows (`gracePeriodSec`) and rotation-reason audit metadata. Remaining work is production bootstrap packaging/install flow, operator runbook clarity, and full prod-docker-lab acceptance.
 
 ---
 
