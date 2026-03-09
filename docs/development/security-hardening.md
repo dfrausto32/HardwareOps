@@ -79,3 +79,20 @@ Scope reviewed: control-plane security model, auth/RBAC posture, certificate mod
 - ECS exec disabled by default in production.
 - Security alarms active with tested paging path.
 - RBAC enforced consistently in API and UI.
+
+## AWS Acceptance Execution
+
+Use `aws-customer-deployment-runbook.md` as the operator-facing acceptance procedure and `../../scripts/aws-hardening-check.sh` as the release-gate helper.
+
+Required evidence for the AWS hardening closeout:
+- pre-apply config gate output
+- post-apply deployment gate output
+- raw AWS CLI evidence for secrets path, IAM policy scope, WAF association, ingress policy, and ECS Exec posture
+- SNS subscription confirmation and test publish evidence
+- CloudWatch alarm inventory tied to the on-call SNS topic
+
+Known repo-state failures should remain visible until fixed:
+- shared ingress CIDR model instead of split app/device ingress policy
+- plaintext `DATABASE_URL` injection in `customer_stack`
+- `enable_execute_command` defaulting to true in `modules/ecs`
+- missing Terraform-managed WAF and alarm resources in this branch
