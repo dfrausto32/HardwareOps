@@ -43,8 +43,8 @@ control_plane_env = {
   AUTH_JWT_SECRET         = "replace-with-long-random-secret"
   AUTH_BOOTSTRAP_EMAIL    = "admin@customer-a.example.com"
   AUTH_BOOTSTRAP_PASSWORD = "replace-with-bootstrap-password"
-  # Optional override; default is stack vpc_cidr.
-  # TRUST_PROXY_CIDRS       = "10.60.0.0/16"
+  # Optional override; default is the private_subnet_cidrs values.
+  # TRUST_PROXY_CIDRS       = "10.60.64.0/20,10.60.80.0/20,10.60.96.0/20"
 }
 
 gateway_env = {}

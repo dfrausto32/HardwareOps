@@ -41,6 +41,8 @@ Copy bundle to target host, then:
 tar -xzf hardwareops-stack-<version>-linux-<arch>.tar.gz
 cd stack-<version>-linux-<arch>
 sudo ./scripts/install-docker-ubuntu.sh
+cp .env.onprem.example .env.onprem
+# edit .env.onprem before first start, especially TRUST_PROXY_CIDRS
 sudo ./scripts/run-stack.sh
 ```
 
@@ -185,8 +187,8 @@ TRUST_PROXY=1
 TRUST_PROXY_CIDRS=<restricted-cidrs-only>
 ```
 
-- On AWS, default is VPC CIDR via Terraform.
-- On-prem, set this to your gateway/proxy subnet only.
+- On AWS, default is the ECS private subnet CIDRs via Terraform.
+- On-prem bundle templates now default to loopback-only trust; replace `TRUST_PROXY_CIDRS` with your real gateway/proxy subnet(s) before enabling `HARDENED_PROFILE=1`.
 
 ### 4.2 Auth defaults
 

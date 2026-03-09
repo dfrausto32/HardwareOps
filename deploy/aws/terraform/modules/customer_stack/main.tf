@@ -20,7 +20,7 @@ locals {
     AUTO_MIGRATE       = "1"
     MIGRATIONS_DIR     = "/app/migrations"
     TRUST_PROXY        = "1"
-    TRUST_PROXY_CIDRS  = var.vpc_cidr
+    TRUST_PROXY_CIDRS  = join(",", values(var.private_subnet_cidrs))
     CLIENT_CERT_HEADER = "X-Client-Cert"
   }
   artifact_pull_credentials_secret_id = trimspace(var.artifact_pull_credentials_aws_secret_id != null ? var.artifact_pull_credentials_aws_secret_id : "")

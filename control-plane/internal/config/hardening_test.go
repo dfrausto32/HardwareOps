@@ -281,10 +281,21 @@ func TestValidateHardening(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "trust proxy cidrs must be explicit when trust proxy enabled",
+			cfg: func() Config {
+				c := base
+				c.TrustProxy = true
+				c.TrustedProxyCIDRs = []string{"10.40.64.0/20"}
+				return c
+			}(),
+			wantErr: true,
+		},
+		{
 			name: "trust proxy cidr required when trust proxy enabled",
 			cfg: func() Config {
 				c := base
 				c.TrustProxy = true
+				c.TrustedProxyCIDRsExplicit = true
 				c.TrustedProxyCIDRs = nil
 				return c
 			}(),
@@ -294,6 +305,8 @@ func TestValidateHardening(t *testing.T) {
 			name: "invalid trust proxy cidr rejected",
 			cfg: func() Config {
 				c := base
+				c.TrustProxy = true
+				c.TrustedProxyCIDRsExplicit = true
 				c.TrustedProxyCIDRs = []string{"not-a-cidr"}
 				return c
 			}(),
@@ -303,17 +316,62 @@ func TestValidateHardening(t *testing.T) {
 			name: "wildcard trust proxy cidr rejected",
 			cfg: func() Config {
 				c := base
+				c.TrustProxy = true
+				c.TrustedProxyCIDRsExplicit = true
 				c.TrustedProxyCIDRs = []string{"0.0.0.0/0"}
 				return c
 			}(),
 			wantErr: true,
 		},
 		{
+			name: "overbroad trust proxy cidr rejected",
+			cfg: func() Config {
+				c := base
+				c.TrustProxy = true
+				c.TrustedProxyCIDRsExplicit = true
+				c.TrustedProxyCIDRs = []string{"10.0.0.0/8"}
+				return c
+			}(),
+			wantErr: true,
+		},
+		{
+			name: "overbroad ipv6 trust proxy cidr rejected",
+			cfg: func() Config {
+				c := base
+				c.TrustProxy = true
+				c.TrustedProxyCIDRsExplicit = true
+				c.TrustedProxyCIDRs = []string{"fc00::/7"}
+				return c
+			}(),
+			wantErr: true,
+		},
+		{
+			name: "broad trust proxy cidrs ignored when proxy trust disabled",
+			cfg: func() Config {
+				c := base
+				c.TrustedProxyCIDRs = []string{"10.0.0.0/8", "192.168.0.0/16"}
+				return c
+			}(),
+			wantErr: false,
+		},
+		{
 			name: "valid trust proxy cidr allowed",
 			cfg: func() Config {
 				c := base
 				c.TrustProxy = true
-				c.TrustedProxyCIDRs = []string{"10.0.0.0/8", "127.0.0.1/32"}
+				c.TrustedProxyCIDRsExplicit = true
+				c.TrustedProxyCIDRs = []string{"10.40.64.0/20", "127.0.0.1/32"}
+				return c
+			}(),
+			wantErr: false,
+		},
+		{
+			name: "single proxy ip allowed",
+			cfg: func() Config {
+				c := base
+				c.TrustProxy = true
+				c.TrustedProxyCIDRsExplicit = true
+				c.TrustedProxyCIDRs = []string{"10.40.64.10"}
 				return c
 			}(),
 			wantErr: false,
