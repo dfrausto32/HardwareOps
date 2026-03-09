@@ -73,6 +73,7 @@ import {
   setAuthToken as persistAuthToken,
   subscribeAuthExpired,
 } from './api'
+import { buildPermissionState, firstAllowedKey } from './rbac'
 
 const nav = [
   { id: 'dashboard', label: 'Dashboard', icon: 'icon-dashboard' },
@@ -80,6 +81,12 @@ const nav = [
   { id: 'logs', label: 'Logs', icon: 'icon-logs' },
   { id: 'security', label: 'Security', icon: 'icon-security' },
   { id: 'settings', label: 'Settings', icon: 'icon-settings' },
+]
+
+const logsNav = [
+  { id: 'events', label: 'Live Events' },
+  { id: 'device', label: 'Device Logs' },
+  { id: 'audit', label: 'Audit Log' },
 ]
 
 const componentTypes = [
@@ -801,6 +808,10 @@ export default function App() {
   const [bootstrapStatusMessage, setBootstrapStatusMessage] = useState('')
   const [authView, setAuthView] = useState('login')
   const [authStatus, setAuthStatus] = useState({ enabled: false, mode: 'disabled', loaded: false })
+  const permissions = useMemo(
+    () => buildPermissionState({ authEnabled: authStatus.enabled, roles: authUser?.roles || [] }),
+    [authStatus.enabled, authUser],
+  )
   const [registerForm, setRegisterForm] = useState({
     token: '',
     email: '',
@@ -829,6 +840,22 @@ export default function App() {
     const hash = window.location.hash.replace('#', '')
     return hash || 'dashboard'
   })
+  const visibleNav = useMemo(
+    () => nav.filter((item) => permissions.views[item.id]),
+    [permissions],
+  )
+  const visibleLogsTabs = useMemo(
+    () => logsNav.filter((item) => permissions.logsTabs[item.id]),
+    [permissions],
+  )
+  const fallbackView = useMemo(
+    () => firstAllowedKey(permissions.views, 'dashboard'),
+    [permissions],
+  )
+  const fallbackLogsTab = useMemo(
+    () => firstAllowedKey(permissions.logsTabs, 'events'),
+    [permissions],
+  )
 
   useEffect(() => {
     const onHash = () => {
@@ -896,9 +923,20 @@ export default function App() {
   }, [authToken])
 
   useEffect(() => {
-    if (!authToken) return
+    if (!authToken) {
+      setUsers([])
+      return
+    }
     loadUsers()
-  }, [authToken])
+  }, [authToken, permissions.canManageUsers])
+
+  useEffect(() => {
+    if (!authStatus.loaded || permissions.views[view]) return
+    setView(fallbackView)
+    if (window.location.hash.replace('#', '') !== fallbackView) {
+      window.location.hash = fallbackView
+    }
+  }, [authStatus.loaded, permissions, view, fallbackView])
 
   useEffect(() => {
     return subscribeAuthExpired(() => {
@@ -1357,6 +1395,7 @@ export default function App() {
   }
 
   function openArtifactPicker(scope, index) {
+    if (!canManageDesiredState) return
     setArtifactPickerTarget({ scope, index })
     setArtifactModalOpen(true)
   }
@@ -1390,6 +1429,9 @@ export default function App() {
     if (authStatus.loaded && authStatus.enabled && !authToken) {
       return
     }
+    if (authStatus.loaded && authStatus.enabled && authToken && !authUser) {
+      return
+    }
     loadDevices()
     loadGroups()
     loadArtifacts()
@@ -1406,7 +1448,7 @@ export default function App() {
     loadBackupStatus()
     loadRestoreStatus()
     loadAuditRetention()
-  }, [authStatus.loaded, authStatus.enabled, authToken])
+  }, [authStatus.loaded, authStatus.enabled, authToken, authUser, permissions])
 
   useEffect(() => {
     if (!selectedDeviceId) return
@@ -1497,27 +1539,53 @@ export default function App() {
     return () => clearInterval(timer)
   }, [restoreStatus.running])
 
-  const isAdmin = useMemo(() => {
-    if (!authStatus.enabled) return true
-    return (authUser?.roles || []).includes('admin')
-  }, [authStatus.enabled, authUser])
-  const canManageArtifacts = useMemo(() => {
-    if (!authStatus.enabled) return true
-    const roles = authUser?.roles || []
-    return roles.includes('operator') || roles.includes('admin')
-  }, [authStatus.enabled, authUser])
-  const canManageArtifactLifecycle = useMemo(() => {
-    if (!authStatus.enabled) return true
-    return (authUser?.roles || []).includes('admin')
-  }, [authStatus.enabled, authUser])
-  const canRotate = useMemo(() => {
-    return !authStatus.enabled || isAdmin
-  }, [authStatus.enabled, isAdmin])
-  const canManagePendingEnrollments = useMemo(() => {
-    if (!authStatus.enabled) return true
-    const roles = authUser?.roles || []
-    return roles.includes('operator') || roles.includes('admin')
-  }, [authStatus.enabled, authUser])
+  const canViewMetrics = permissions.canViewMetrics
+  const canViewAudit = permissions.canViewAudit
+  const canManageUsers = permissions.canManageUsers
+  const canManageArtifacts = permissions.canManageArtifacts
+  const canManageArtifactLifecycle = permissions.canManageArtifactLifecycle
+  const canManageDesiredState = permissions.canManageDesiredState
+  const canManageGroups = permissions.canManageGroups
+  const canEditDeviceLabels = permissions.canEditDeviceLabels
+  const canDecommissionDevices = permissions.canDecommissionDevices
+  const canRotate = permissions.canRotateCertificates
+  const canManagePendingEnrollments = permissions.canManagePendingEnrollments
+  const canManageMaintenance = permissions.canManageMaintenance
+  const canViewBackups = permissions.canViewBackups
+  const canManageBackups = permissions.canManageBackups
+  const canManageReleaseAutoUpdate = permissions.canManageReleaseAutoUpdate
+  const canManageAuditRetention = permissions.canManageAuditRetention
+  const canManageEventRetention = permissions.canManageEventRetention
+  const canApplyUpgrade = permissions.canApplyUpgrade
+
+  useEffect(() => {
+    if (permissions.logsTabs[logsTab]) return
+    setLogsTab(fallbackLogsTab)
+  }, [permissions, logsTab, fallbackLogsTab])
+
+  useEffect(() => {
+    if (canManageArtifacts) return
+    setArtifactUploadOpen(false)
+  }, [canManageArtifacts])
+
+  useEffect(() => {
+    if (canManageGroups) return
+    setGroupModalOpen(false)
+    setGroupMultiEditOpen(false)
+    setGroupBulkOpen(false)
+  }, [canManageGroups])
+
+  useEffect(() => {
+    if (canManageDesiredState) return
+    setGroupDesiredOpen(false)
+    setGroupMultiDesiredOpen(false)
+  }, [canManageDesiredState])
+
+  useEffect(() => {
+    if (canManagePendingEnrollments) return
+    setEnrollmentProfileCreateOpen(false)
+    setEditingEnrollmentProfileId('')
+  }, [canManagePendingEnrollments])
 
   useEffect(() => {
     if (view !== 'dashboard') return undefined
@@ -1535,7 +1603,7 @@ export default function App() {
       loadMetrics()
     }, 15000)
     return () => clearInterval(timer)
-  }, [view, authStatus.enabled, isAdmin])
+  }, [view, canViewMetrics])
 
   useEffect(() => {
     if (view !== 'security') return undefined
@@ -1582,10 +1650,10 @@ export default function App() {
   useEffect(() => {
     if (view !== 'logs' || logsTab !== 'events') return
     loadEventsHistory()
-    if (!authStatus.enabled || isAdmin) {
+    if (canManageEventRetention) {
       loadEventRetention()
     }
-  }, [view, logsTab, authStatus.enabled, isAdmin])
+  }, [view, logsTab, canManageEventRetention])
 
   useEffect(() => {
     if (!deviceDrawerOpen) return
@@ -1839,6 +1907,12 @@ export default function App() {
   }
 
   async function loadUsers() {
+    if (!canManageUsers) {
+      setUsers([])
+      setUsersStatus('')
+      setUsersError('')
+      return
+    }
     setUsersStatus('Loading users...')
     setUsersError('')
     try {
@@ -1852,6 +1926,7 @@ export default function App() {
   }
 
   async function submitUser() {
+    if (!canManageUsers) return
     setUsersStatus('Creating user...')
     setUsersError('')
     try {
@@ -1901,6 +1976,7 @@ export default function App() {
   }
 
   async function submitVoucher() {
+    if (!canManageUsers) return
     setVoucherStatus('Creating voucher...')
     setVoucherToken('')
     setUsersError('')
@@ -2028,6 +2104,7 @@ export default function App() {
 
   function handleUpload(e) {
     e.preventDefault()
+    if (!canManageArtifacts) return
     const form = e.currentTarget
     const formData = new FormData(form)
     setUploadStatus('Uploading...')
@@ -2043,6 +2120,7 @@ export default function App() {
 
   function handleDesiredDevice(e) {
     e.preventDefault()
+    if (!canManageDesiredState) return
     setDesiredStatus('Setting desired state...')
     const { components, error } = buildComponentsPayload(deviceForm.components)
     if (error) {
@@ -2076,6 +2154,10 @@ export default function App() {
   }
 
   async function decommissionDeviceIDs(deviceIDs, reason, statusLabel = 'Decommissioning devices') {
+    if (!canDecommissionDevices) {
+      setDevicesError('Admin role required to decommission devices')
+      return { succeeded: 0, failed: 0, failedIDs: deviceIDs || [] }
+    }
     const targets = Array.from(new Set(deviceIDs.filter(Boolean)))
     if (targets.length === 0) return { succeeded: 0, failed: 0, failedIDs: [] }
 
@@ -2117,7 +2199,7 @@ export default function App() {
   }
 
   async function handleDeleteDevice(deviceId) {
-    if (authStatus.enabled && !isAdmin) {
+    if (!canDecommissionDevices) {
       setDevicesError('Admin role required to decommission devices')
       return
     }
@@ -2169,7 +2251,7 @@ export default function App() {
 
   async function handleBulkDecommissionSelectedDevices() {
     if (selectedDeviceIds.length === 0) return
-    if (authStatus.enabled && !isAdmin) {
+    if (!canDecommissionDevices) {
       setDevicesError('Admin role required to decommission devices')
       return
     }
@@ -2183,6 +2265,7 @@ export default function App() {
   }
 
   async function handleDeleteArtifact(artifactId) {
+    if (!canManageArtifacts) return
     const ok = window.confirm(`Delete artifact ${artifactId}?`)
     if (!ok) return
     setArtifactsStatus('Deleting artifact...')
@@ -2236,6 +2319,7 @@ export default function App() {
   }
 
   async function handleBulkDeleteSelectedArtifacts() {
+    if (!canManageArtifacts) return
     if (selectedArtifactIds.length === 0) return
     const selectedRows = selectedArtifactIds
       .map((artifactId) => artifactByID[artifactId])
@@ -2285,6 +2369,7 @@ export default function App() {
   }
 
   async function handleBulkDeprecateSelectedArtifacts() {
+    if (!canManageArtifacts) return
     if (selectedArtifactIds.length === 0) return
     const selectedRows = selectedArtifactIds
       .map((artifactId) => artifactByID[artifactId])
@@ -2333,6 +2418,7 @@ export default function App() {
   }
 
   async function handleDeprecateArtifact(artifactId) {
+    if (!canManageArtifacts) return
     const ok = window.confirm(`Deprecate artifact ${artifactId}?`)
     if (!ok) return
     setArtifactsStatus('Deprecating artifact...')
@@ -2346,6 +2432,7 @@ export default function App() {
   }
 
   async function handleRestoreArtifact(artifactId) {
+    if (!canManageArtifacts) return
     const ok = window.confirm(`Restore artifact ${artifactId} to active state?`)
     if (!ok) return
     setArtifactsStatus('Restoring artifact...')
@@ -2359,6 +2446,7 @@ export default function App() {
   }
 
   async function handleSaveArtifactLifecyclePolicy() {
+    if (!canManageArtifactLifecycle) return
     const days = Number(artifactLifecyclePolicyInput)
     if (!Number.isFinite(days) || days < 1) {
       setArtifactsError('Retention days must be >= 1.')
@@ -2379,7 +2467,7 @@ export default function App() {
   }
 
   async function handleSaveReleaseAutoUpdateSettings() {
-    if (authStatus.enabled && !isAdmin) return
+    if (!canManageReleaseAutoUpdate) return
     setReleaseAutoUpdateSaving(true)
     setReleaseAutoUpdateStatus('Saving release auto-update settings...')
     try {
@@ -2407,7 +2495,7 @@ export default function App() {
   }
 
   async function handleRunReleaseAutoUpdate() {
-    if (authStatus.enabled && !isAdmin) return
+    if (!canManageReleaseAutoUpdate) return
     setReleaseAutoUpdateSaving(true)
     setReleaseAutoUpdateStatus('Running release auto-update...')
     try {
@@ -2430,6 +2518,7 @@ export default function App() {
   }
 
   async function handlePruneArtifacts() {
+    if (!canManageArtifactLifecycle) return
     const ok = window.confirm('Prune deprecated artifacts that reached delete-after and are no longer referenced?')
     if (!ok) return
     setArtifactsStatus('Pruning deprecated artifacts...')
@@ -2446,6 +2535,7 @@ export default function App() {
 
   async function handleSaveGroup(e) {
     e.preventDefault()
+    if (!canManageGroups) return
     setGroupsStatus('')
     setGroupsError('')
     const selector = {}
@@ -2478,16 +2568,20 @@ export default function App() {
   }
 
   async function handleDeleteGroup(groupId, forceCascade = false) {
+    if (!canManageGroups) return
+    if (forceCascade && !canDecommissionDevices) return
     const ok = window.confirm(`Delete group ${groupId}? This removes desired state for the group.`)
     if (!ok) return
     const cascadeDeviceIDs = listDevicesMatchingGroups([groupId])
     let cascade = forceCascade
-    if (cascadeDeviceIDs.length > 0) {
+    if (cascadeDeviceIDs.length > 0 && canDecommissionDevices) {
       if (!forceCascade) {
         cascade = window.confirm(
           `Also decommission ${cascadeDeviceIDs.length} matching device(s)?\n\nOK = delete group + decommission devices\nCancel = delete group only`,
         )
       }
+    } else {
+      cascade = false
     }
     setGroupsStatus('Deleting group...')
     try {
@@ -2513,6 +2607,10 @@ export default function App() {
   }
 
   async function applyGroupBatchActions(actions, statusPrefix) {
+    if (!canManageGroups) {
+      setGroupBatchError('Operator role required to manage groups.')
+      return { applied: 0, failed: Array.isArray(actions) ? actions.length : 0, results: [] }
+    }
     if (!actions || actions.length === 0) {
       setGroupBatchError('No actions to apply.')
       return { applied: 0, failed: 0, results: [] }
@@ -2581,6 +2679,8 @@ export default function App() {
   }
 
   async function handleBulkDeleteSelectedGroups(forceCascade = false) {
+    if (!canManageGroups) return
+    if (forceCascade && !canDecommissionDevices) return
     if (selectedGroupIds.length === 0) return
     const cascadeDeviceIDs = listDevicesMatchingGroups(selectedGroupIds)
     let cascade = forceCascade
@@ -2589,10 +2689,12 @@ export default function App() {
     )
     if (!confirmed) return
 
-    if (cascadeDeviceIDs.length > 0 && !forceCascade) {
+    if (cascadeDeviceIDs.length > 0 && canDecommissionDevices && !forceCascade) {
       cascade = window.confirm(
         `Also decommission ${cascadeDeviceIDs.length} matching device(s)?\n\nOK = delete groups + decommission devices\nCancel = delete groups only`,
       )
+    } else if (!canDecommissionDevices) {
+      cascade = false
     }
 
     const actions = selectedGroupIds.map((groupId) => ({ action: 'delete', groupId }))
@@ -2641,6 +2743,7 @@ export default function App() {
   }
 
   function openGroupMultiEdit() {
+    if (!canManageGroups) return
     if (selectedGroupIds.length === 0) return
     setGroupMultiEditError('')
     setGroupMultiEditStatus('')
@@ -2654,6 +2757,7 @@ export default function App() {
   }
 
   async function handleApplyGroupMultiEdit() {
+    if (!canManageGroups) return
     const selected = selectedGroupsSnapshot()
     if (selected.length === 0) return
     setGroupMultiEditError('')
@@ -2704,6 +2808,7 @@ export default function App() {
   }
 
   function openGroupMultiDesired() {
+    if (!canManageDesiredState) return
     if (selectedGroupIds.length === 0) return
     setGroupMultiDesiredError('')
     setGroupMultiDesiredStatus('')
@@ -2716,6 +2821,7 @@ export default function App() {
 
   async function handleApplyGroupMultiDesired(e) {
     if (e) e.preventDefault()
+    if (!canManageDesiredState) return
     const selected = selectedGroupsSnapshot()
     if (selected.length === 0) return
     setGroupMultiDesiredError('')
@@ -2750,6 +2856,7 @@ export default function App() {
   }
 
   async function handleGroupDeviceToggle(group, device, shouldAdd) {
+    if (!canEditDeviceLabels) return
     const selector = normalizeObject(group.selector)
     const labels = normalizeObject(device.labels)
     const nextLabels = { ...labels }
@@ -2775,6 +2882,7 @@ export default function App() {
   }
 
   async function handleClearDeviceOverride() {
+    if (!canManageDesiredState) return
     if (!selectedDeviceId) return
     const ok = window.confirm('Clear device override and use group desired state?')
     if (!ok) return
@@ -2791,6 +2899,7 @@ export default function App() {
 
   async function handleGroupDesired(e) {
     e.preventDefault()
+    if (!canManageDesiredState) return
     setGroupsStatus('Setting group desired state...')
     const { components, error } = buildComponentsPayload(groupDesiredForm.components)
     if (error) {
@@ -2814,6 +2923,7 @@ export default function App() {
   }
 
   function handlePreviewGroupBulk() {
+    if (!canManageGroups) return
     setGroupBulkError('')
     setGroupBulkStatus('')
     setGroupBulkRollbackCsv('')
@@ -2827,6 +2937,7 @@ export default function App() {
   }
 
   async function handleGroupBulkFileChange(event) {
+    if (!canManageGroups) return
     const file = event.target.files?.[0]
     if (!file) return
     try {
@@ -2842,6 +2953,7 @@ export default function App() {
   }
 
   function downloadGroupBulkRollback() {
+    if (!canManageGroups) return
     if (!groupBulkRollbackCsv) return
     const blob = new Blob([groupBulkRollbackCsv], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
@@ -2853,6 +2965,7 @@ export default function App() {
   }
 
   function downloadGroupBulkTemplate() {
+    if (!canManageGroups) return
     const template = [
       'action,groupId,name,region,role,site,selector_json,selector.customer',
       'upsert,,canary-west,west,edge,lab-1,,acme',
@@ -2869,6 +2982,7 @@ export default function App() {
   }
 
   async function handleApplyGroupBulk() {
+    if (!canManageGroups) return
     const plan = groupBulkPreview || parseBulkGroupsCsv(groupBulkCsv, groups)
     setGroupBulkPreview(plan)
     if (plan.summary.errorRows > 0) {
@@ -2983,6 +3097,7 @@ export default function App() {
   }
 
   async function handleClearGroupDesired() {
+    if (!canManageDesiredState) return
     if (!selectedGroupId) return
     const ok = window.confirm('Clear desired state for this group?')
     if (!ok) return
@@ -3079,6 +3194,12 @@ export default function App() {
   }
 
   async function loadAudit() {
+    if (!canViewAudit) {
+      setAuditRows([])
+      setAuditError('')
+      setAuditLoading(false)
+      return
+    }
     setAuditLoading(true)
     setAuditError('')
     try {
@@ -3218,12 +3339,14 @@ export default function App() {
   }
 
   function handleOpenCreateEnrollmentProfile() {
+    if (!canManagePendingEnrollments) return
     setEnrollmentProfilesError('')
     setEnrollmentProfilesStatus('')
     setEnrollmentProfileCreateOpen(true)
   }
 
   function handleStartEditEnrollmentProfile(profile) {
+    if (!canManagePendingEnrollments) return
     setEditingEnrollmentProfileId(profile.profileId)
     setEnrollmentProfileEditForm({
       name: profile.name || '',
@@ -3414,6 +3537,7 @@ export default function App() {
   }
 
   async function downloadAudit() {
+    if (!canViewAudit) return
     try {
       const csv = await downloadAuditCSV(buildAuditParams())
       const blob = new Blob([csv], { type: 'text/csv' })
@@ -3492,6 +3616,12 @@ export default function App() {
   }
 
   async function loadAuditRetention() {
+    if (!canManageAuditRetention) {
+      setAuditRetentionState({ days: 90, updatedAt: '' })
+      setAuditRetentionDays('90')
+      setAuditRetentionStatus('')
+      return
+    }
     try {
       const res = await getAuditRetention()
       setAuditRetentionState(res)
@@ -3504,6 +3634,12 @@ export default function App() {
   }
 
   async function loadEventRetention() {
+    if (!canManageEventRetention) {
+      setEventRetentionState({ days: 30, updatedAt: '' })
+      setEventRetentionDays('30')
+      setEventRetentionStatus('')
+      return
+    }
     try {
       const res = await getEventRetention()
       setEventRetentionState(res)
@@ -3516,6 +3652,7 @@ export default function App() {
   }
 
   async function updateEventRetention() {
+    if (!canManageEventRetention) return
     const value = Number(eventRetentionDays)
     if (!value || value <= 0) return
     setEventRetentionStatus('Updating retention...')
@@ -3531,6 +3668,7 @@ export default function App() {
   }
 
   async function updateAuditRetention() {
+    if (!canManageAuditRetention) return
     const value = Number(auditRetentionDays)
     if (!value || value <= 0) return
     setAuditRetentionStatus('Updating retention...')
@@ -3621,7 +3759,24 @@ export default function App() {
   }
 
   async function loadMetrics() {
-    if (authStatus.enabled && !isAdmin) return
+    if (!canViewMetrics) {
+      setMetricsError('')
+      setMetricsHistory([])
+      setMetricsSnapshot({
+        dbOpenConns: null,
+        dbInUse: null,
+        dbWaitCount: null,
+        s3ObjectsTotal: null,
+        s3BytesTotal: null,
+        devicesTotal: null,
+        pendingEnrollActive: null,
+        pendingEnrollThrottleTotal: null,
+        httpLatencyAvg: null,
+        devicesStatus: {},
+        updatedAt: '',
+      })
+      return
+    }
     setMetricsError('')
     try {
       const text = await getMetricsText()
@@ -3702,6 +3857,12 @@ export default function App() {
   }
 
   async function loadBackups() {
+    if (!canViewBackups) {
+      setBackups([])
+      setSelectedBackupId('')
+      setBackupError('')
+      return
+    }
     setBackupError('')
     try {
       const res = await listBackups()
@@ -3715,6 +3876,11 @@ export default function App() {
   }
 
   async function loadBackupStatus() {
+    if (!canViewBackups) {
+      setBackupStatus({ enabled: false, running: false, state: 'disabled' })
+      setBackupError('')
+      return
+    }
     setBackupError('')
     try {
       const res = await getBackupStatus()
@@ -3725,6 +3891,11 @@ export default function App() {
   }
 
   async function loadRestoreStatus() {
+    if (!canViewBackups) {
+      setRestoreStatus({ enabled: false, running: false, state: 'disabled' })
+      setBackupError('')
+      return
+    }
     setBackupError('')
     try {
       const res = await getRestoreStatus()
@@ -3735,7 +3906,7 @@ export default function App() {
   }
 
   async function handleStartBackup() {
-    if (!isAdmin) return
+    if (!canManageBackups) return
     setBackupMessage('Starting backup...')
     setBackupError('')
     try {
@@ -3750,7 +3921,7 @@ export default function App() {
   }
 
   async function handleRestore() {
-    if (!isAdmin) return
+    if (!canManageBackups) return
     if (!selectedBackupId) {
       setBackupError('Select a backup to restore')
       return
@@ -3772,7 +3943,7 @@ export default function App() {
   }
 
   async function toggleMaintenance() {
-    if (!isAdmin) return
+    if (!canManageMaintenance) return
     const nextEnabled = !maintenance.enabled
     let message = maintenance.message || ''
     if (nextEnabled) {
@@ -3794,7 +3965,7 @@ export default function App() {
   }
 
   async function startUpgrade() {
-    if (!isAdmin || !upgrade.enabled) return
+    if (!canApplyUpgrade || !upgrade.enabled) return
     if (!maintenance.enabled) {
       setUpgradeStatus('Enable maintenance before applying updates.')
       return
@@ -4160,7 +4331,7 @@ export default function App() {
       <aside className="sidebar">
         <div className="brand">HardwareOps</div>
         <nav className="nav">
-          {nav.map((item) => (
+          {visibleNav.map((item) => (
             <a
               key={item.id}
               href={`#${item.id}`}
@@ -4298,13 +4469,15 @@ export default function App() {
                 <div className="group-selection-toolbar">
                   <div className="group-selection-count">{selectedDeviceIds.length} selected</div>
                   <div className="inline-row">
-                    <button
-                      className="button"
-                      onClick={handleBulkDecommissionSelectedDevices}
-                      disabled={selectedDeviceIds.length === 0 || (authStatus.enabled && !isAdmin)}
-                    >
-                      Decommission Selected
-                    </button>
+                    {canDecommissionDevices && (
+                      <button
+                        className="button"
+                        onClick={handleBulkDecommissionSelectedDevices}
+                        disabled={selectedDeviceIds.length === 0}
+                      >
+                        Decommission Selected
+                      </button>
+                    )}
                     <button className="button ghost" onClick={clearDeviceSelection} disabled={selectedDeviceIds.length === 0}>
                       Clear
                     </button>
@@ -4389,25 +4562,29 @@ export default function App() {
               <div className="section-header">
                 <h2>Groups</h2>
                 <div className="inline-row">
-                  <button
-                    onClick={() => {
-                      setGroupForm({ groupId: '', name: '', region: '', role: '', site: '', custom: [] })
-                      setGroupModalOpen(true)
-                    }}
-                    className="button"
-                  >
-                    Add Group
-                  </button>
-                  <button
-                    onClick={() => {
-                      setGroupBulkOpen(true)
-                      setGroupBulkError('')
-                      setGroupBulkStatus('')
-                    }}
-                    className="button ghost"
-                  >
-                    Advanced CSV
-                  </button>
+                  {canManageGroups && (
+                    <button
+                      onClick={() => {
+                        setGroupForm({ groupId: '', name: '', region: '', role: '', site: '', custom: [] })
+                        setGroupModalOpen(true)
+                      }}
+                      className="button"
+                    >
+                      Add Group
+                    </button>
+                  )}
+                  {canManageGroups && (
+                    <button
+                      onClick={() => {
+                        setGroupBulkOpen(true)
+                        setGroupBulkError('')
+                        setGroupBulkStatus('')
+                      }}
+                      className="button ghost"
+                    >
+                      Advanced CSV
+                    </button>
+                  )}
                   <button onClick={loadGroups} className="button ghost">Refresh</button>
                 </div>
               </div>
@@ -4418,18 +4595,26 @@ export default function App() {
                 <div className="group-selection-toolbar">
                   <div className="group-selection-count">{selectedGroupIds.length} selected</div>
                   <div className="inline-row">
-                    <button className="button ghost" onClick={openGroupMultiEdit} disabled={selectedGroupIds.length === 0}>
-                      Edit Selected
-                    </button>
-                    <button className="button ghost" onClick={openGroupMultiDesired} disabled={selectedGroupIds.length === 0}>
-                      Set Desired Selected
-                    </button>
-                    <button className="button" onClick={() => handleBulkDeleteSelectedGroups(false)} disabled={selectedGroupIds.length === 0}>
-                      Delete Selected
-                    </button>
-                    <button className="button ghost" onClick={() => handleBulkDeleteSelectedGroups(true)} disabled={selectedGroupIds.length === 0}>
-                      Delete + Devices
-                    </button>
+                    {canManageGroups && (
+                      <button className="button ghost" onClick={openGroupMultiEdit} disabled={selectedGroupIds.length === 0}>
+                        Edit Selected
+                      </button>
+                    )}
+                    {canManageDesiredState && (
+                      <button className="button ghost" onClick={openGroupMultiDesired} disabled={selectedGroupIds.length === 0}>
+                        Set Desired Selected
+                      </button>
+                    )}
+                    {canManageGroups && (
+                      <button className="button" onClick={() => handleBulkDeleteSelectedGroups(false)} disabled={selectedGroupIds.length === 0}>
+                        Delete Selected
+                      </button>
+                    )}
+                    {canManageGroups && canDecommissionDevices && (
+                      <button className="button ghost" onClick={() => handleBulkDeleteSelectedGroups(true)} disabled={selectedGroupIds.length === 0}>
+                        Delete + Devices
+                      </button>
+                    )}
                     <button className="button ghost" onClick={clearGroupSelection} disabled={selectedGroupIds.length === 0}>
                       Clear
                     </button>
@@ -4474,50 +4659,58 @@ export default function App() {
                         <td><code>{formatSelector(group.selector || {})}</code></td>
                         <td>{groupCounts[group.groupId] ?? 0}</td>
                         <td>
-                          <button
-                            className="button ghost"
-                            onClick={() => {
-                              const parsed = selectorToForm(normalizeObject(group.selector))
-                              setGroupForm({
-                                groupId: group.groupId,
-                                name: group.name || '',
-                                region: parsed.region,
-                                role: parsed.role,
-                                site: parsed.site,
-                                custom: parsed.custom,
-                              })
-                              setGroupModalOpen(true)
-                            }}
-                          >
-                            Edit
-                          </button>
+                          {canManageGroups && (
+                            <button
+                              className="button ghost"
+                              onClick={() => {
+                                const parsed = selectorToForm(normalizeObject(group.selector))
+                                setGroupForm({
+                                  groupId: group.groupId,
+                                  name: group.name || '',
+                                  region: parsed.region,
+                                  role: parsed.role,
+                                  site: parsed.site,
+                                  custom: parsed.custom,
+                                })
+                                setGroupModalOpen(true)
+                              }}
+                            >
+                              Edit
+                            </button>
+                          )}
                           <button
                             className="button ghost"
                             onClick={() => setSelectedGroupId(group.groupId)}
                           >
-                            Manage Devices
+                            {canEditDeviceLabels ? 'Manage Devices' : 'View Devices'}
                           </button>
-                          <button
-                            className="button ghost"
-                            onClick={() => {
-                              setSelectedGroupId(group.groupId)
-                              setGroupDesiredOpen(true)
-                            }}
-                          >
-                            Set Desired
-                          </button>
-                          <button
-                            className="button ghost"
-                            onClick={() => handleDeleteGroup(group.groupId, false)}
-                          >
-                            Delete
-                          </button>
-                          <button
-                            className="button ghost"
-                            onClick={() => handleDeleteGroup(group.groupId, true)}
-                          >
-                            Delete + Devices
-                          </button>
+                          {canManageDesiredState && (
+                            <button
+                              className="button ghost"
+                              onClick={() => {
+                                setSelectedGroupId(group.groupId)
+                                setGroupDesiredOpen(true)
+                              }}
+                            >
+                              Set Desired
+                            </button>
+                          )}
+                          {canManageGroups && (
+                            <button
+                              className="button ghost"
+                              onClick={() => handleDeleteGroup(group.groupId, false)}
+                            >
+                              Delete
+                            </button>
+                          )}
+                          {canManageGroups && canDecommissionDevices && (
+                            <button
+                              className="button ghost"
+                              onClick={() => handleDeleteGroup(group.groupId, true)}
+                            >
+                              Delete + Devices
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -4557,13 +4750,15 @@ export default function App() {
                             <td><code>{JSON.stringify(item.device.labels || {})}</code></td>
                             <td>{item.inGroup ? 'in group' : '—'}</td>
                             <td>
-                              <button
-                                className="button ghost"
-                                onClick={() => handleGroupDeviceToggle(selectedGroup, item.device, !item.inGroup)}
-                                disabled={Object.keys(selectedGroupSelector).length === 0}
-                              >
-                                {item.inGroup ? 'Remove' : 'Add'}
-                              </button>
+                              {canEditDeviceLabels ? (
+                                <button
+                                  className="button ghost"
+                                  onClick={() => handleGroupDeviceToggle(selectedGroup, item.device, !item.inGroup)}
+                                  disabled={Object.keys(selectedGroupSelector).length === 0}
+                                >
+                                  {item.inGroup ? 'Remove' : 'Add'}
+                                </button>
+                              ) : '—'}
                             </td>
                           </tr>
                         ))}
@@ -4576,7 +4771,11 @@ export default function App() {
                     </table>
                   </div>
                   {Object.keys(selectedGroupSelector).length === 0 && (
-                    <div className="hint">Empty selector matches all devices. Add keys to enable membership control.</div>
+                    <div className="hint">
+                      {canEditDeviceLabels
+                        ? 'Empty selector matches all devices. Add keys to enable membership control.'
+                        : 'Empty selector matches all devices.'}
+                    </div>
                   )}
                 </div>
               )}
@@ -4733,7 +4932,7 @@ export default function App() {
           </>
         )}
 
-        {view === 'metrics' && (
+        {view === 'metrics' && canViewMetrics && (
           <section id="metrics" className="card metrics-page">
             <div className="section-header">
               <h2>System Metrics</h2>
@@ -4953,24 +5152,15 @@ export default function App() {
           <section id="logs" className="card logs-card">
             <div className="section-header logs-header">
               <div className="tab-bar">
-                <button
-                  className={`tab ${logsTab === 'events' ? 'active' : ''}`}
-                  onClick={() => setLogsTab('events')}
-                >
-                  Live Events
-                </button>
-                <button
-                  className={`tab ${logsTab === 'device' ? 'active' : ''}`}
-                  onClick={() => setLogsTab('device')}
-                >
-                  Device Logs
-                </button>
-                <button
-                  className={`tab ${logsTab === 'audit' ? 'active' : ''}`}
-                  onClick={() => setLogsTab('audit')}
-                >
-                  Audit Log
-                </button>
+                {visibleLogsTabs.map((tab) => (
+                  <button
+                    key={tab.id}
+                    className={`tab ${logsTab === tab.id ? 'active' : ''}`}
+                    onClick={() => setLogsTab(tab.id)}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
               </div>
               <div className="logs-actions">
                 {logsTab === 'events' && (
@@ -5002,7 +5192,7 @@ export default function App() {
                     </button>
                   </>
                 )}
-                {logsTab === 'audit' && (
+                {logsTab === 'audit' && canViewAudit && (
                   <>
                     <button className="button" onClick={loadAudit}>
                       Fetch Audit
@@ -5071,7 +5261,7 @@ export default function App() {
                   />
                 </div>
 
-                {isAdmin && (
+                {canManageEventRetention && (
                   <div className="form inline audit-retention">
                     <label>Retention (days)</label>
                     <input
@@ -5197,7 +5387,7 @@ export default function App() {
                 )}
               </>
             )}
-            {logsTab === 'audit' && (
+            {logsTab === 'audit' && canViewAudit && (
               <>
                 <div className="form inline">
                   <label>Action</label>
@@ -5250,23 +5440,25 @@ export default function App() {
                   />
                 </div>
 
-                <div className="form inline audit-retention">
-                  <label>Retention (days)</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="3650"
-                    value={auditRetentionDays}
-                    onChange={(e) => setAuditRetentionDays(e.target.value)}
-                  />
-                  <button className="button ghost" onClick={updateAuditRetention}>
-                    Update retention
-                  </button>
-                  <div className="status">
-                    Last updated: {auditRetention.updatedAt ? new Date(auditRetention.updatedAt).toLocaleString() : '—'}
+                {canManageAuditRetention && (
+                  <div className="form inline audit-retention">
+                    <label>Retention (days)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="3650"
+                      value={auditRetentionDays}
+                      onChange={(e) => setAuditRetentionDays(e.target.value)}
+                    />
+                    <button className="button ghost" onClick={updateAuditRetention}>
+                      Update retention
+                    </button>
+                    <div className="status">
+                      Last updated: {auditRetention.updatedAt ? new Date(auditRetention.updatedAt).toLocaleString() : '—'}
+                    </div>
+                    {auditRetentionStatus && <div className="status">{auditRetentionStatus}</div>}
                   </div>
-                  {auditRetentionStatus && <div className="status">{auditRetentionStatus}</div>}
-                </div>
+                )}
 
                 {auditError && <div className="error">{auditError}</div>}
                 {auditLoading ? (
@@ -5321,8 +5513,10 @@ export default function App() {
               <h2>Security</h2>
               <div className="settings-toolbar">
                 <button className="button ghost" onClick={loadRotationStatus}>Refresh rotation</button>
-                <button className="button ghost" onClick={loadPendingEnrollments}>Refresh pending enrollments</button>
-                {authStatus.enabled && authToken && isAdmin && (
+                {canManagePendingEnrollments && (
+                  <button className="button ghost" onClick={loadPendingEnrollments}>Refresh pending enrollments</button>
+                )}
+                {authStatus.enabled && authToken && canManageUsers && (
                   <button className="button ghost" onClick={loadUsers}>Refresh users</button>
                 )}
               </div>
@@ -5385,7 +5579,7 @@ export default function App() {
                   <div className="placeholder">Enable AUTH_MODE=local to manage users.</div>
                 ) : !authToken ? (
                   <div className="placeholder">Sign in to manage local users.</div>
-                ) : !isAdmin ? (
+                ) : !canManageUsers ? (
                   <div className="placeholder">Admin role required to manage users.</div>
                 ) : (
                   <>
@@ -5904,7 +6098,7 @@ export default function App() {
                     <div className="detail-value">{maintenance.updatedAt ? new Date(maintenance.updatedAt).toLocaleString() : '—'}</div>
                   </div>
                   <div className="full">
-                    <button className="button ghost" onClick={toggleMaintenance} disabled={!isAdmin}>
+                    <button className="button ghost" onClick={toggleMaintenance} disabled={!canManageMaintenance}>
                       {maintenance.enabled ? 'Disable maintenance' : 'Enable maintenance'}
                     </button>
                   </div>
@@ -5978,7 +6172,7 @@ export default function App() {
                           const enabled = e.target.checked
                           setReleaseAutoUpdate((prev) => ({ ...prev, enabled }))
                         }}
-                        disabled={authStatus.enabled && !isAdmin}
+                        disabled={!canManageReleaseAutoUpdate}
                       />
                       {releaseAutoUpdate.enabled ? 'on' : 'off'}
                     </label>
@@ -5993,7 +6187,7 @@ export default function App() {
                           const allowUnsigned = e.target.checked
                           setReleaseAutoUpdate((prev) => ({ ...prev, allowUnsigned }))
                         }}
-                        disabled={authStatus.enabled && !isAdmin}
+                        disabled={!canManageReleaseAutoUpdate}
                       />
                       {releaseAutoUpdate.allowUnsigned ? 'yes' : 'no'}
                     </label>
@@ -6026,14 +6220,14 @@ export default function App() {
                     <button
                       className="button ghost"
                       onClick={handleSaveReleaseAutoUpdateSettings}
-                      disabled={(authStatus.enabled && !isAdmin) || releaseAutoUpdateSaving}
+                      disabled={!canManageReleaseAutoUpdate || releaseAutoUpdateSaving}
                     >
                       Save auto-update settings
                     </button>
                     <button
                       className="button ghost"
                       onClick={handleRunReleaseAutoUpdate}
-                      disabled={(authStatus.enabled && !isAdmin) || releaseAutoUpdateSaving || releaseAutoUpdate.running}
+                      disabled={!canManageReleaseAutoUpdate || releaseAutoUpdateSaving || releaseAutoUpdate.running}
                     >
                       Run now
                     </button>
@@ -6054,7 +6248,9 @@ export default function App() {
 
               <div className="settings-section">
                 <div className="settings-title">Backups</div>
-                {!backupStatus.enabled ? (
+                {!canViewBackups ? (
+                  <div className="placeholder">Admin role required to view backups and restore status.</div>
+                ) : !backupStatus.enabled ? (
                   <div className="placeholder">Backup runner not configured.</div>
                 ) : (
                   <>
@@ -6075,7 +6271,7 @@ export default function App() {
                         <button className="button ghost" onClick={loadBackups}>
                           Refresh backups
                         </button>
-                        <button className="button" onClick={handleStartBackup} disabled={!isAdmin}>
+                        <button className="button" onClick={handleStartBackup} disabled={!canManageBackups}>
                           Create backup
                         </button>
                       </div>
@@ -6093,7 +6289,7 @@ export default function App() {
                         </select>
                       </div>
                       <div className="field actions">
-                        <button className="button ghost" onClick={handleRestore} disabled={!isAdmin || !maintenance.enabled}>
+                        <button className="button ghost" onClick={handleRestore} disabled={!canManageBackups || !maintenance.enabled}>
                           Restore + wipe
                         </button>
                         {!maintenance.enabled && (
@@ -6184,7 +6380,7 @@ export default function App() {
                       <button className="button ghost" onClick={loadUpgradePreflight}>
                         Run preflight
                       </button>
-                      {isAdmin && maintenance.enabled && upgrade.enabled && (
+                      {canApplyUpgrade && maintenance.enabled && upgrade.enabled && (
                         <button
                           className="button ghost"
                           onClick={startUpgrade}
@@ -6362,195 +6558,201 @@ export default function App() {
                 >
                   <h3>Desired State</h3>
                   {desiredError && <div className="error">{desiredError}</div>}
-                  <label>Device ID</label>
-                  <input value={deviceForm.deviceId} readOnly />
-                  <label>Components</label>
-                  <div className="component-editor">
-                    {deviceForm.components.map((row, idx) => {
-                      const locked = Boolean(row.locked)
-                      const type = normalizeArtifactType(row.artifactType)
-                      const groupsForType = filterArtifactGroupsByType(activeArtifactGroups, type)
-                      const allGroupsForType = filterArtifactGroupsByType(artifactGroups, type)
-                      const selected = artifacts.find((a) => a.artifactId === row.artifactId)
-                      const selectedGroup = selected
-                        ? (groupsForType.find((g) => g.name === selected.name) ||
-                          allGroupsForType.find((g) => g.name === selected.name))
-                        : null
-                      return (
-                        <div className="component-row" key={row.id || `${row.key}-${idx}`}>
-                          <div className="inline-row">
-                            <input
-                              value={row.key}
-                              onChange={(e) => updateDeviceComponent(idx, { key: e.target.value })}
-                              placeholder="component key (e.g. app:customer)"
-                              disabled={locked}
-                            />
-                            <input
-                              list="artifact-types"
-                              value={row.artifactType}
-                              onChange={(e) => updateDeviceComponent(idx, { artifactType: e.target.value })}
-                              placeholder="artifact type"
-                              disabled={locked}
-                            />
-                            <select
-                              value={row.autoTrackMode || 'inherit'}
-                              onChange={(e) => updateDeviceComponent(idx, { autoTrackMode: e.target.value })}
-                              disabled={locked}
-                            >
-                              {autoTrackModes.map((mode) => (
-                                <option key={mode.id} value={mode.id}>{`Auto ${mode.label}`}</option>
-                              ))}
-                            </select>
-                            <label className="inline-toggle">
+                  {!canManageDesiredState && (
+                    <div className="hint">Operator role required to edit desired state.</div>
+                  )}
+                  <fieldset disabled={!canManageDesiredState} style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
+                    <label>Device ID</label>
+                    <input value={deviceForm.deviceId} readOnly />
+                    <label>Components</label>
+                    <div className="component-editor">
+                      {deviceForm.components.map((row, idx) => {
+                        const locked = Boolean(row.locked)
+                        const type = normalizeArtifactType(row.artifactType)
+                        const groupsForType = filterArtifactGroupsByType(activeArtifactGroups, type)
+                        const allGroupsForType = filterArtifactGroupsByType(artifactGroups, type)
+                        const selected = artifacts.find((a) => a.artifactId === row.artifactId)
+                        const selectedGroup = selected
+                          ? (groupsForType.find((g) => g.name === selected.name) ||
+                            allGroupsForType.find((g) => g.name === selected.name))
+                          : null
+                        return (
+                          <div className="component-row" key={row.id || `${row.key}-${idx}`}>
+                            <div className="inline-row">
                               <input
-                                type="checkbox"
-                                checked={locked}
-                                onChange={(e) => updateDeviceComponent(idx, { locked: e.target.checked })}
+                                value={row.key}
+                                onChange={(e) => updateDeviceComponent(idx, { key: e.target.value })}
+                                placeholder="component key (e.g. app:customer)"
+                                disabled={locked}
                               />
-                              Lock
-                            </label>
-                            <button
-                              className="button ghost"
-                              type="button"
-                              onClick={() => removeDeviceComponent(idx)}
-                              disabled={locked || deviceForm.components.length <= 1}
-                            >
-                              Remove
-                            </button>
+                              <input
+                                list="artifact-types"
+                                value={row.artifactType}
+                                onChange={(e) => updateDeviceComponent(idx, { artifactType: e.target.value })}
+                                placeholder="artifact type"
+                                disabled={locked}
+                              />
+                              <select
+                                value={row.autoTrackMode || 'inherit'}
+                                onChange={(e) => updateDeviceComponent(idx, { autoTrackMode: e.target.value })}
+                                disabled={locked}
+                              >
+                                {autoTrackModes.map((mode) => (
+                                  <option key={mode.id} value={mode.id}>{`Auto ${mode.label}`}</option>
+                                ))}
+                              </select>
+                              <label className="inline-toggle">
+                                <input
+                                  type="checkbox"
+                                  checked={locked}
+                                  onChange={(e) => updateDeviceComponent(idx, { locked: e.target.checked })}
+                                />
+                                Lock
+                              </label>
+                              <button
+                                className="button ghost"
+                                type="button"
+                                onClick={() => removeDeviceComponent(idx)}
+                                disabled={locked || deviceForm.components.length <= 1}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                            <div className="inline-row">
+                              <select
+                                value={selected?.name || ''}
+                                onChange={(e) => {
+                                  const name = e.target.value
+                                  const group = groupsForType.find((g) => g.name === name)
+                                  if (!group) {
+                                    updateDeviceComponent(idx, { artifactId: '', desiredVersion: '' })
+                                  } else {
+                                    const pick = group.versions[group.versions.length - 1]
+                                    updateDeviceComponent(idx, {
+                                      artifactId: pick.artifactId,
+                                      desiredVersion: pick.version,
+                                      artifactType: normalizeArtifactType(pick.type),
+                                    })
+                                  }
+                                }}
+                                disabled={locked}
+                              >
+                                <option value="">Select artifact</option>
+                                {groupsForType.map((group) => (
+                                  <option key={group.name} value={group.name}>{group.name}</option>
+                                ))}
+                              </select>
+                              <button
+                                className="button ghost"
+                                type="button"
+                                onClick={() => openArtifactPicker('device', idx)}
+                                disabled={locked}
+                              >
+                                Browse
+                              </button>
+                              <select
+                                value={selected?.version || ''}
+                                onChange={(e) => {
+                                  const version = e.target.value
+                                  const pick = selectedGroup?.versions.find((v) => v.version === version)
+                                  if (pick) {
+                                    updateDeviceComponent(idx, {
+                                      artifactId: pick.artifactId,
+                                      desiredVersion: pick.version,
+                                      artifactType: normalizeArtifactType(pick.type),
+                                    })
+                                  }
+                                }}
+                                disabled={locked}
+                              >
+                                <option value="">Select version</option>
+                                {(selectedGroup?.versions || []).map((artifact) => (
+                                  <option key={artifact.artifactId} value={artifact.version}>
+                                    {artifact.version}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="inline-row">
+                              <input value={row.artifactId} readOnly placeholder="artifact uuid" />
+                              <input
+                                value={row.desiredVersion}
+                                onChange={(e) => updateDeviceComponent(idx, { desiredVersion: e.target.value })}
+                                placeholder="desired version"
+                                disabled={locked}
+                              />
+                              <input
+                                value={row.desiredConfigRev}
+                                onChange={(e) => updateDeviceComponent(idx, { desiredConfigRev: e.target.value })}
+                                placeholder="config rev"
+                                disabled={locked}
+                              />
+                            </div>
                           </div>
-                          <div className="inline-row">
-                            <select
-                              value={selected?.name || ''}
-                              onChange={(e) => {
-                                const name = e.target.value
-                                const group = groupsForType.find((g) => g.name === name)
-                                if (!group) {
-                                  updateDeviceComponent(idx, { artifactId: '', desiredVersion: '' })
-                                } else {
-                                  const pick = group.versions[group.versions.length - 1]
-                                  updateDeviceComponent(idx, {
-                                    artifactId: pick.artifactId,
-                                    desiredVersion: pick.version,
-                                    artifactType: normalizeArtifactType(pick.type),
-                                  })
-                                }
-                              }}
-                              disabled={locked}
-                            >
-                              <option value="">Select artifact</option>
-                              {groupsForType.map((group) => (
-                                <option key={group.name} value={group.name}>{group.name}</option>
-                              ))}
-                            </select>
-                            <button
-                              className="button ghost"
-                              type="button"
-                              onClick={() => openArtifactPicker('device', idx)}
-                              disabled={locked}
-                            >
-                              Browse
-                            </button>
-                            <select
-                              value={selected?.version || ''}
-                              onChange={(e) => {
-                                const version = e.target.value
-                                const pick = selectedGroup?.versions.find((v) => v.version === version)
-                                if (pick) {
-                                  updateDeviceComponent(idx, {
-                                    artifactId: pick.artifactId,
-                                    desiredVersion: pick.version,
-                                    artifactType: normalizeArtifactType(pick.type),
-                                  })
-                                }
-                              }}
-                              disabled={locked}
-                            >
-                              <option value="">Select version</option>
-                              {(selectedGroup?.versions || []).map((artifact) => (
-                                <option key={artifact.artifactId} value={artifact.version}>
-                                  {artifact.version}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                          <div className="inline-row">
-                            <input value={row.artifactId} readOnly placeholder="artifact uuid" />
-                            <input
-                              value={row.desiredVersion}
-                              onChange={(e) => updateDeviceComponent(idx, { desiredVersion: e.target.value })}
-                              placeholder="desired version"
-                              disabled={locked}
-                            />
-                            <input
-                              value={row.desiredConfigRev}
-                              onChange={(e) => updateDeviceComponent(idx, { desiredConfigRev: e.target.value })}
-                              placeholder="config rev"
-                              disabled={locked}
-                            />
-                          </div>
-                        </div>
-                      )
-                    })}
-                    <button className="button ghost" type="button" onClick={addDeviceComponent}>
-                      Add component
-                    </button>
-                  </div>
-                  <label>Check-in Interval (sec)</label>
-                  <input
-                    value={deviceForm.checkinIntervalSec}
-                    onChange={(e) => {
-                      setDeviceForm({ ...deviceForm, checkinIntervalSec: e.target.value })
-                      setDeviceFormDirty(true)
-                    }}
-                    placeholder="30"
-                  />
-                  <div className="inline-row">
-                    <button className="button" type="submit">Apply</button>
-                    {selectedDesired && selectedDesired.source === 'manual' && (
+                        )
+                      })}
+                      <button className="button ghost" type="button" onClick={addDeviceComponent}>
+                        Add component
+                      </button>
+                    </div>
+                    <label>Check-in Interval (sec)</label>
+                    <input
+                      value={deviceForm.checkinIntervalSec}
+                      onChange={(e) => {
+                        setDeviceForm({ ...deviceForm, checkinIntervalSec: e.target.value })
+                        setDeviceFormDirty(true)
+                      }}
+                      placeholder="30"
+                    />
+                    <div className="inline-row">
+                      <button className="button" type="submit">Apply</button>
+                      {selectedDesired && selectedDesired.source === 'manual' && (
+                        <button
+                          className="button ghost"
+                          type="button"
+                          onClick={handleClearDeviceOverride}
+                        >
+                          Use group desired state
+                        </button>
+                      )}
                       <button
                         className="button ghost"
                         type="button"
-                        onClick={handleClearDeviceOverride}
+                        onClick={() => {
+                          setDeviceFormDirty(false)
+                          setDeviceForm({
+                            deviceId: selectedDeviceId,
+                            checkinIntervalSec: selectedDesired?.checkinIntervalSec ? String(selectedDesired.checkinIntervalSec) : '',
+                            components: buildComponentRows(
+                              selectedDesired?.components || {},
+                              {
+                                artifactId: selectedDesired?.artifactId || '',
+                                desiredVersion: selectedDesired?.desiredVersion || deviceDetail.current?.softwareVersion || '',
+                                desiredConfigRev: selectedDesired?.desiredConfigRev || deviceDetail.current?.configRev || '',
+                              },
+                              deviceDetail?.current,
+                            ),
+                          })
+                        }}
                       >
-                        Use group desired state
+                        Reset
                       </button>
-                    )}
-                    <button
-                      className="button ghost"
-                      type="button"
-                      onClick={() => {
-                        setDeviceFormDirty(false)
-                        setDeviceForm({
-                          deviceId: selectedDeviceId,
-                          checkinIntervalSec: selectedDesired?.checkinIntervalSec ? String(selectedDesired.checkinIntervalSec) : '',
-                          components: buildComponentRows(
-                            selectedDesired?.components || {},
-                            {
-                              artifactId: selectedDesired?.artifactId || '',
-                              desiredVersion: selectedDesired?.desiredVersion || deviceDetail.current?.softwareVersion || '',
-                              desiredConfigRev: selectedDesired?.desiredConfigRev || deviceDetail.current?.configRev || '',
-                            },
-                            deviceDetail?.current,
-                          ),
-                        })
-                      }}
-                    >
-                      Reset
-                    </button>
-                  </div>
+                    </div>
+                  </fieldset>
                 </form>
 
                 <div className="inline-row">
                   <button className="button ghost" onClick={() => downloadLogs(selectedDeviceId)}>
                     Download Logs
                   </button>
-                  <button
-                    className="button ghost"
-                    onClick={() => handleDeleteDevice(selectedDeviceId)}
-                    disabled={authStatus.enabled && !isAdmin}
-                  >
-                    Decommission Device
-                  </button>
+                  {canDecommissionDevices && (
+                    <button
+                      className="button ghost"
+                      onClick={() => handleDeleteDevice(selectedDeviceId)}
+                    >
+                      Decommission Device
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -6558,7 +6760,7 @@ export default function App() {
         </div>
       )}
 
-      {enrollmentProfileCreateOpen && (
+      {canManagePendingEnrollments && enrollmentProfileCreateOpen && (
         <div className="modal-backdrop" onClick={() => setEnrollmentProfileCreateOpen(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="section-header">
@@ -6682,7 +6884,7 @@ export default function App() {
         </div>
       )}
 
-      {editingEnrollmentProfileId && (
+      {canManagePendingEnrollments && editingEnrollmentProfileId && (
         <div className="modal-backdrop" onClick={handleCancelEditEnrollmentProfile}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="section-header">
@@ -6809,7 +7011,7 @@ export default function App() {
         </div>
       )}
 
-      {artifactModalOpen && (
+      {canManageDesiredState && artifactModalOpen && (
         <div
           className="modal-backdrop"
           onClick={() => {
@@ -6898,7 +7100,7 @@ export default function App() {
         </div>
       )}
 
-      {artifactUploadOpen && (
+      {canManageArtifacts && artifactUploadOpen && (
         <div className="modal-backdrop" onClick={() => setArtifactUploadOpen(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="section-header">
@@ -6929,7 +7131,7 @@ export default function App() {
         </div>
       )}
 
-      {groupModalOpen && (
+      {canManageGroups && groupModalOpen && (
         <div className="modal-backdrop" onClick={() => setGroupModalOpen(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="section-header">
@@ -7029,7 +7231,7 @@ export default function App() {
         </div>
       )}
 
-      {groupMultiEditOpen && (
+      {canManageGroups && groupMultiEditOpen && (
         <div className="modal-backdrop" onClick={() => setGroupMultiEditOpen(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="section-header">
@@ -7123,7 +7325,7 @@ export default function App() {
         </div>
       )}
 
-      {groupMultiDesiredOpen && (
+      {canManageDesiredState && groupMultiDesiredOpen && (
         <div className="modal-backdrop" onClick={() => setGroupMultiDesiredOpen(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="section-header">
@@ -7282,7 +7484,7 @@ export default function App() {
         </div>
       )}
 
-      {groupBulkOpen && (
+      {canManageGroups && groupBulkOpen && (
         <div className="modal-backdrop" onClick={() => setGroupBulkOpen(false)}>
           <div className="modal bulk-group-modal" onClick={(e) => e.stopPropagation()}>
             <div className="section-header">
@@ -7397,7 +7599,7 @@ export default function App() {
         </div>
       )}
 
-      {groupDesiredOpen && (
+      {canManageDesiredState && groupDesiredOpen && (
         <div className="modal-backdrop" onClick={() => setGroupDesiredOpen(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="section-header">
