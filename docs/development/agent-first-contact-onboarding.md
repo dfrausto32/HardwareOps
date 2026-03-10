@@ -35,6 +35,7 @@ This is the exact agent runtime model that should replace the current dev-harnes
 Current implementation status:
 - The real Go agent now has an approval-mode scaffold behind `AGENT_ENROLL_MODE=approval`.
 - The agent persists `bootstrap-state.json`, creates a pending enrollment request, polls claim, materializes `device.crt` + `device-id`, then switches into the normal mTLS check-in loop.
+- The packaged Linux installer (`scripts/agent-install.sh`) now writes the approval-mode env, stages the trust anchor, and can start the systemd service without a separate enroll pass.
 - Operator reset UX is now in place for denied/conflict/expired pending requests, and the agent will keep retrying so a reset can unblock the same request without manual file surgery.
 - Anti-spam controls and richer profile lifecycle UX remain follow-up work.
 
@@ -220,6 +221,22 @@ Production install should be:
 5. after claim succeeds, same process moves into normal mTLS mode
 
 This avoids shipping a client cert with the installer and avoids requiring a second installer pass after approval.
+
+Current packaged command:
+```bash
+sudo ./scripts/agent-install.sh \
+  AGENT_SRC=./hardwareops-agent \
+  CONTROL_PLANE_URL=https://agent.hardwareops.internal \
+  CONTROL_PLANE_CA_CERT_SRC=/opt/hardwareops/certs/ca.crt \
+  AGENT_ENROLL_MODE=approval \
+  ENROLLMENT_PROFILE_TOKEN=<bootstrap-token> \
+  START_SERVICE=1
+```
+
+Prod-lab validation now uses `scripts/testing/prod-lab-first-contact.sh`, which runs the bundled
+agent binary through the same installer/env path inside an ephemeral container. The remaining gap
+versus a bare-metal production host is the final systemd handoff itself; the bootstrap, approval,
+identity materialization, and mTLS check-in path are the same.
 
 ## Proposed API contract
 

@@ -57,6 +57,8 @@ On-prem defaults now assume:
 
 Set DNS for both hostnames to the gateway host. Agent runtime endpoints are restricted to
 the `agent.*` host and require client mTLS for check-in/apply traffic.
+For first-contact approval onboarding, point the packaged agent's `CONTROL_PLANE_URL` at
+`AGENT_BASE_URL`, not `PUBLIC_BASE_URL`, and stage the trust anchor before starting the service.
 To block duplicate hardware identities, set `DEVICE_IDENTITY_MODE=enforce` and optionally require identity on enroll/check-in.
 For forwarded client-cert trust, keep `TRUST_PROXY=1` and replace the loopback-only `TRUST_PROXY_CIDRS` example with your ingress/gateway networks before enabling `HARDENED_PROFILE=1`.
 

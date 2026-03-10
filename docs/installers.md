@@ -33,8 +33,8 @@ dist/installers/<version>/
 ## What’s inside
 ### Agent bundles
 - `hardwareops-agent` binary
-- `scripts/agent-install.sh` (Linux systemd install)
-- `scripts/agent-enroll.sh`
+- `scripts/agent-install.sh` (Linux systemd install + approval-mode bootstrap config)
+- `scripts/agent-enroll.sh` (legacy direct-enroll helper)
 - `deploy/systemd/` service file + env example
 - `README.txt`
 
@@ -67,6 +67,7 @@ dist/installers/<version>/
 ## Runtime install flow
 Installer runtime steps are documented in:
 - `installer-flow.md` (fresh machine flow)
+- `agent-systemd.md` (agent approval-mode runbook)
 - `deploy.md` (canonical deployment path)
 
 ## Troubleshooting

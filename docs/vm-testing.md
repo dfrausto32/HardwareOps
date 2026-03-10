@@ -114,17 +114,22 @@ From WSL or the control‑plane VM:
 scp /opt/hardwareops/certs/ca.crt <user>@<agent_vm_ip>:/opt/hardwareops/certs/ca.crt
 ```
 
-Install + enroll the agent:
+Create an enrollment profile in the UI and copy the bootstrap token, then install + start the agent:
 ```
 tar -xf hardwareops-agent-<version>-linux-amd64.tar.gz
 cd hardwareops-agent-<version>-linux-amd64
 
-sudo ./scripts/agent-install.sh AGENT_SRC=./hardwareops-agent
-sudo CONTROL_PLANE_URL=https://hardwareops.internal \
-     CA_CERT_PATH=/opt/hardwareops/certs/ca.crt \
-     ./scripts/agent-enroll.sh
-sudo systemctl restart hardwareops-agent
+sudo ./scripts/agent-install.sh \
+  AGENT_SRC=./hardwareops-agent \
+  CONTROL_PLANE_URL=https://agent.hardwareops.internal \
+  CONTROL_PLANE_CA_CERT_SRC=/opt/hardwareops/certs/ca.crt \
+  AGENT_ENROLL_MODE=approval \
+  ENROLLMENT_PROFILE_TOKEN=<bootstrap-token> \
+  START_SERVICE=1
 ```
+
+Approve the pending request in `Security -> Pending enrollments`, then confirm the same service writes
+`/etc/hardwareops/agent/certs/device.crt` and starts normal mTLS check-ins.
 
 Verify from the control‑plane VM:
 ```
