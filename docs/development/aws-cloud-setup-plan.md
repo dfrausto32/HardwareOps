@@ -1,9 +1,50 @@
 # AWS Cloud Setup Plan (Production-Grade Customer Deployment)
 
-This document formalizes a production-grade AWS path for customer deployments while preserving the existing on-prem product model.
+This document covers supported deployment shapes and the production-grade AWS path for customer deployments, while preserving the existing on-prem product model.
 
-Execution runbook: `aws-customer-deployment-runbook.md`.  
+Execution runbook: `aws-customer-deployment-runbook.md`.
 Security hardening tracker: `security-hardening.md`.
+
+---
+
+## Deployment Shapes
+
+### On-Prem (customer-hosted)
+
+**Use when:** customer requires local control, air-gapped, or low-latency environment.
+
+Shape:
+- Control-plane + UI on a single server
+- Postgres (local or customer-managed)
+- MinIO/S3-compatible object store (local)
+- Optional CoreDNS for internal DNS
+
+**Why this works:** fits the installer bundle model; easy to secure with TLS + mTLS; minimal external dependencies.
+
+Operational needs: Postgres + MinIO backups, CA rotation plan, host monitoring.
+
+### AWS ECS Fargate (cloud target)
+
+**Use when:** customer wants managed infrastructure and internet-reachable control-plane.
+
+Shape: ECS Fargate (control-plane + gateway) + RDS Postgres + S3 + ALB + ACM + CloudWatch.
+
+**Why ECS Fargate:** lowest ops for a small team, fast iteration, no Kubernetes overhead.
+
+### Alternative cloud shapes
+
+- **EKS:** best for large customers with existing Kubernetes ops.
+- **EC2 + Docker Compose:** simplest ops, least scalable; suitable for POCs and sales demos.
+
+### DNS + TLS (both modes)
+
+Use a customer-owned domain and split hostnames:
+- Human/UI host: `hardwareops.internal`
+- Agent/API host: `agent.hardwareops.internal`
+
+Prefer a browser-trusted server cert on the human host. Keep agent traffic on mTLS device certs. For private CA onboarding, use the bootstrap token flow (`/api/v1/bootstrap/ca`) to fetch the CA cert before full login.
+
+---
 
 ## Scope and Goals
 - Preserve current product behavior: artifacts, desired state, agent mTLS identity, audit logs, auth, and backup/restore workflows.

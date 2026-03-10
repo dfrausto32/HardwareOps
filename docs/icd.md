@@ -283,5 +283,5 @@ Integrations must handle:
 - Deployment: `docs/deploy.md`
 - Operations: `docs/operations.md`
 - Artifact ingest deep dive: `docs/development/artifact-ingest.md`
-- Push vs pull guidance: `docs/development/push-vs-pull-workflows.md`
+- Push vs pull guidance: `docs/development/artifact-ingest.md`
 - First-contact onboarding deep dive: `docs/development/agent-first-contact-onboarding.md`

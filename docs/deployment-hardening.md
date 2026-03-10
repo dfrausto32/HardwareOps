@@ -193,3 +193,67 @@ For customer deployments:
 4. Add checksum verification in deployment SOP.
 
 This gives strong practical protection against header spoofing and casual tampering.
+
+---
+
+## 6) Device Identity Policy (Anti-Clone)
+
+### Goal
+
+Make "one physical device = one enrolled identity" harder to bypass. Not tamper-proof against a fully hostile host, but raises the bar against accidental cloning and simple copy/replay abuse.
+
+### Identity source
+
+Agents include a hardware identity in `capabilities.hw.identity` on check-in:
+- `id`: stable SHA-256 hash derived from machine-id (fallback: hostname, or `HARDWARE_IDENTITY` override).
+- `source`: where the identity was derived (`machine-id`, `hostname`, `env`, demo-specific).
+
+### Policy controls
+
+```env
+DEVICE_IDENTITY_MODE=audit          # disabled | audit | enforce
+DEVICE_IDENTITY_REQUIRE_ON_ENROLL=0 # set to 1 in enforce mode to reject missing identity on enroll
+DEVICE_IDENTITY_REQUIRE_ON_CHECKIN=0 # set to 1 in enforce mode to reject missing identity on check-in
+```
+
+With `HARDENED_PROFILE=1` and `DEVICE_IDENTITY_MODE=enforce`, both require flags default on.
+
+Modes:
+- `disabled`: no hardware-identity checks.
+- `audit`: detect conflicts and emit telemetry/audit without blocking traffic.
+- `enforce`: reject identity conflicts with HTTP `409`.
+
+### Server behavior
+
+**Enrollment** (`POST /api/v1/devices/enroll`):
+- Rejects with `409` if hardware identity already belongs to another device.
+- Stores hardware identity in device metadata when present.
+
+**Check-in** (`POST /api/v1/devices/checkin`):
+- Detects identity mismatch/reuse and emits runtime + audit signals.
+- In `enforce` mode, rejects conflicts with `409`.
+
+### Signals
+
+- Runtime event: `device.identity_conflict`
+- Audit action: `device.identity_violation` (and `device.enroll_rejected` on enroll conflicts)
+
+### Verification quick check
+
+```bash
+# 1. Start control-plane with enforce mode
+DEVICE_IDENTITY_MODE=enforce ./scripts/run-control-plane.sh
+
+# 2. Enroll/check-in one device normally.
+# 3. Attempt a second enroll/check-in with the same hardware identity.
+# 4. Expect:
+#    - HTTP 409 on the conflicting request
+#    - device.identity_conflict event in runtime event history
+#    - device.identity_violation entry in audit log
+```
+
+### Limits
+
+- Helps against accidental cloning and simple copy/replay.
+- Not tamper-proof on fully hostile hardware; a privileged attacker can forge software-reported identity.
+- Stronger guarantees require hardware attestation (TPM/secure element), deferred to a later phase.

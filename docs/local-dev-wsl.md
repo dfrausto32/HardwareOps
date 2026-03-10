@@ -165,3 +165,63 @@ Verify from WSL:
 ```
 curl --cacert ./dev-ca.crt https://localhost:8080/healthz
 ```
+
+---
+
+## Demo: Pre-Apply Hook Walkthrough
+
+This walkthrough shows how to demo the pre-apply hook live with the UI and the demo agent.
+Run this after steps 1–4 above (dependencies + control-plane + UI + demo agent already running).
+
+### Build and upload demo artifacts
+
+Option A (demo v1 → v2 page flip):
+```bash
+./scripts/demo-artifacts.sh
+```
+
+Option B (all artifact types with pre-apply):
+```bash
+./scripts/artifact-types.sh
+```
+
+### Apply from the UI
+
+1. In the UI, select the demo device.
+2. Choose an artifact and click **Apply**.
+3. Watch the demo page update at `http://localhost:8081/index.html`.
+
+### What you should see
+
+- The demo page shows **"Pre‑apply"** content pulled from `files/preapply.txt`.
+- The UI dashboard displays a **Pre‑apply badge** with the last status.
+
+### Expected output per artifact type
+
+| Artifact type | First apply | Update to newest |
+|---|---|---|
+| `app_bundle` | Type: app_bundle, Version: `0.1.0-app_bundle` | Version: `0.2.0-app_bundle` |
+| `config_bundle` | Type: config_bundle, Version: `0.1.0-config_bundle` | Version: `0.2.0-config_bundle` |
+| `data_bundle` | Type: data_bundle, Version: `0.1.0-data_bundle` | Version: `0.2.0-data_bundle` |
+| `firmware` | Type: firmware, Version: `0.1.0-firmware` | Version: `0.2.0-firmware` |
+| `container_image` | Type: container_image, Version: `0.1.0-container_image` | Version: `0.2.0-container_image` |
+
+The **Pre‑apply** line will show something like:
+```
+preapply ok
+type=<type>
+version=<version>
+time=<timestamp>
+```
+
+> Note: `firmware` and `container_image` only apply in demo mode because
+> `run-demo-agent.sh` sets `ALLOW_UNSUPPORTED_APPLY=1` by default.
+> Set to `0` to enforce realistic behavior.
+
+### Multiple demo agents
+
+```bash
+DEMO_COUNT=3 DEMO_HTTP_PORT=8081 ./scripts/run-demo-agent.sh
+```
+
+Ports: 8081, 8082, 8083

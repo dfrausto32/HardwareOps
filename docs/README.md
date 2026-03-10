@@ -1,69 +1,88 @@
 # Documentation Map
 
-Use these canonical docs first:
+Start here. Use the canonical docs first; go to deep dives only for topic-specific detail.
 
-- `deploy.md` - end-to-end deployment guide (on-prem + AWS + hardening baseline).
-- `operations.md` - day-2 operations (backup/restore, upgrades, cert rotation, metrics checks).
-- `local-dev-wsl.md` - local WSL dev workflow.
-- `icd.md` - living Integration Control Document (API + headless integration contract).
-- `development/roadmap.md` - implementation roadmap and phase status.
+---
 
-Rule of thumb:
-- Start in the canonical docs.
-- Use deep dives only for topic-specific details.
-- Prefer linking to canonical docs instead of duplicating step-by-step flow.
+## Canonical docs (start here)
+
+| Doc | What it covers |
+|---|---|
+| `deploy.md` | End-to-end deployment guide (on-prem + AWS + hardening baseline) |
+| `operations.md` | Day-2 operations: backup/restore, upgrades, cert rotation, metrics |
+| `local-dev-wsl.md` | Local WSL dev workflow + pre-apply demo walkthrough |
+| `icd.md` | Living Integration Control Document: API contract + headless workflows |
+| `development/roadmap.md` | Implementation roadmap and phase status |
 
 ---
 
 ## Deployment deep dives
 
-- `installer-flow.md` - fresh machine install via installer bundles.
-- `installers.md` - installer bundle contents and build details.
-- `deployment-hardening.md` - proxy trust allowlist and on-prem anti-tamper controls.
-- `development/aws-customer-deployment-runbook.md` - expanded AWS per-customer runbook.
-- `development/aws-cloud-setup-plan.md` - AWS strategy and architecture decisions.
-- `../deploy/aws/terraform/README.md` - Terraform scaffold details.
-- `vm-testing.md` - VM testing flow.
+| Doc | What it covers |
+|---|---|
+| `installers.md` | Bundle build/layout + fresh-machine install runbook (control-plane + agent + upgrades) |
+| `deployment-hardening.md` | Proxy trust allowlist, on-prem anti-tamper controls, device identity policy |
+| `dns-coredns.md` | CoreDNS setup for on-prem internal DNS |
+| `vm-testing.md` | VM-based testing flow |
+| `development/aws-cloud-setup-plan.md` | Deployment shapes, AWS architecture baseline, implementation sequence |
+| `development/aws-customer-deployment-runbook.md` | Step-by-step AWS per-customer deploy and hardening runbook |
+| `../deploy/aws/terraform/README.md` | Terraform scaffold module details |
+
+---
 
 ## Operations deep dives
 
-- `backup-restore.md` - backup and restore runbook.
-- `certs.md` - CA/TLS setup and CA rotation details.
-- `development/upgrade-strategy.md` - staged apply and rollback strategy.
-- `development/metrics-health.md` - metrics catalog and health model.
+| Doc | What it covers |
+|---|---|
+| `backup-restore.md` | Backup and restore runbook |
+| `certs.md` | CA/TLS setup and CA rotation |
+| `development/upgrade-strategy.md` | Staged apply and rollback strategy |
+| `development/metrics-health.md` | Metrics catalog and health model |
+
+---
 
 ## Validation labs
 
-- `testing/README.md` - testing index and script locations.
-- `testing/prod-docker-lab.md` - production-like on-prem validation stack using Docker.
-- `testing/prod-docker-test-plan.md` - feature + edge + security validation checklist for that lab.
+| Doc | What it covers |
+|---|---|
+| `testing/prod-docker-lab.md` | Production-like on-prem validation stack using Docker |
+| `testing/prod-docker-test-plan.md` | Feature + edge + security validation checklist for that lab |
 
-## Product + platform references
+Associated scripts: `../scripts/testing/`
 
-- `agent-systemd.md` - systemd agent install/enrollment.
-- `artifact-apply-roadmap.md` - artifact apply scope by type.
-- `preapply-demo.md` - demo apply behavior and verification.
-- `development/artifact-ingest.md` - ingest model (push + pull).
-- `development/push-vs-pull-workflows.md` - workflow choice guidance.
-- `development/artifact-ingest-test-plan.md` - ingest test plan.
-- `../deploy/ci/README.md` - CI provider templates (GitHub/GitLab/Jenkins) for push/pull ingest.
-- `development/artifact-signing.md` - signing model and migration path.
-- `development/auth-secrets-v1.md` - local auth/secrets baseline.
-- `development/license.md` - signed license and device cap enforcement.
-- `development/device-identity-hardening.md` - anti-clone device identity policy.
-- `development/security-hardening.md` - security hardening plan.
+---
+
+## Platform and integration references
+
+| Doc | What it covers |
+|---|---|
+| `agent-systemd.md` | Systemd agent install/enrollment and approval-mode runbook |
+| `development/artifact-ingest.md` | Ingest modes (manual / CI push / pull), signing model, security baseline |
+| `development/artifact-ingest-test-plan.md` | Ingest test plan |
+| `development/artifact-apply-roadmap.md` | Future artifact apply: firmware and container image planning |
+| `development/agent-first-contact-onboarding.md` | First-contact approval flow: full design and implementation detail |
+| `development/auth-secrets-v1.md` | Auth model design: local users, JWT, roles, OIDC extension points |
+| `development/license.md` | Signed license and device-cap enforcement |
+| `development/security-hardening.md` | AWS hardening tracker: acceptance evidence and residual known items |
+| `../deploy/ci/README.md` | CI provider templates (GitHub Actions/GitLab/Jenkins) for artifact push/pull |
+
+---
 
 ## Helpful scripts
 
-- `../scripts/multi-app-artifacts.sh` - build/upload multi-component demo artifacts.
-- `../scripts/aws-demo-image.sh` - build/push demo-agent image to ECR.
-- `../scripts/aws-demo-seed.sh` - seed signed demo artifacts in AWS stack.
-- `../scripts/testing/prod-lab-init.sh` - initialize hardened production-like Docker lab.
-- `../scripts/testing/prod-lab-up.sh` - start production-like Docker lab.
-- `../scripts/testing/prod-lab-seed.sh` - seed demo devices and signed artifacts in the prod-like lab.
-- `../scripts/testing/prod-lab-smoke.sh` - smoke test lab health/auth/metrics.
-- `../scripts/testing/prod-lab-down.sh` - stop/wipe production-like Docker lab.
-- `../scripts/test-artifact-ingest.sh` - push/pull ingest smoke test.
-- `../scripts/reload-pull-credentials.sh` - reload pull credential resolver from configured sources without restarting control-plane.
-- `../scripts/setup-artifactory-demo.sh` - local Artifactory setup for pull adapter tests.
-- `../scripts/test-artifactory-adapter.sh` - end-to-end Artifactory pull adapter test.
+| Script | What it does |
+|---|---|
+| `../scripts/multi-app-artifacts.sh` | Build/upload multi-component demo artifacts |
+| `../scripts/aws-demo-image.sh` | Build/push demo-agent image to ECR |
+| `../scripts/aws-demo-seed.sh` | Seed signed demo artifacts in an AWS stack |
+| `../scripts/testing/prod-lab-init.sh` | Initialize hardened production-like Docker lab |
+| `../scripts/testing/prod-lab-up.sh` | Start production-like Docker lab |
+| `../scripts/testing/prod-lab-seed.sh` | Seed demo devices and signed artifacts in prod-like lab |
+| `../scripts/testing/prod-lab-smoke.sh` | Smoke test lab health/auth/metrics |
+| `../scripts/testing/prod-lab-first-contact.sh` | End-to-end first-contact approval flow validation |
+| `../scripts/testing/prod-lab-down.sh` | Stop/wipe production-like Docker lab |
+| `../scripts/test-artifact-ingest.sh` | Push/pull ingest smoke test |
+| `../scripts/reload-pull-credentials.sh` | Reload pull credential resolver without restarting control-plane |
+| `../scripts/setup-artifactory-demo.sh` | Local Artifactory setup for pull adapter tests |
+| `../scripts/test-artifactory-adapter.sh` | End-to-end Artifactory pull adapter test |
+| `../scripts/aws-hardening-check.sh` | AWS hardening config and deployment gate helper |
