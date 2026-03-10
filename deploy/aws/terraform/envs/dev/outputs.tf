@@ -3,6 +3,11 @@ output "alb_dns_name" {
   value       = module.stack.alb_dns_name
 }
 
+output "app_waf_web_acl_arn" {
+  description = "WAF web ACL ARN for app ingress."
+  value       = module.stack.app_waf_web_acl_arn
+}
+
 output "app_url" {
   description = "App URL."
   value       = "https://${var.app_host}"

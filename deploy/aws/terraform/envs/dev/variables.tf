@@ -41,6 +41,18 @@ variable "ingress_cidrs" {
   default     = ["0.0.0.0/0"]
 }
 
+variable "app_ingress_cidrs" {
+  description = "Optional CIDRs allowed to access the app listener. Falls back to ingress_cidrs when null."
+  type        = list(string)
+  default     = null
+}
+
+variable "device_ingress_cidrs" {
+  description = "Optional CIDRs allowed to access the devices listener. Falls back to ingress_cidrs when null."
+  type        = list(string)
+  default     = null
+}
+
 variable "route53_zone_id" {
   description = "Route53 hosted zone ID."
   type        = string
@@ -83,6 +95,30 @@ variable "device_mtls_mode" {
   default     = "verify"
 }
 
+variable "enable_waf" {
+  description = "Enable AWS WAF coverage for app ingress."
+  type        = bool
+  default     = true
+}
+
+variable "waf_rate_limit" {
+  description = "Optional per-5-minute rate limit for app ingress, aggregated by source IP."
+  type        = number
+  default     = null
+}
+
+variable "waf_managed_rule_groups" {
+  description = "Optional override list of managed WAF rule groups applied to app ingress."
+  type = list(object({
+    name            = string
+    priority        = number
+    vendor_name     = optional(string, "AWS")
+    version         = optional(string)
+    override_action = optional(string, "none")
+  }))
+  default = null
+}
+
 variable "artifact_bucket_name" {
   description = "Optional explicit artifact bucket name."
   type        = string
@@ -109,6 +145,12 @@ variable "artifact_pull_credentials_aws_secret_id" {
   description = "Optional Secrets Manager secret ID/ARN containing artifact pull credential entries."
   type        = string
   default     = null
+}
+
+variable "secret_kms_key_arns" {
+  description = "Optional customer-managed KMS key ARNs used by referenced Secrets Manager secrets."
+  type        = list(string)
+  default     = []
 }
 
 variable "gateway_env" {

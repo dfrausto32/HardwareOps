@@ -81,6 +81,44 @@ variable "device_mtls_object_version" {
   default     = null
 }
 
+variable "enable_waf" {
+  description = "Enable AWS WAF for app-host traffic on this ALB."
+  type        = bool
+  default     = true
+}
+
+variable "waf_rate_limit" {
+  description = "Optional per-5-minute rate limit for app-host traffic, aggregated by source IP."
+  type        = number
+  default     = null
+}
+
+variable "waf_managed_rule_groups" {
+  description = "Optional override list of managed WAF rule groups applied to app-host traffic."
+  type = list(object({
+    name            = string
+    priority        = number
+    vendor_name     = optional(string, "AWS")
+    version         = optional(string)
+    override_action = optional(string, "none")
+  }))
+  default = null
+
+  validation {
+    condition = var.waf_managed_rule_groups == null ? true : length(distinct([
+      for rule in var.waf_managed_rule_groups : rule.priority
+    ])) == length(var.waf_managed_rule_groups)
+    error_message = "waf_managed_rule_groups priorities must be unique."
+  }
+
+  validation {
+    condition = var.waf_managed_rule_groups == null ? true : alltrue([
+      for rule in var.waf_managed_rule_groups : contains(["count", "none"], try(rule.override_action, "none"))
+    ])
+    error_message = "waf_managed_rule_groups override_action must be either \"none\" or \"count\"."
+  }
+}
+
 variable "create_trust_store" {
   description = "Create ALB trust store from the provided S3 object."
   type        = bool

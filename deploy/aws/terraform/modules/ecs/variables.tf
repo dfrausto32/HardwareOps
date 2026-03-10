@@ -118,6 +118,36 @@ variable "gateway_secret_arns" {
   default     = {}
 }
 
+variable "task_secret_arns" {
+  description = "Secrets Manager secret ARNs read directly by the task role at runtime."
+  type        = list(string)
+  default     = []
+}
+
+variable "secret_kms_key_arns" {
+  description = "Optional customer-managed KMS key ARNs used to decrypt Secrets Manager secrets for this stack."
+  type        = list(string)
+  default     = []
+}
+
+variable "artifact_bucket_arn" {
+  description = "Artifact bucket ARN used by control-plane tasks."
+  type        = string
+  default     = null
+}
+
+variable "artifact_bucket_allowed_prefixes" {
+  description = "Object key prefixes inside the artifact bucket that tasks may access."
+  type        = list(string)
+  default     = ["artifacts/*"]
+}
+
+variable "artifact_bucket_kms_key_arn" {
+  description = "Optional KMS key ARN used for artifact bucket encryption."
+  type        = string
+  default     = null
+}
+
 variable "enable_demo_agents" {
   description = "Enable demo agent ECS services."
   type        = bool

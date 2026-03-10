@@ -17,6 +17,7 @@ CLI helper: `../../../scripts/aws-customer.sh`.
   - app listener on `443`
   - device listener on `8443` with **ALB mTLS**
   - host-based routing
+  - AWS WAF managed baseline scoped to `app_host`
 - `modules/ecs`: ECS Fargate cluster/services for `control-plane` and `gateway`.
 - Optional demo fleet: one ECS service per demo agent slot backed by EFS persistence.
 - `modules/customer_stack`: composition module for a single customer environment.
@@ -27,6 +28,7 @@ CLI helper: `../../../scripts/aws-customer.sh`.
 - Device ingress: ALB mutual TLS (`verify` mode).
 - Database HA: defaults to Multi-AZ RDS.
 - Deploy safety: ECS deployment circuit breaker with rollback enabled.
+- App ingress: WAF enabled by default with AWS managed baseline rules.
 
 ## Quick start
 1. Choose an environment directory (example: `envs/dev`).
@@ -39,9 +41,11 @@ CLI helper: `../../../scripts/aws-customer.sh`.
    - ACM certificate ARN
    - trust store object location (`device_mtls_bucket`, `device_mtls_key`)
    - choose device mTLS mode (`device_mtls_mode`)
+   - optional ingress controls (`ingress_cidrs`, `app_ingress_cidrs`, `device_ingress_cidrs`)
 - image URIs for gateway/control-plane
 - optional demo fleet image URI (`demo_agent_image`) when `enable_demo_fleet = true`
 - optional pull credential secret (`artifact_pull_credentials_aws_secret_id`) for adapter `credentialRef`
+- optional customer-managed secret KMS keys (`secret_kms_key_arns`)
 - secrets map for sensitive env values (for example `DATABASE_URL`)
 4. Run:
    - `terraform init -backend-config=backend.hcl`
@@ -54,7 +58,10 @@ CLI helper: `../../../scripts/aws-customer.sh`.
 - If you need both endpoints on port `443`, use separate ALBs or front-door routing pattern in a later iteration.
 - Secret values should come from Secrets Manager (`*_secret_arns` maps), not plaintext tfvars.
 - Proxy header trust is locked to trusted proxy CIDRs; by default this is set to the ECS private subnet CIDRs via `TRUST_PROXY_CIDRS`.
+- `ingress_cidrs` remains the shared fallback for both listeners; set `app_ingress_cidrs` and `device_ingress_cidrs` only when you need different policies.
+- WAF is associated to the shared ALB, but its managed rules and optional rate limit are scope-down matched to `app_host` so device mTLS traffic is not filtered by app rules.
 - `artifact_pull_credentials_aws_secret_id` can be set to a secret **name or ARN**, but ARN is recommended for least-privilege IAM policy generation.
+- Set `secret_kms_key_arns` only when referenced Secrets Manager secrets use customer-managed KMS keys; AWS-managed Secrets Manager keys do not need extra input here.
 - For local auth mode, ensure `AUTH_JWT_SECRET` and bootstrap credentials are set in `control_plane_env`.
 - For token-based first-time enrollment, start with `device_mtls_mode = "passthrough"`, enroll devices, then switch to `device_mtls_mode = "verify"` and re-apply.
 - Demo fleet is designed to persist device identity/state across normal ECS restarts and rolling updates via EFS; full environment destroy still deletes demo state.
@@ -144,8 +151,6 @@ Credential JSON format must be a ref map, for example:
 ```
 
 ## Next implementation pass recommended
-1. Add WAF resources and attach to ALB.
-2. Add autoscaling policies for ECS services.
-3. Add Route53 health checks and failover strategy (optional).
-4. Add CloudWatch alarms + SNS/PagerDuty wiring.
-5. Restrict ECS task IAM permissions to least privilege for S3/Secrets/KMS.
+1. Add autoscaling policies for ECS services.
+2. Add Route53 health checks and failover strategy (optional).
+3. Add CloudWatch alarms + SNS/PagerDuty wiring.

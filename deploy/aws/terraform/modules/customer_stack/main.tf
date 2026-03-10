@@ -1,5 +1,6 @@
 data "aws_region" "current" {}
 data "aws_caller_identity" "current" {}
+data "aws_partition" "current" {}
 
 locals {
   database_url = format(
@@ -26,7 +27,8 @@ locals {
   artifact_pull_credentials_secret_id = trimspace(var.artifact_pull_credentials_aws_secret_id != null ? var.artifact_pull_credentials_aws_secret_id : "")
   artifact_pull_credentials_enabled   = local.artifact_pull_credentials_secret_id != ""
   artifact_pull_credentials_secret_arn = startswith(local.artifact_pull_credentials_secret_id, "arn:") ? local.artifact_pull_credentials_secret_id : format(
-    "arn:aws:secretsmanager:%s:%s:secret:%s*",
+    "arn:%s:secretsmanager:%s:%s:secret:%s*",
+    data.aws_partition.current.partition,
     data.aws_region.current.region,
     data.aws_caller_identity.current.account_id,
     local.artifact_pull_credentials_secret_id,
@@ -55,13 +57,7 @@ locals {
     DEMO_BOOTSTRAP_PASSWORD = local.demo_bootstrap_password
   }
   effective_demo_agent_env = merge(local.demo_default_agent_env, var.demo_agent_env)
-  task_role_managed_policy_arns = compact(concat(
-    [
-      "arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess",
-      "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
-    ],
-    local.artifact_pull_credentials_enabled ? [aws_iam_policy.artifact_pull_credentials_read[0].arn] : [],
-  ))
+  task_secret_arns         = local.artifact_pull_credentials_enabled ? [local.artifact_pull_credentials_secret_arn] : []
 }
 
 module "network" {
@@ -77,13 +73,15 @@ module "network" {
 module "security" {
   source = "../security"
 
-  name_prefix        = var.name_prefix
-  vpc_id             = module.network.vpc_id
-  vpc_cidr           = module.network.vpc_cidr
-  ingress_cidrs      = var.ingress_cidrs
-  gateway_port       = var.gateway_container_port
-  control_plane_port = var.control_plane_container_port
-  tags               = var.tags
+  name_prefix          = var.name_prefix
+  vpc_id               = module.network.vpc_id
+  vpc_cidr             = module.network.vpc_cidr
+  ingress_cidrs        = var.ingress_cidrs
+  app_ingress_cidrs    = var.app_ingress_cidrs
+  device_ingress_cidrs = var.device_ingress_cidrs
+  gateway_port         = var.gateway_container_port
+  control_plane_port   = var.control_plane_container_port
+  tags                 = var.tags
 }
 
 resource "aws_security_group" "demo_efs" {
@@ -205,30 +203,10 @@ module "alb" {
   device_mtls_bucket         = var.device_mtls_bucket
   device_mtls_key            = var.device_mtls_key
   device_mtls_object_version = var.device_mtls_object_version
+  enable_waf                 = var.enable_waf
+  waf_rate_limit             = var.waf_rate_limit
+  waf_managed_rule_groups    = var.waf_managed_rule_groups
   tags                       = var.tags
-}
-
-resource "aws_iam_policy" "artifact_pull_credentials_read" {
-  count = local.artifact_pull_credentials_enabled ? 1 : 0
-
-  name        = "${var.name_prefix}-artifact-pull-credentials-read"
-  description = "Allows ECS tasks to read artifact pull credential secrets."
-  path        = "/"
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "ReadArtifactPullCredentials"
-        Effect = "Allow"
-        Action = [
-          "secretsmanager:DescribeSecret",
-          "secretsmanager:GetSecretValue",
-        ]
-        Resource = local.artifact_pull_credentials_secret_arn
-      },
-    ]
-  })
-  tags = var.tags
 }
 
 module "ecs" {
@@ -251,6 +229,10 @@ module "ecs" {
   gateway_env                     = var.gateway_env
   control_plane_secret_arns       = var.control_plane_secret_arns
   gateway_secret_arns             = var.gateway_secret_arns
+  task_secret_arns                = local.task_secret_arns
+  secret_kms_key_arns             = var.secret_kms_key_arns
+  artifact_bucket_arn             = module.artifact_store.bucket_arn
+  artifact_bucket_kms_key_arn     = module.artifact_store.kms_key_arn
   enable_demo_agents              = local.demo_agents_enabled
   demo_agent_count                = var.demo_agent_count
   demo_agent_image                = var.demo_agent_image
@@ -259,7 +241,6 @@ module "ecs" {
   demo_agent_env                  = local.effective_demo_agent_env
   demo_agent_efs_file_system_id   = local.demo_agents_enabled ? aws_efs_file_system.demo[0].id : null
   demo_agent_efs_access_point_ids = local.demo_agents_enabled ? aws_efs_access_point.demo[*].id : []
-  task_role_managed_policy_arns   = local.task_role_managed_policy_arns
   tags                            = var.tags
 
   depends_on = [aws_efs_mount_target.demo]
