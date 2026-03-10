@@ -215,9 +215,9 @@ variable "task_role_managed_policy_arns" {
 }
 
 variable "enable_execute_command" {
-  description = "Enable ECS Exec."
+  description = "Enable ECS Exec for interactive container access. Disable in production. Requires ssmmessages IAM permissions on the task role."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "assign_public_ip" {

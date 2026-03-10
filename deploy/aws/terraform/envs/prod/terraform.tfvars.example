@@ -93,3 +93,7 @@ demo_bootstrap_password = "replace-with-bootstrap-password"
 # database_url_secret_arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/customer-a/prod/database-url-AbCdEf"
 # Note: When db_manage_master_user_password = true, use the database_master_secret_arn output
 # to locate the RDS-managed secret, but note it stores JSON (not a URL) — create a separate URL secret.
+
+# ECS Exec — disabled by default for production security.
+# Enable only for break-glass debugging sessions.
+# enable_execute_command = true

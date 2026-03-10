@@ -364,3 +364,9 @@ variable "database_url_secret_arn" {
   type        = string
   default     = ""
 }
+
+variable "enable_execute_command" {
+  description = "Enable ECS Exec for interactive container access. Disable in production. Requires ssmmessages IAM permissions on the task role when enabled."
+  type        = bool
+  default     = false
+}
