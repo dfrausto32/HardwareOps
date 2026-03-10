@@ -555,12 +555,20 @@ Demo fleet:
 Run:
   scripts/aws-customer.sh plan --customer $CUSTOMER --env $ENVIRONMENT --region $AWS_REGION
   scripts/aws-customer.sh apply --customer $CUSTOMER --env $ENVIRONMENT --region $AWS_REGION --auto-approve
+
+Hardening checks:
+  scripts/aws-hardening-check.sh config --customer $CUSTOMER --env $ENVIRONMENT
+  scripts/aws-hardening-check.sh deployment --customer $CUSTOMER --env $ENVIRONMENT --region $AWS_REGION
 EOF
 
   log "Generated:"
   log "  $bfile"
   log "  $tfile"
   log "  $cdir/README.txt"
+  if [ "$ENVIRONMENT" = "prod" ]; then
+    log "Review the generated tfvars before apply and run:"
+    log "  scripts/aws-hardening-check.sh config --customer $CUSTOMER --env $ENVIRONMENT"
+  fi
 }
 
 tf_init_with_backend() {

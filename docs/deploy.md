@@ -137,6 +137,20 @@ Use `agent-systemd.md` for Linux systemd agent install and enrollment.
 
 Open the `app_url` output in your browser.
 
+Before a production apply, run:
+
+```bash
+./scripts/aws-hardening-check.sh config --customer parcel --env prod
+```
+
+After apply, run:
+
+```bash
+./scripts/aws-hardening-check.sh deployment --customer parcel --env prod --region us-east-1
+```
+
+Treat any failure as a release blocker and use `development/aws-customer-deployment-runbook.md` for the raw evidence commands and SNS/on-call validation steps.
+
 ### 3.5 DNS when domain is in Cloudflare
 
 Two supported patterns:

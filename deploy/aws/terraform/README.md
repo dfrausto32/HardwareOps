@@ -7,6 +7,7 @@ Canonical operations guide: `../../../docs/operations.md`
 
 Operational runbook: `../../../docs/development/aws-customer-deployment-runbook.md`.
 CLI helper: `../../../scripts/aws-customer.sh`.
+Acceptance helper: `../../../scripts/aws-hardening-check.sh`.
 
 ## What this scaffold includes
 - `modules/network`: VPC, public/private subnets, IGW, NAT, route tables.
@@ -52,6 +53,12 @@ CLI helper: `../../../scripts/aws-customer.sh`.
    - `terraform plan`
    - `terraform apply`
 
+Before production apply, run:
+- `./scripts/aws-hardening-check.sh config --customer <customer> --env prod`
+
+After apply, run:
+- `./scripts/aws-hardening-check.sh deployment --customer <customer> --env prod --region <aws-region>`
+
 ## Important notes
 - This is scaffolding, not final hardened production IaC.
 - The app listener is `443`; the devices listener is `8443` to keep human/UI traffic separated from mTLS device traffic on ALB.
@@ -66,6 +73,7 @@ CLI helper: `../../../scripts/aws-customer.sh`.
 - For token-based first-time enrollment, start with `device_mtls_mode = "passthrough"`, enroll devices, then switch to `device_mtls_mode = "verify"` and re-apply.
 - Demo fleet is designed to persist device identity/state across normal ECS restarts and rolling updates via EFS; full environment destroy still deletes demo state.
 - Current scaffold defaults to explicit DB password mode (`db_manage_master_user_password = false`) so `DATABASE_URL` is available to control-plane. For stricter production posture, move to Secrets Manager-backed URL injection in a follow-up hardening pass.
+- Current scaffold on this branch does not yet define WAF resources, CloudWatch alarms, or split app/device ingress CIDR inputs; the hardening helper is expected to flag those gaps until the Terraform hardening lane lands.
 
 ## Cloud pull-adapter smoke test (Artifactory + Secrets Manager)
 1. Create/update a Secrets Manager secret with credential JSON:
