@@ -43,6 +43,8 @@ db_instance_class            = "db.r6g.large"
 db_multi_az                  = true
 control_plane_desired_count  = 3
 gateway_desired_count        = 3
+# When using database_url_secret_arn (recommended for production), db_master_password
+# is still used for RDS provisioning but won't appear in ECS task definitions.
 db_manage_master_user_password = false
 db_master_password             = "change-me-prod-password"
 
@@ -82,3 +84,12 @@ demo_bootstrap_password = "replace-with-bootstrap-password"
 # alarm_rds_cpu_threshold             = 80
 # alarm_rds_free_storage_threshold_gb = 5
 # alarm_rds_connections_threshold     = 100
+
+# Recommended for production: store DATABASE_URL in Secrets Manager instead of plaintext.
+# Create a secret with the full connection string:
+#   aws secretsmanager create-secret --name "hardwareops/customer-a/prod/database-url" \
+#     --secret-string "postgres://hardwareops:<password>@<rds-endpoint>:5432/hardwareops?sslmode=require"
+# Then reference the ARN here:
+# database_url_secret_arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/customer-a/prod/database-url-AbCdEf"
+# Note: When db_manage_master_user_password = true, use the database_master_secret_arn output
+# to locate the RDS-managed secret, but note it stores JSON (not a URL) — create a separate URL secret.

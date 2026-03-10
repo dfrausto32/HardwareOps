@@ -72,7 +72,7 @@ After apply, run:
 - For local auth mode, ensure `AUTH_JWT_SECRET` and bootstrap credentials are set in `control_plane_env`.
 - For token-based first-time enrollment, start with `device_mtls_mode = "passthrough"`, enroll devices, then switch to `device_mtls_mode = "verify"` and re-apply.
 - Demo fleet is designed to persist device identity/state across normal ECS restarts and rolling updates via EFS; full environment destroy still deletes demo state.
-- Current scaffold defaults to explicit DB password mode (`db_manage_master_user_password = false`) so `DATABASE_URL` is available to control-plane. For stricter production posture, move to Secrets Manager-backed URL injection in a follow-up hardening pass.
+- Set `database_url_secret_arn` to inject `DATABASE_URL` via ECS `valueFrom` (Secrets Manager) instead of plaintext. When not set, the plaintext path remains active for backward compatibility. See "Database URL Secret" section below.
 - CloudWatch alarms (ALB, ECS, RDS) are created automatically. Set `alarm_sns_email` to receive email notifications. See "CloudWatch Alarms" section below.
 
 ## Cloud pull-adapter smoke test (Artifactory + Secrets Manager)
@@ -157,6 +157,33 @@ Credential JSON format must be a ref map, for example:
   }
 }
 ```
+
+## Database URL Secret (Secrets Manager)
+
+By default `DATABASE_URL` is injected as plaintext in ECS task environment variables. To eliminate the plaintext credential:
+
+1. Create a Secrets Manager secret with the full connection string as its value:
+   ```bash
+   aws secretsmanager create-secret \
+     --name "hardwareops/customer-a/prod/database-url" \
+     --secret-string "postgres://hardwareops:<password>@<rds-endpoint>:5432/hardwareops?sslmode=require"
+   ```
+
+2. Get the ARN:
+   ```bash
+   aws secretsmanager describe-secret \
+     --secret-id "hardwareops/customer-a/prod/database-url" \
+     --query ARN --output text
+   ```
+
+3. Set in your environment `terraform.tfvars`:
+   ```hcl
+   database_url_secret_arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/customer-a/prod/database-url-AbCdEf"
+   ```
+
+4. Apply Terraform — `DATABASE_URL` will now be in the ECS task definition `secrets` block (injected via `valueFrom`) rather than the plaintext `environment` block.
+
+When `db_manage_master_user_password = true`, use the `database_master_secret_arn` Terraform output to locate the RDS-managed secret. However, that secret stores JSON (username/password fields), not a connection URL — you still need to create a separate URL secret as shown above.
 
 ## CloudWatch Alarms
 
