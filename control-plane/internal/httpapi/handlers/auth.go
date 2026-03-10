@@ -36,8 +36,10 @@ type UserView struct {
 }
 
 type AuthStatusResponse struct {
-	Enabled bool   `json:"enabled"`
-	Mode    string `json:"mode"`
+	Enabled      bool   `json:"enabled"`
+	Mode         string `json:"mode"`
+	OIDCEnabled  bool   `json:"oidcEnabled"`
+	OIDCLoginURL string `json:"oidcLoginURL,omitempty"`
 }
 
 type RegisterRequest struct {
@@ -150,15 +152,23 @@ func GetMe() http.HandlerFunc {
 	}
 }
 
-func AuthStatus(manager *auth.Manager) http.HandlerFunc {
+func AuthStatus(manager *auth.Manager, oidcLoginURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		enabled := manager != nil && manager.Enabled()
 		mode := "disabled"
 		if manager != nil {
 			mode = manager.Mode()
 		}
+		resp := AuthStatusResponse{
+			Enabled:     enabled,
+			Mode:        mode,
+			OIDCEnabled: oidcLoginURL != "",
+		}
+		if oidcLoginURL != "" {
+			resp.OIDCLoginURL = oidcLoginURL
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(AuthStatusResponse{Enabled: enabled, Mode: mode})
+		_ = json.NewEncoder(w).Encode(resp)
 	}
 }
 

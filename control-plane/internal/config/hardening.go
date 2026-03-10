@@ -168,6 +168,15 @@ func ValidateHardening(cfg Config) error {
 		}
 	}
 
+	if cfg.OIDCEnabled() {
+		if strings.ToLower(strings.TrimSpace(cfg.AuthOIDCDefaultRole)) == "admin" {
+			return fmt.Errorf("HARDENED_PROFILE requires AUTH_OIDC_DEFAULT_ROLE != admin")
+		}
+		if strings.TrimSpace(cfg.AuthOIDCRoleMap) == "" {
+			return fmt.Errorf("HARDENED_PROFILE requires AUTH_OIDC_ROLE_MAP when OIDC is enabled")
+		}
+	}
+
 	return nil
 }
 
