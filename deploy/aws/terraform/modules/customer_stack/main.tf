@@ -251,6 +251,7 @@ module "ecs" {
   demo_agent_env                  = local.effective_demo_agent_env
   demo_agent_efs_file_system_id   = local.demo_agents_enabled ? aws_efs_file_system.demo[0].id : null
   demo_agent_efs_access_point_ids = local.demo_agents_enabled ? aws_efs_access_point.demo[*].id : []
+  enable_execute_command          = var.enable_execute_command
   tags                            = var.tags
 
   depends_on = [aws_efs_mount_target.demo]

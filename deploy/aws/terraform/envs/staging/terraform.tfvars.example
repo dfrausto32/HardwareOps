@@ -87,3 +87,7 @@ demo_bootstrap_password = "replace-with-bootstrap-password"
 #     --secret-string "postgres://hardwareops:<password>@<rds-endpoint>:5432/hardwareops?sslmode=require"
 # Then reference the ARN here:
 # database_url_secret_arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/customer-a/staging/database-url-AbCdEf"
+
+# ECS Exec — disabled by default for production security.
+# Enable only for break-glass debugging sessions.
+# enable_execute_command = true

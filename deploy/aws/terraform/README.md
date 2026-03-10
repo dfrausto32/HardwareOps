@@ -73,6 +73,7 @@ After apply, run:
 - For token-based first-time enrollment, start with `device_mtls_mode = "passthrough"`, enroll devices, then switch to `device_mtls_mode = "verify"` and re-apply.
 - Demo fleet is designed to persist device identity/state across normal ECS restarts and rolling updates via EFS; full environment destroy still deletes demo state.
 - Set `database_url_secret_arn` to inject `DATABASE_URL` via ECS `valueFrom` (Secrets Manager) instead of plaintext. When not set, the plaintext path remains active for backward compatibility. See "Database URL Secret" section below.
+- `enable_execute_command` is `false` by default. Set to `true` only for break-glass debugging; the Terraform-managed task role includes ssmmessages permissions. Disable again after debugging.
 - CloudWatch alarms (ALB, ECS, RDS) are created automatically. Set `alarm_sns_email` to receive email notifications. See "CloudWatch Alarms" section below.
 
 ## Cloud pull-adapter smoke test (Artifactory + Secrets Manager)
