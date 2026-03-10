@@ -10,7 +10,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 ---
 
 ## Program Snapshot (Parallel Session Staging)
-_Updated: 2026-03-10_
+_Updated: 2026-03-10 (post D-hardening-alarms/secrets/ecs-exec batch)_
 
 Use this section as the single source of truth for "what is done" vs "what is left."
 
@@ -22,13 +22,14 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Phase B Extension — UX + Realtime | 🟢 Complete | Bulk actions + realtime updates + auth-session UX reset shipped. |
 | Operational Hardening (between B and C) | 🟢 Complete | Pull-boundary, token exposure, startup guardrails, break-glass backend, proxy trust policy, and abuse controls are all shipped. |
 | Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, and first-contact approval onboarding all shipped. Planned extensions (OIDC, custom RBAC, LDAP, Vault secrets) remain as future work. |
-| Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext secret elimination and full live-deployment validation remain. |
+| Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Live-deployment acceptance gate execution remains. |
 
 ### Active work queue (what is still to do)
-No active tasks. The previous batch (RBAC UI parity, first-contact prod closeout, AWS IAM/WAF hardening, AWS hardening runbook) merged on 2026-03-10. Prioritization of the next batch is pending.
+
+No items currently in-flight. Queue is clear.
 
 ### Prepared next tasks (agent-scoped)
-Next batch not yet mapped. Candidate items include plaintext secret elimination in `customer_stack`, CloudWatch alarm Terraform resources, ECS exec guardrail enforcement, OIDC SSO, and custom RBAC policies. Confirm priorities before assigning agents.
+2026-03-10 D-hardening batch merged (alarms, secrets, ecs-exec). Candidate items for the next sequence: OIDC SSO and custom RBAC policies.
 
 ---
 
@@ -65,6 +66,9 @@ Next batch not yet mapped. Candidate items include plaintext secret elimination 
 - ✅ First-contact onboarding production closeout (packaged self-contained installer/bootstrap path; agent-host gateway routes for pending-enrollment request/claim; prod-lab deterministic compose subnet and trusted proxy CIDRs; new `prod-lab-first-contact.sh` end-to-end validation script; full first-contact approval flow validated in prod-docker-lab).
 - ✅ AWS Terraform IAM/WAF/ingress hardening (least-privilege ECS task-execution and task IAM roles; WAFv2 web ACL with IP-reputation, known-bad-inputs, and CRS managed rule sets attached to ALB app ingress; ingress CIDR split between app and device trust boundaries; Terraform `fmt` + `validate` passed across dev/staging/prod environments).
 - ✅ AWS hardening acceptance gate and runbook (rewritten `aws-customer-deployment-runbook.md` with pre/post-apply evidence checklist; `scripts/aws-hardening-check.sh` config and deployment gate helper; `security-hardening.md` updated with acceptance evidence requirements and residual known-debt documentation).
+- ✅ Plaintext DATABASE_URL elimination (`database_url_secret_arn` variable in `customer_stack`; when set, DATABASE_URL routes via ECS `valueFrom` Secrets Manager injection instead of plaintext task env; backward-compatible when unset).
+- ✅ ECS exec guardrail (`enable_execute_command` default changed to `false` in `modules/ecs`; variable threaded through `customer_stack`; opt-in documented in tfvars examples).
+- ✅ CloudWatch alarm Terraform resources (SNS topic + email subscription + 8 managed alarms: ALB 5xx/unhealthy-host, ECS CPU/memory/task-count, RDS CPU/storage/connections; all thresholds parameterized; `aws-hardening-check.sh deployment` alarm checks now have resources to validate).
 
 ---
 
@@ -259,11 +263,12 @@ Next batch not yet mapped. Candidate items include plaintext secret elimination 
 - **Notes:** Presigned CI push path implemented (`/artifacts/presign-upload` + `/artifacts/complete`) with scoped expiring service tokens (`artifact.publish`) and `scripts/ci-upload-artifact.sh`. Pull ingest API implemented (`/artifacts/pull`) with checksum validation + host/size/timeout guardrails plus CI helper `scripts/ci-pull-artifact.sh`. Adapter framework and backward-compatible source shape are in place (`sourceUrl` or `source.kind` + `source.uri`; current kinds=`http`,`artifactory`). Credential resolver abstraction is in place (`source.credentialRef`) with static map (`ARTIFACT_PULL_CREDENTIALS_FILE`/`ARTIFACT_PULL_CREDENTIALS_JSON`) plus AWS Secrets Manager-backed loading (`ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID`). Pull resolver operational workflow is implemented with admin status/reload endpoints (`GET/POST /api/v1/artifacts/pull-credentials*`) and helper script (`scripts/reload-pull-credentials.sh`). Artifactory adapter shipped with local docker smoke scripts (`scripts/setup-artifactory-demo.sh`, `scripts/test-artifactory-adapter.sh`) and signed artifact demo flow. Smoke coverage now validates push + pull + pull-credential reload audit path in `scripts/test-artifact-ingest.sh` (see `artifact-ingest-test-plan.md`). CI provider scaffold templates added for GitHub Actions/GitLab/Jenkins (`../../deploy/ci/README.md`). Vault resolver backend is deferred to Phase C.
 
 ### Recommended Next Sequence (Pending Prioritization)
-The 2026-03-10 batch closed all four previously queued items. Candidate items for the next sequence:
-1. **Plaintext secret elimination:** Remove `DATABASE_URL` plaintext injection from `customer_stack`; move to Secrets Manager refs in ECS task definitions.
-2. **ECS exec guardrails:** Enforce `enable_execute_command = false` default for production environments in `modules/ecs`.
-3. **CloudWatch alarm Terraform resources:** Add managed alarm resources and SNS routing to the Terraform stack so the `aws-hardening-check.sh deployment` gate can validate them automatically.
+The 2026-03-10 D-hardening batch merged. Items 1–3 below are now complete. Remaining candidates:
+1. ~~**Plaintext secret elimination**~~ — ✅ Done (#18)
+2. ~~**ECS exec guardrails**~~ — ✅ Done (#19)
+3. ~~**CloudWatch alarm Terraform resources**~~ — ✅ Done (#17)
 4. **OIDC SSO:** Begin Phase C OIDC identity provider integration now that RBAC layer and role-aware UI are in place.
+5. **Custom RBAC policies:** Per-resource permission engine and admin UI.
 
 Confirm priorities with the team before mapping to agents.
 
@@ -541,7 +546,7 @@ Confirm priorities with the team before mapping to agents.
   - IAM policy review passed with scoped permissions.
   - ECS exec disabled by default for production.
   - Security alarms routed to on-call channel.
-- **Notes:** Shipped in this batch: least-privilege IAM roles, WAFv2 web ACL with managed rule groups (IP reputation + known-bad-inputs + CRS) + rate-limit rule attached to app ALB, ingress CIDR split in Terraform variable model, acceptance gate helper `scripts/aws-hardening-check.sh`, and rewritten operator runbook. Residual known items documented in `security-hardening.md`: plaintext `DATABASE_URL` injection in `customer_stack` (pre-dates this batch), `enable_execute_command` production default not yet enforced, CloudWatch alarm resources not yet Terraform-managed, and live-deployment gate not yet executed against a real environment.
+- **Notes:** IAM roles, WAFv2, ingress CIDR split, acceptance gate, and operator runbook shipped in the March 2026 IAM/WAF batch. Plaintext `DATABASE_URL` eliminated (#18); `enable_execute_command` default enforced to `false` (#19); CloudWatch alarm resources added to Terraform (#17). Remaining residual: live-deployment acceptance gate execution against a real AWS environment.
 
 #### Multi-tenant controls (optional)
 - **Status:** ⬜ Backlog
