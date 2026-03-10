@@ -10,7 +10,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 ---
 
 ## Program Snapshot (Parallel Session Staging)
-_Updated: 2026-03-10 (post D-hardening-alarms/secrets/ecs-exec batch)_
+_Updated: 2026-03-10 (post C-OIDC-SSO merge)_
 
 Use this section as the single source of truth for "what is done" vs "what is left."
 
@@ -21,14 +21,12 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Phase B — Operational Maturity | 🟢 Complete | Audit/metrics/events/lifecycle/CI ingest/bulk ops shipped and operational. |
 | Phase B Extension — UX + Realtime | 🟢 Complete | Bulk actions + realtime updates + auth-session UX reset shipped. |
 | Operational Hardening (between B and C) | 🟢 Complete | Pull-boundary, token exposure, startup guardrails, break-glass backend, proxy trust policy, and abuse controls are all shipped. |
-| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, and first-contact approval onboarding all shipped. Planned extensions (OIDC, custom RBAC, LDAP, Vault secrets) remain as future work. |
+| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, and OIDC SSO all shipped. Custom RBAC, LDAP, and Vault secrets remain as future work. |
 | Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Live-deployment acceptance gate execution remains. |
 
 ### Active work queue (what is still to do)
 
-| Task | Issue | Branch | Worktree | Status |
-|---|---|---|---|---|
-| C-OIDC-SSO: OIDC identity provider integration | #23 | `feat/23-c-oidc-sso` | agent-1 | 🟡 In progress |
+No items currently in-flight. Queue is clear.
 
 ### Prepared next tasks (agent-scoped)
 2026-03-10 D-hardening batch merged (alarms, secrets, ecs-exec). Candidate items for the next sequence: OIDC SSO and custom RBAC policies.
@@ -71,6 +69,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 - ✅ Plaintext DATABASE_URL elimination (`database_url_secret_arn` variable in `customer_stack`; when set, DATABASE_URL routes via ECS `valueFrom` Secrets Manager injection instead of plaintext task env; backward-compatible when unset).
 - ✅ ECS exec guardrail (`enable_execute_command` default changed to `false` in `modules/ecs`; variable threaded through `customer_stack`; opt-in documented in tfvars examples).
 - ✅ CloudWatch alarm Terraform resources (SNS topic + email subscription + 8 managed alarms: ALB 5xx/unhealthy-host, ECS CPU/memory/task-count, RDS CPU/storage/connections; all thresholds parameterized; `aws-hardening-check.sh deployment` alarm checks now have resources to validate).
+- ✅ OIDC SSO (authorization code flow; `go-oidc/v3` + `oauth2`; IdP discovery; group-to-role mapping; user upsert on `auth_provider`+`external_id`; state cookie; `auth.oidc.login` audit events; UI SSO button; hardened-profile guards; per-IdP docs for Okta/Azure AD/Google Workspace).
 
 ---
 
@@ -269,7 +268,7 @@ The 2026-03-10 D-hardening batch merged. Items 1–3 below are now complete. Rem
 1. ~~**Plaintext secret elimination**~~ — ✅ Done (#18)
 2. ~~**ECS exec guardrails**~~ — ✅ Done (#19)
 3. ~~**CloudWatch alarm Terraform resources**~~ — ✅ Done (#17)
-4. **OIDC SSO:** Begin Phase C OIDC identity provider integration now that RBAC layer and role-aware UI are in place.
+4. ~~**OIDC SSO**~~ — ✅ Done (#23)
 5. **Custom RBAC policies:** Per-resource permission engine and admin UI.
 
 Confirm priorities with the team before mapping to agents.
@@ -427,12 +426,12 @@ Confirm priorities with the team before mapping to agents.
 - **Notes:** Deferred from Phase B to Phase C because rollout policy is customer-specific.
 
 #### OIDC SSO
-- **Status:** ⬜ Planned
-- **Scope:** Group‑to‑role mapping.
+- **Status:** 🟢 Complete
+- **Scope:** Authorization code flow; group-to-role mapping; user upsert; audit events; UI SSO button.
 - **Dependencies:** IdP config; callback endpoints.
 - **Risks:** IdP misconfiguration.
 - **Acceptance:** Users can log in via OIDC and get correct roles.
-- **Notes:** 
+- **Notes:** `go-oidc/v3` + `golang.org/x/oauth2` for IdP discovery and token exchange. `GET /api/v1/auth/oidc/login` → IdP redirect; `GET /api/v1/auth/oidc/callback` → code exchange → internal JWT issued. Group-to-role mapping via `AUTH_OIDC_ROLE_MAP` JSON; unmapped users get `AUTH_OIDC_DEFAULT_ROLE` (default `viewer`). State cookie (`hwops_oidc_state`, HttpOnly, 600s TTL). Users upserted on `auth_provider`+`external_id` (DB columns already existed). `auth.oidc.login` and `auth.oidc.login.failed` audit events. UI renders SSO button when `authStatus.oidcEnabled`. Hardened profile rejects `AUTH_OIDC_DEFAULT_ROLE=admin` and empty role map. Per-IdP docs for Okta, Azure AD (Entra), and Google Workspace in `auth-secrets-v1.md`.
 
 #### CI workload identity federation
 - **Status:** ⬜ Planned
