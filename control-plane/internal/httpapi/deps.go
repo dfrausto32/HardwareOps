@@ -73,6 +73,7 @@ type Dependencies struct {
 	MetricsPath                     string
 	Auth                            *auth.Manager
 	AuthLoginBackoff                *auth.LoginBackoff
+	OIDCProvider                    *auth.OIDCProvider
 	BootstrapToken                  string
 	License                         *license.Manager
 	CertManager                     *certs.Manager

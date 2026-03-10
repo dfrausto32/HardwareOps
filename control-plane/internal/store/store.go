@@ -390,6 +390,7 @@ type Store interface {
 	CreateUser(user User) error
 	GetUser(userID string) (User, bool, error)
 	GetUserByEmail(email string) (User, bool, error)
+	GetUserByExternalID(provider, externalID string) (User, bool, error)
 	ListUsers(limit, offset int) ([]User, error)
 	UpdateUser(update UserUpdate) error
 	SetUserLastLogin(userID string, at time.Time) error

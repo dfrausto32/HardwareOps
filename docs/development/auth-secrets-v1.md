@@ -116,3 +116,122 @@ Implementation will keep **local break‑glass admin** as a fallback.
 - Role middleware blocks unauthorized actions.
 - Audit logs record actor identity and auth method.
 - Secrets are documented and can be injected via env.
+
+---
+
+## OIDC SSO Integration (v2)
+
+OIDC authorization code flow is now supported alongside local auth. Both modes can be active simultaneously.
+
+### Environment Variables
+
+| Variable | Type | Default | Description |
+|---|---|---|---|
+| `AUTH_OIDC_ISSUER` | string | _(unset)_ | OIDC issuer URL (e.g. `https://accounts.google.com`). Setting this enables OIDC. |
+| `AUTH_OIDC_CLIENT_ID` | string | _(required when OIDC enabled)_ | OAuth2 client ID registered with the IdP. |
+| `AUTH_OIDC_CLIENT_SECRET` | string | _(required when OIDC enabled)_ | OAuth2 client secret. Store in a secrets manager, not git. |
+| `AUTH_OIDC_REDIRECT_URL` | string | _(required when OIDC enabled)_ | Callback URL registered with the IdP (e.g. `https://hwops.example.com/api/v1/auth/oidc/callback`). |
+| `AUTH_OIDC_SCOPES` | string | `openid email profile groups` | Space or comma separated OIDC scopes to request. |
+| `AUTH_OIDC_GROUP_CLAIM` | string | `groups` | Name of the claim in the ID token that contains the user's groups. |
+| `AUTH_OIDC_ROLE_MAP` | string (JSON) | _(unset)_ | JSON object mapping IdP group names to HardwareOps roles. Example: `{"hwops-admins":"admin","hwops-ops":"operator"}`. Required when `HARDENED_PROFILE=1`. |
+| `AUTH_OIDC_DEFAULT_ROLE` | string | `viewer` | Role assigned to users whose groups do not match any entry in `AUTH_OIDC_ROLE_MAP`. Cannot be `admin` when `HARDENED_PROFILE=1`. |
+
+### Role Map JSON Format
+
+`AUTH_OIDC_ROLE_MAP` is a flat JSON object where keys are IdP group names and values are HardwareOps role names (`admin`, `operator`, `viewer`).
+
+```json
+{
+  "hwops-admins": "admin",
+  "hwops-operators": "operator",
+  "hwops-viewers": "viewer"
+}
+```
+
+When a user belongs to multiple groups, the highest-precedence role wins: `admin > operator > viewer`.
+
+### State Cookie
+
+| Property | Value |
+|---|---|
+| Cookie name | `hwops_oidc_state` |
+| TTL | 600 seconds (10 minutes) |
+| Flags | `HttpOnly`, `SameSite=Lax`, `Path=/` |
+
+The state cookie prevents CSRF during the OAuth2 redirect flow.
+
+### OIDC Auth Flow
+
+1. UI calls `GET /api/v1/auth/status` — response now includes `oidcEnabled` and `oidcLoginURL`.
+2. User clicks "Sign in with SSO" — browser navigates to `/api/v1/auth/oidc/login`.
+3. Server generates state, sets cookie, redirects to IdP.
+4. IdP authenticates user and redirects to `/api/v1/auth/oidc/callback?code=...&state=...`.
+5. Server verifies state cookie, exchanges code for tokens, upserts user, issues JWT.
+6. Server redirects browser to `/?oidc_token=<jwt>`.
+7. SPA detects `oidc_token` query param, persists the token, clears param from URL.
+
+### User Upsert Logic
+
+On each OIDC login:
+1. Look up user by `external_id = sub` and `auth_provider = oidc`.
+2. If not found, look up by `email` (account linking with existing local user).
+3. If still not found, create new user with `auth_provider=oidc` and `external_id=sub`.
+4. Update roles from IdP groups on every login.
+
+### Audit Events
+
+| Action | When |
+|---|---|
+| `auth.oidc.login` | Successful OIDC sign-in |
+| `auth.oidc.login.failed` | Failed OIDC sign-in (state mismatch, exchange error, IdP error) |
+
+### Per-IdP Quickstart
+
+#### Okta
+
+1. Create an OIDC Web Application in Okta.
+2. Set redirect URI to `https://<your-domain>/api/v1/auth/oidc/callback`.
+3. Enable "Groups" claim in the ID token (Okta → Application → Sign On → OpenID Connect ID Token → Groups claim filter).
+4. Set env vars:
+   ```
+   AUTH_OIDC_ISSUER=https://<your-okta-domain>/oauth2/default
+   AUTH_OIDC_CLIENT_ID=<client-id>
+   AUTH_OIDC_CLIENT_SECRET=<client-secret>
+   AUTH_OIDC_REDIRECT_URL=https://<your-domain>/api/v1/auth/oidc/callback
+   AUTH_OIDC_GROUP_CLAIM=groups
+   AUTH_OIDC_ROLE_MAP={"hwops-admins":"admin","hwops-operators":"operator"}
+   ```
+
+#### Azure AD (Entra ID)
+
+1. Register an application in Entra ID (App registrations).
+2. Set redirect URI (Web) to `https://<your-domain>/api/v1/auth/oidc/callback`.
+3. Add a `groups` claim via Token configuration → Add groups claim → Security groups.
+4. Create a client secret under Certificates & secrets.
+5. Set env vars:
+   ```
+   AUTH_OIDC_ISSUER=https://login.microsoftonline.com/<tenant-id>/v2.0
+   AUTH_OIDC_CLIENT_ID=<application-client-id>
+   AUTH_OIDC_CLIENT_SECRET=<client-secret-value>
+   AUTH_OIDC_REDIRECT_URL=https://<your-domain>/api/v1/auth/oidc/callback
+   AUTH_OIDC_GROUP_CLAIM=groups
+   AUTH_OIDC_SCOPES=openid email profile groups
+   AUTH_OIDC_ROLE_MAP={"<group-object-id-for-admins>":"admin","<group-object-id-for-ops>":"operator"}
+   ```
+   Note: Entra groups appear as object IDs in the token by default.
+
+#### Google Workspace
+
+1. Create an OAuth2 Web Application credential in Google Cloud Console.
+2. Set authorized redirect URI to `https://<your-domain>/api/v1/auth/oidc/callback`.
+3. Google does not include group membership in standard OIDC tokens. Use the Admin SDK Directory API or a custom claim via a Google Workspace Marketplace app.
+4. Set env vars:
+   ```
+   AUTH_OIDC_ISSUER=https://accounts.google.com
+   AUTH_OIDC_CLIENT_ID=<client-id>.apps.googleusercontent.com
+   AUTH_OIDC_CLIENT_SECRET=<client-secret>
+   AUTH_OIDC_REDIRECT_URL=https://<your-domain>/api/v1/auth/oidc/callback
+   AUTH_OIDC_SCOPES=openid email profile
+   AUTH_OIDC_DEFAULT_ROLE=viewer
+   # AUTH_OIDC_GROUP_CLAIM and AUTH_OIDC_ROLE_MAP require custom claim setup
+   ```

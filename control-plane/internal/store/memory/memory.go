@@ -1367,6 +1367,17 @@ func (s *Store) GetUserByEmail(email string) (store.User, bool, error) {
 	return user, true, nil
 }
 
+func (s *Store) GetUserByExternalID(provider, externalID string) (store.User, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, user := range s.users {
+		if user.AuthProvider == provider && user.ExternalID == externalID && !user.Disabled {
+			return user, true, nil
+		}
+	}
+	return store.User{}, false, nil
+}
+
 func (s *Store) ListUsers(limit, offset int) ([]store.User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

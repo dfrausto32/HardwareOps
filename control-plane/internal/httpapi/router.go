@@ -93,13 +93,23 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(admin).Handle(deps.MetricsPath, deps.Metrics.Handler())
 	}
 
+	// Derive OIDC login URL for use in status endpoint.
+	oidcLoginURL := ""
+	if deps.OIDCProvider != nil {
+		oidcLoginURL = "/api/v1/auth/oidc/login"
+	}
+
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/bootstrap", handlers.BootstrapStatus(deps.Auth != nil && deps.Auth.Enabled(), deps.BootstrapToken))
 		r.Get("/bootstrap/ca", handlers.DownloadBootstrapCA(logger, deps.Store, deps.CertManager, deps.BootstrapToken, deps.TrustProxy))
 
-		r.Get("/auth/status", handlers.AuthStatus(deps.Auth))
+		r.Get("/auth/status", handlers.AuthStatus(deps.Auth, oidcLoginURL))
 		r.With(loginLimiter.Middleware).Post("/auth/login", handlers.Login(logger, deps.Auth, deps.Store, deps.TrustProxy, deps.AuthLoginBackoff))
 		r.Post("/auth/register", handlers.Register(logger, deps.Auth, deps.Store, deps.TrustProxy))
+		if deps.OIDCProvider != nil {
+			r.Get("/auth/oidc/login", handlers.OIDCLogin(deps.OIDCProvider))
+			r.Get("/auth/oidc/callback", handlers.OIDCCallback(logger, deps.OIDCProvider, deps.Store, deps.TrustProxy))
+		}
 		r.With(viewer).Get("/auth/me", handlers.GetMe())
 		r.With(admin).Post("/auth/vouchers", handlers.CreateAuthVoucher(logger, deps.Store, deps.TrustProxy))
 		r.With(admin).Post("/auth/service-tokens", handlers.CreateServiceToken(logger, deps.Store, deps.TrustProxy))

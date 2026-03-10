@@ -867,6 +867,21 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    // Handle OIDC callback: server redirects to /?oidc_token=<jwt>
+    const params = new URLSearchParams(window.location.search)
+    const oidcToken = params.get('oidc_token')
+    if (oidcToken) {
+      persistAuthToken(oidcToken)
+      setAuthToken(oidcToken)
+      // Remove oidc_token from the URL without triggering a reload.
+      params.delete('oidc_token')
+      const newSearch = params.toString()
+      const newUrl = window.location.pathname + (newSearch ? '?' + newSearch : '') + window.location.hash
+      window.history.replaceState({}, '', newUrl)
+    }
+  }, [])
+
+  useEffect(() => {
     async function loadAuthStatus() {
       try {
         const res = await getAuthStatus()
@@ -4250,6 +4265,11 @@ export default function App() {
           </div>
           {authView === 'login' ? (
             <div className="form">
+              {authStatus.oidcEnabled && (
+                <a className="button" href={authStatus.oidcLoginURL} style={{ textAlign: 'center', marginBottom: '0.5rem' }}>
+                  Sign in with SSO
+                </a>
+              )}
               <label>Email</label>
               <input
                 value={loginForm.email}

@@ -112,6 +112,12 @@ type Config struct {
 	AuthBootstrapPassword                string
 	AuthOIDCIssuer                       string
 	AuthOIDCClientID                     string
+	AuthOIDCClientSecret                 string
+	AuthOIDCRedirectURL                  string
+	AuthOIDCScopes                       string
+	AuthOIDCGroupClaim                   string
+	AuthOIDCRoleMap                      string
+	AuthOIDCDefaultRole                  string
 	BootstrapToken                       string
 	LicensePath                          string
 	LicensePublicKey                     string
@@ -246,6 +252,12 @@ func FromEnv() Config {
 		AuthBootstrapPassword:                os.Getenv("AUTH_BOOTSTRAP_PASSWORD"),
 		AuthOIDCIssuer:                       os.Getenv("AUTH_OIDC_ISSUER"),
 		AuthOIDCClientID:                     os.Getenv("AUTH_OIDC_CLIENT_ID"),
+		AuthOIDCClientSecret:                 os.Getenv("AUTH_OIDC_CLIENT_SECRET"),
+		AuthOIDCRedirectURL:                  os.Getenv("AUTH_OIDC_REDIRECT_URL"),
+		AuthOIDCScopes:                       getenvDefault("AUTH_OIDC_SCOPES", "openid email profile groups"),
+		AuthOIDCGroupClaim:                   getenvDefault("AUTH_OIDC_GROUP_CLAIM", "groups"),
+		AuthOIDCRoleMap:                      os.Getenv("AUTH_OIDC_ROLE_MAP"),
+		AuthOIDCDefaultRole:                  getenvDefault("AUTH_OIDC_DEFAULT_ROLE", "viewer"),
 		BootstrapToken:                       os.Getenv("BOOTSTRAP_TOKEN"),
 		LicensePath:                          os.Getenv("LICENSE_PATH"),
 		LicensePublicKey:                     os.Getenv("LICENSE_PUBLIC_KEY"),
@@ -348,4 +360,9 @@ func parseBoolEnvDefault(key string, def bool) bool {
 		return def
 	}
 	return parseBoolEnv(key)
+}
+
+// OIDCEnabled returns true when OIDC SSO is configured.
+func (c *Config) OIDCEnabled() bool {
+	return strings.TrimSpace(c.AuthOIDCIssuer) != ""
 }

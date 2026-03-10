@@ -208,6 +208,7 @@ func main() {
 	}
 	var authManager *auth.Manager
 	var authLoginBackoff *auth.LoginBackoff
+	var oidcProvider *auth.OIDCProvider
 	if cfg.AuthMode != "" && cfg.AuthMode != "disabled" {
 		manager, err := auth.NewManager(cfg.AuthMode, cfg.AuthJWTSecret, cfg.AuthTokenTTL, cfg.AuthIssuer, store)
 		if err != nil {
@@ -228,6 +229,20 @@ func main() {
 			MaxDelay:  cfg.AuthLoginBackoffMax,
 			Window:    cfg.AuthLoginBackoffWindow,
 		})
+	}
+	if cfg.OIDCEnabled() {
+		if strings.TrimSpace(cfg.AuthOIDCClientSecret) == "" {
+			logger.Fatal("AUTH_OIDC_CLIENT_SECRET is required when AUTH_OIDC_ISSUER is set")
+		}
+		if strings.TrimSpace(cfg.AuthOIDCRedirectURL) == "" {
+			logger.Fatal("AUTH_OIDC_REDIRECT_URL is required when AUTH_OIDC_ISSUER is set")
+		}
+		p, err := auth.NewOIDCProvider(context.Background(), &cfg, store, authManager)
+		if err != nil {
+			logger.Fatalf("oidc provider init: %v", err)
+		}
+		oidcProvider = p
+		logger.Printf("oidc provider initialized issuer=%s", cfg.AuthOIDCIssuer)
 	}
 	artifactLifecycleManager := lifecycle.NewManager(lifecycle.ManagerConfig{
 		Enabled:                 cfg.ArtifactPruneEnabled,
@@ -305,6 +320,7 @@ func main() {
 		MetricsPath:                     cfg.MetricsPath,
 		Auth:                            authManager,
 		AuthLoginBackoff:                authLoginBackoff,
+		OIDCProvider:                    oidcProvider,
 		BootstrapToken:                  cfg.BootstrapToken,
 		License:                         licenseManager,
 		CertManager:                     certManager,
