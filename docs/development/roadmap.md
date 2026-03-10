@@ -10,7 +10,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 ---
 
 ## Program Snapshot (Parallel Session Staging)
-_Updated: 2026-03-09_
+_Updated: 2026-03-10_
 
 Use this section as the single source of truth for "what is done" vs "what is left."
 
@@ -21,24 +21,14 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Phase B — Operational Maturity | 🟢 Complete | Audit/metrics/events/lifecycle/CI ingest/bulk ops shipped and operational. |
 | Phase B Extension — UX + Realtime | 🟢 Complete | Bulk actions + realtime updates + auth-session UX reset shipped. |
 | Operational Hardening (between B and C) | 🟢 Complete | Pull-boundary, token exposure, startup guardrails, break-glass backend, proxy trust policy, and abuse controls are all shipped. |
-| Phase C — Enterprise Readiness | 🟡 In progress | Backend RBAC, break-glass APIs, and first-contact backend are in place; UI parity and onboarding production closeout remain. |
-| Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment exists; production hardening and cloud maturity items remain. |
+| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, and first-contact approval onboarding all shipped. Planned extensions (OIDC, custom RBAC, LDAP, Vault secrets) remain as future work. |
+| Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext secret elimination and full live-deployment validation remain. |
 
 ### Active work queue (what is still to do)
-1. **C-RBAC-UI-PARITY** — Complete role-aware UI gating and verify page/action parity against backend policy.
-2. **C-ONBOARD-PROD-CLOSEOUT** — Finish first-contact onboarding production closeout: installer/bootstrap path, operator runbook, and full prod-lab validation.
-3. **D-AWS-HARDENING-IAM-WAF** — Finish least-privilege IAM, WAF attachment, and ingress policy split in Terraform.
-4. **D-AWS-HARDENING-RUNBOOK** — Finish AWS security acceptance checks, response wiring, and deployment/runbook validation.
+No active tasks. The previous batch (RBAC UI parity, first-contact prod closeout, AWS IAM/WAF hardening, AWS hardening runbook) merged on 2026-03-10. Prioritization of the next batch is pending.
 
 ### Prepared next tasks (agent-scoped)
-- `agent-1` -> `C-RBAC-UI-PARITY`
-  Scope: audit every mutating UI control, hide/disable by role, and add regression coverage where missing.
-- `agent-2` -> `C-ONBOARD-PROD-CLOSEOUT`
-  Scope: production bootstrap flow for first-contact onboarding, operator runbook, and prod-docker-lab validation path.
-- `agent-3` -> `D-AWS-HARDENING-IAM-WAF`
-  Scope: least-privilege IAM, WAF wiring, and ingress CIDR split in Terraform.
-- `agent-4` -> `D-AWS-HARDENING-RUNBOOK`
-  Scope: AWS hardening verification checklist, alarm/response wiring, and deployment documentation updates.
+Next batch not yet mapped. Candidate items include plaintext secret elimination in `customer_stack`, CloudWatch alarm Terraform resources, ECS exec guardrail enforcement, OIDC SSO, and custom RBAC policies. Confirm priorities before assigning agents.
 
 ---
 
@@ -71,6 +61,10 @@ Use this section as the single source of truth for "what is done" vs "what is le
 - ✅ Pending-enrollment queue telemetry closeout (`hwops_pending_enroll_queue_age_total`, `hwops_pending_enroll_oldest_age_seconds`, throttle-by-reason docs + alert thresholds).
 - ✅ Break-glass backend workflows (service-token revoke/rotate + cert rotation reason capture + audit coverage).
 - ✅ Trusted proxy CIDR hardening (strict wildcard rejection, hardened profile validation, and deployment docs/templates update).
+- ✅ Role-aware UI parity (centralized `buildPermissionState` permission helper; nav, logs tabs, and mutating controls gated by role; browser-vs-backend parity regression suite added).
+- ✅ First-contact onboarding production closeout (packaged self-contained installer/bootstrap path; agent-host gateway routes for pending-enrollment request/claim; prod-lab deterministic compose subnet and trusted proxy CIDRs; new `prod-lab-first-contact.sh` end-to-end validation script; full first-contact approval flow validated in prod-docker-lab).
+- ✅ AWS Terraform IAM/WAF/ingress hardening (least-privilege ECS task-execution and task IAM roles; WAFv2 web ACL with IP-reputation, known-bad-inputs, and CRS managed rule sets attached to ALB app ingress; ingress CIDR split between app and device trust boundaries; Terraform `fmt` + `validate` passed across dev/staging/prod environments).
+- ✅ AWS hardening acceptance gate and runbook (rewritten `aws-customer-deployment-runbook.md` with pre/post-apply evidence checklist; `scripts/aws-hardening-check.sh` config and deployment gate helper; `security-hardening.md` updated with acceptance evidence requirements and residual known-debt documentation).
 
 ---
 
@@ -264,17 +258,14 @@ Use this section as the single source of truth for "what is done" vs "what is le
 - **Acceptance:** CI can publish artifacts without long‑lived creds.
 - **Notes:** Presigned CI push path implemented (`/artifacts/presign-upload` + `/artifacts/complete`) with scoped expiring service tokens (`artifact.publish`) and `scripts/ci-upload-artifact.sh`. Pull ingest API implemented (`/artifacts/pull`) with checksum validation + host/size/timeout guardrails plus CI helper `scripts/ci-pull-artifact.sh`. Adapter framework and backward-compatible source shape are in place (`sourceUrl` or `source.kind` + `source.uri`; current kinds=`http`,`artifactory`). Credential resolver abstraction is in place (`source.credentialRef`) with static map (`ARTIFACT_PULL_CREDENTIALS_FILE`/`ARTIFACT_PULL_CREDENTIALS_JSON`) plus AWS Secrets Manager-backed loading (`ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID`). Pull resolver operational workflow is implemented with admin status/reload endpoints (`GET/POST /api/v1/artifacts/pull-credentials*`) and helper script (`scripts/reload-pull-credentials.sh`). Artifactory adapter shipped with local docker smoke scripts (`scripts/setup-artifactory-demo.sh`, `scripts/test-artifactory-adapter.sh`) and signed artifact demo flow. Smoke coverage now validates push + pull + pull-credential reload audit path in `scripts/test-artifact-ingest.sh` (see `artifact-ingest-test-plan.md`). CI provider scaffold templates added for GitHub Actions/GitLab/Jenkins (`../../deploy/ci/README.md`). Vault resolver backend is deferred to Phase C.
 
-### Recommended Next Sequence (Current)
-1. **RBAC UI parity:** Finish `C-RBAC-UI-PARITY` so the browser matches the backend policy already enforced and tested.
-2. **First-contact production closeout:** Finish `C-ONBOARD-PROD-CLOSEOUT` so approval onboarding is documented and repeatable outside dev/demo flows.
-3. **AWS Terraform hardening:** Finish `D-AWS-HARDENING-IAM-WAF` for least-privilege IAM, WAF, and ingress segmentation.
-4. **AWS operational validation:** Finish `D-AWS-HARDENING-RUNBOOK` with acceptance checks, alarms, and response wiring.
+### Recommended Next Sequence (Pending Prioritization)
+The 2026-03-10 batch closed all four previously queued items. Candidate items for the next sequence:
+1. **Plaintext secret elimination:** Remove `DATABASE_URL` plaintext injection from `customer_stack`; move to Secrets Manager refs in ECS task definitions.
+2. **ECS exec guardrails:** Enforce `enable_execute_command = false` default for production environments in `modules/ecs`.
+3. **CloudWatch alarm Terraform resources:** Add managed alarm resources and SNS routing to the Terraform stack so the `aws-hardening-check.sh deployment` gate can validate them automatically.
+4. **OIDC SSO:** Begin Phase C OIDC identity provider integration now that RBAC layer and role-aware UI are in place.
 
-### Suggested Next Implementation (MVP)
-1. **Agent-1:** Role-aware UI sweep with a concrete page/action checklist.
-2. **Agent-2:** First-contact prod-lab validation and installer/bootstrap handoff path.
-3. **Agent-3:** Terraform IAM/WAF hardening implementation.
-4. **Agent-4:** AWS hardening runbook and acceptance test pass.
+Confirm priorities with the team before mapping to agents.
 
 ---
 
@@ -397,20 +388,20 @@ Use this section as the single source of truth for "what is done" vs "what is le
 
 ### Feature Templates
 #### Fixed RBAC roles
-- **Status:** 🟡 In progress
+- **Status:** 🟢 Complete
 - **Scope:** Admin / Operator / Viewer.
 - **Dependencies:** Auth middleware + policy checks.
 - **Risks:** Role creep.
 - **Acceptance:** Endpoints and UI gated correctly.
-- **Notes:** API role enforcement is in place and backend matrix tests now cover representative viewer/operator/admin routes plus `artifact.publish` service-token publish paths. Remaining work is browser parity and regression validation on every mutating view.
+- **Notes:** API role enforcement is in place and backend matrix tests cover representative viewer/operator/admin routes plus `artifact.publish` service-token publish paths. Browser parity shipped via centralized `buildPermissionState` helper and role-gated nav/action controls. Regression suite validates parity end-to-end.
 
 #### Role-aware UI
-- **Status:** 🟡 In progress
+- **Status:** 🟢 Complete
 - **Scope:** Action gating; read‑only views.
 - **Dependencies:** RBAC roles.
 - **Risks:** Inconsistent UI behavior.
 - **Acceptance:** UI hides actions for non‑authorized roles.
-- **Notes:** This is the current `agent-1` task. Auth/session awareness exists; remaining work is a page-by-page parity sweep, disabled/hidden action cleanup, and regression validation.
+- **Notes:** Browser parity shipped. Centralized `buildPermissionState` drives `visibleNav`, `visibleLogsTabs`, and mutating action gating across all views. `firstAllowedKey` fallback ensures unauthorized roles land on a permitted view. Regression coverage added in `rbac.test.js`.
 
 #### Custom RBAC policies
 - **Status:** ⬜ Planned
@@ -493,7 +484,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 - **Notes:** Bootstrap admin + voucher onboarding are in place. Break-glass service-token revoke/rotate and cert reload/rotate/cleanup APIs require operator-authenticated reason capture and emit success/denied/error audit records.
 
 #### Agent first-contact approval onboarding (no pre-shipped client cert)
-- **Status:** 🟡 In progress
+- **Status:** 🟢 Complete
 - **Scope:** Let agents start without a device client cert, request enrollment, wait in a pending queue, and only receive signed device certs after explicit operator approval.
 - **Dependencies:** Enrollment token/profile model, pending-enrollment API/UI, CSR signing pipeline, rate limits/abuse controls, audit events.
 - **Risks:** Enrollment spam, spoofed first-contact metadata, and insecure bootstrap if server trust is not established.
@@ -503,7 +494,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
   - Control-plane creates a pending enrollment record; operator can approve/deny in UI/API.
   - On approval, control-plane signs CSR and returns cert chain; agent transitions to normal mTLS check-in flow.
   - All actions (request/approve/deny/issue) are audited and subject to license/device-cap checks.
-- **Notes:** Draft API/workflow + exact agent bootstrap state machine: `agent-first-contact-onboarding.md`. Backend slices 1-2 shipped: enrollment profile creation/listing (`GET|POST /api/v1/enrollment-profiles`), profile update/edit (`PATCH /api/v1/enrollment-profiles/{profileId}`), profile token rotation (`POST /api/v1/enrollment-profiles/{profileId}/rotate`), profile enable/disable (`POST /api/v1/enrollment-profiles/{profileId}/enable|disable`), pending enrollment request (`POST /api/v1/pending-enrollments/request`), queue read (`GET /api/v1/pending-enrollments`), operator approve/deny/reset (`POST /api/v1/pending-enrollments/{requestId}/approve|deny|reset`), and agent claim (`POST /api/v1/pending-enrollments/claim`) that issues certs after approval. Conflict claim paths now persist `status=conflict`, and reset tooling reopens denied/conflict/expired requests. Anti-spam / abuse controls are now in place: optional per-profile enrollment challenge, per-source + per-profile request rate limits, active pending queue caps, explicit pending queue/throttle metrics, queue-age telemetry buckets + oldest-age gauge, approval-delay throttles surfaced in the Security UI, and approval-delay validation so profiles cannot outlive the pending request TTL. Security UI now includes enrollment profile management with labels, in-place profile editing (labels/challenge/delay), one-click copy/download for freshly issued bootstrap tokens, token rotation, a pending-enrollment queue with approve/deny/reset actions, and a global approval alert that jumps directly to Security. Dev/demo launcher supports pending mode for local testing, including profile default-label injection. The real Go agent now has an approval-mode scaffold behind `AGENT_ENROLL_MODE=approval`, with persisted `bootstrap-state.json`, CSR request/claim polling, identity materialization into `device.crt` + `device-id`, retry behavior that can resume after operator resets, reenroll CA persistence so private-CA rotation propagates correctly after `device.reenroll`, and coverage proving enrollment profile default labels drive first check-in group desired-state resolution. Token reissue policy tuning is now in place via rotate-time grace windows (`gracePeriodSec`) and rotation-reason audit metadata. Remaining work is production bootstrap packaging/install flow, operator runbook clarity, and full prod-docker-lab acceptance.
+- **Notes:** Full API + agent bootstrap state machine shipped and validated. Enrollment profile CRUD, pending-enrollment request/approve/deny/reset/claim flows, anti-spam controls, and Security UI are all in place. Go agent implements `AGENT_ENROLL_MODE=approval` with persisted `bootstrap-state.json`, CSR request/claim polling, identity materialization, reenroll CA persistence, and profile-label-driven desired-state resolution. Production closeout complete: packaged installer (`scripts/agent-install.sh`) is now self-contained with auto-discovery of template paths, `upsert_env`/`remove_env` helpers, and approval-mode configuration; agent-host gateway routes expose pending-enrollment request and claim endpoints; prod-docker-lab uses deterministic compose subnet with matching trusted proxy CIDRs; `scripts/testing/prod-lab-first-contact.sh` automates the full create-profile → install-agent → approve-request → verify-identity → active-check-in flow. Operator runbook and install docs updated. Full prod-docker-lab first-contact approval validation passed end-to-end.
 
 ---
 
@@ -521,15 +512,15 @@ Use this section as the single source of truth for "what is done" vs "what is le
 - **Dependencies:** Container build pipeline.
 - **Risks:** Operational cost creep.
 - **Acceptance:** AWS deployment runbook + reference infra.
-- **Notes:** Terraform scaffold + CLI/runbook shipped (`deploy/aws/terraform`, `scripts/aws-customer.sh`); production hardening pass in progress.
+- **Notes:** Terraform scaffold + CLI/runbook shipped (`deploy/aws/terraform`, `scripts/aws-customer.sh`). Hardened Terraform path now includes least-privilege IAM task roles, WAF web ACL on app ALB, and split ingress CIDRs. Acceptance gate helper `scripts/aws-hardening-check.sh` (config + deployment modes) and rewritten `aws-customer-deployment-runbook.md` shipped. Remaining: CloudWatch alarm Terraform resources, plaintext secret elimination in `customer_stack`, and live-deployment acceptance gate execution against a real environment.
 
 #### IAM integration
-- **Status:** 🟡 In progress
+- **Status:** 🟢 Complete
 - **Scope:** S3 + KMS access control.
 - **Dependencies:** AWS IAM design.
 - **Risks:** Over‑permissioned roles.
 - **Acceptance:** Least‑privilege IAM policies validated.
-- **Notes:** Baseline task roles exist; least-privilege tightening is next.
+- **Notes:** Least-privilege IAM shipped in Terraform. ECS task-execution role scoped to specific Secrets Manager ARNs and optional KMS key ARNs. Task role scoped to specific CloudWatch log group ARNs, S3 artifact bucket prefixes, and parameterized ECS Exec (SSM/logs). IAM resource ARNs computed via `aws_partition` data source for GovCloud compatibility. Terraform `validate` passed across dev/staging/prod environments.
 
 #### Network isolation guidance
 - **Status:** 🟡 In progress
@@ -537,20 +528,20 @@ Use this section as the single source of truth for "what is done" vs "what is le
 - **Dependencies:** AWS architecture.
 - **Risks:** Misconfigured routes.
 - **Acceptance:** Reference diagram + sample config.
-- **Notes:** Private subnet model documented; ingress hardening and WAF policy rollout pending.
+- **Notes:** Private subnet model documented. Ingress CIDR split now in place: separate app-facing (operator browser) and device-facing (agent mTLS) ingress trust boundaries in Terraform variable model. WAFv2 web ACL attached to app ALB only (device ingress intentionally kept separate). Remaining: full reference VPC diagram and finalized sample variable configurations.
 
 #### AWS security hardening pack
 - **Status:** 🟡 In progress
 - **Scope:** Secrets Manager-first production path, least-privilege IAM, WAF on app ingress, ingress CIDR split, ECS exec guardrails, and security alarms.
 - **Dependencies:** Terraform modules, runbook updates, incident response wiring.
 - **Risks:** Misconfigured hardening controls can block traffic or operations.
-- **Acceptance:** 
+- **Acceptance:**
   - No plaintext secrets in production task definitions.
   - WAF attached and tested.
   - IAM policy review passed with scoped permissions.
   - ECS exec disabled by default for production.
   - Security alarms routed to on-call channel.
-- **Notes:** Execution details tracked in `security-hardening.md`.
+- **Notes:** Shipped in this batch: least-privilege IAM roles, WAFv2 web ACL with managed rule groups (IP reputation + known-bad-inputs + CRS) + rate-limit rule attached to app ALB, ingress CIDR split in Terraform variable model, acceptance gate helper `scripts/aws-hardening-check.sh`, and rewritten operator runbook. Residual known items documented in `security-hardening.md`: plaintext `DATABASE_URL` injection in `customer_stack` (pre-dates this batch), `enable_execute_command` production default not yet enforced, CloudWatch alarm resources not yet Terraform-managed, and live-deployment gate not yet executed against a real environment.
 
 #### Multi-tenant controls (optional)
 - **Status:** ⬜ Backlog
