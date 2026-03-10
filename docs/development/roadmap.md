@@ -26,7 +26,9 @@ Use this section as the single source of truth for "what is done" vs "what is le
 
 ### Active work queue (what is still to do)
 
-No items currently in-flight. Queue is clear.
+| Task | Issue | Branch | Worktree | Status |
+|---|---|---|---|---|
+| C-OIDC-SSO: OIDC identity provider integration | #23 | `feat/23-c-oidc-sso` | agent-1 | 🟡 In progress |
 
 ### Prepared next tasks (agent-scoped)
 2026-03-10 D-hardening batch merged (alarms, secrets, ecs-exec). Candidate items for the next sequence: OIDC SSO and custom RBAC policies.
