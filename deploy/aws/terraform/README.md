@@ -73,7 +73,7 @@ After apply, run:
 - For token-based first-time enrollment, start with `device_mtls_mode = "passthrough"`, enroll devices, then switch to `device_mtls_mode = "verify"` and re-apply.
 - Demo fleet is designed to persist device identity/state across normal ECS restarts and rolling updates via EFS; full environment destroy still deletes demo state.
 - Current scaffold defaults to explicit DB password mode (`db_manage_master_user_password = false`) so `DATABASE_URL` is available to control-plane. For stricter production posture, move to Secrets Manager-backed URL injection in a follow-up hardening pass.
-- Current scaffold on this branch does not yet define WAF resources, CloudWatch alarms, or split app/device ingress CIDR inputs; the hardening helper is expected to flag those gaps until the Terraform hardening lane lands.
+- CloudWatch alarms (ALB, ECS, RDS) are created automatically. Set `alarm_sns_email` to receive email notifications. See "CloudWatch Alarms" section below.
 
 ## Cloud pull-adapter smoke test (Artifactory + Secrets Manager)
 1. Create/update a Secrets Manager secret with credential JSON:
@@ -158,7 +158,33 @@ Credential JSON format must be a ref map, for example:
 }
 ```
 
+## CloudWatch Alarms
+
+An SNS topic (`${name_prefix}-alerts`) is created automatically. Set `alarm_sns_email` to subscribe an email address:
+
+```hcl
+alarm_sns_email = "ops-team@example.com"
+```
+
+Alarms created:
+
+| Alarm | Metric | Default threshold |
+|---|---|---|
+| ALB 5xx errors | `HTTPCode_ELB_5XX_Count` | ≥ 10 per 5 min |
+| ALB unhealthy hosts | `UnHealthyHostCount` | ≥ 1 over 2 periods |
+| ECS CP CPU | `CPUUtilization` | ≥ 80% over 3 periods |
+| ECS CP Memory | `MemoryUtilization` | ≥ 80% over 3 periods |
+| ECS CP Tasks | `RunningTaskCount` | < 1 (service down) |
+| RDS CPU | `CPUUtilization` | ≥ 80% over 3 periods |
+| RDS Free Storage | `FreeStorageSpace` | ≤ 5 GB |
+| RDS Connections | `DatabaseConnections` | ≥ 100 over 2 periods |
+
+All thresholds are configurable via `alarm_*` variables.
+
+**Note:** The ECS `RunningTaskCount` alarm uses the `ECS/ContainerInsights` namespace. Container Insights must be enabled on the cluster for this metric to populate. The other ECS alarms use the standard `AWS/ECS` namespace and work without Container Insights.
+
+The `alerts_sns_topic_arn` output exposes the topic ARN for additional subscriptions (PagerDuty, Lambda, etc.).
+
 ## Next implementation pass recommended
 1. Add autoscaling policies for ECS services.
 2. Add Route53 health checks and failover strategy (optional).
-3. Add CloudWatch alarms + SNS/PagerDuty wiring.
