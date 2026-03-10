@@ -12,18 +12,22 @@ locals {
     module.database.db_name,
   )
 
-  default_control_plane_env = {
-    S3_BUCKET          = module.artifact_store.bucket_name
-    S3_REGION          = data.aws_region.current.region
-    S3_USE_SSL         = "1"
-    S3_ENDPOINT        = "s3.${data.aws_region.current.region}.amazonaws.com"
-    DATABASE_URL       = local.database_url
-    AUTO_MIGRATE       = "1"
-    MIGRATIONS_DIR     = "/app/migrations"
-    TRUST_PROXY        = "1"
-    TRUST_PROXY_CIDRS  = join(",", values(var.private_subnet_cidrs))
-    CLIENT_CERT_HEADER = "X-Client-Cert"
-  }
+  default_control_plane_env = merge(
+    {
+      S3_BUCKET          = module.artifact_store.bucket_name
+      S3_REGION          = data.aws_region.current.region
+      S3_USE_SSL         = "1"
+      S3_ENDPOINT        = "s3.${data.aws_region.current.region}.amazonaws.com"
+      AUTO_MIGRATE       = "1"
+      MIGRATIONS_DIR     = "/app/migrations"
+      TRUST_PROXY        = "1"
+      TRUST_PROXY_CIDRS  = join(",", values(var.private_subnet_cidrs))
+      CLIENT_CERT_HEADER = "X-Client-Cert"
+    },
+    # DATABASE_URL is injected as plaintext only when database_url_secret_arn is not set.
+    # Set database_url_secret_arn to eliminate the plaintext credential from ECS task definitions.
+    var.database_url_secret_arn == "" ? { DATABASE_URL = local.database_url } : {},
+  )
   artifact_pull_credentials_secret_id = trimspace(var.artifact_pull_credentials_aws_secret_id != null ? var.artifact_pull_credentials_aws_secret_id : "")
   artifact_pull_credentials_enabled   = local.artifact_pull_credentials_secret_id != ""
   artifact_pull_credentials_secret_arn = startswith(local.artifact_pull_credentials_secret_id, "arn:") ? local.artifact_pull_credentials_secret_id : format(
@@ -57,7 +61,10 @@ locals {
     DEMO_BOOTSTRAP_PASSWORD = local.demo_bootstrap_password
   }
   effective_demo_agent_env = merge(local.demo_default_agent_env, var.demo_agent_env)
-  task_secret_arns         = local.artifact_pull_credentials_enabled ? [local.artifact_pull_credentials_secret_arn] : []
+  task_secret_arns = concat(
+    local.artifact_pull_credentials_enabled ? [local.artifact_pull_credentials_secret_arn] : [],
+    var.database_url_secret_arn != "" ? [var.database_url_secret_arn] : [],
+  )
 }
 
 module "network" {
@@ -212,22 +219,25 @@ module "alb" {
 module "ecs" {
   source = "../ecs"
 
-  name_prefix                     = var.name_prefix
-  vpc_id                          = module.network.vpc_id
-  private_subnet_ids              = module.network.private_subnet_ids
-  ecs_security_group_id           = module.security.ecs_security_group_id
-  app_target_group_arn            = module.alb.app_target_group_arn
-  devices_target_group_arn        = module.alb.devices_target_group_arn
-  control_plane_image             = var.control_plane_image
-  gateway_image                   = var.gateway_image
-  control_plane_container_port    = var.control_plane_container_port
-  gateway_container_port          = var.gateway_container_port
-  default_dns_resolver            = cidrhost(var.vpc_cidr, 2)
-  control_plane_desired_count     = var.control_plane_desired_count
-  gateway_desired_count           = var.gateway_desired_count
-  control_plane_env               = merge(local.default_control_plane_env, local.demo_control_plane_env, local.artifact_pull_credentials_env, var.control_plane_env)
-  gateway_env                     = var.gateway_env
-  control_plane_secret_arns       = var.control_plane_secret_arns
+  name_prefix                  = var.name_prefix
+  vpc_id                       = module.network.vpc_id
+  private_subnet_ids           = module.network.private_subnet_ids
+  ecs_security_group_id        = module.security.ecs_security_group_id
+  app_target_group_arn         = module.alb.app_target_group_arn
+  devices_target_group_arn     = module.alb.devices_target_group_arn
+  control_plane_image          = var.control_plane_image
+  gateway_image                = var.gateway_image
+  control_plane_container_port = var.control_plane_container_port
+  gateway_container_port       = var.gateway_container_port
+  default_dns_resolver         = cidrhost(var.vpc_cidr, 2)
+  control_plane_desired_count  = var.control_plane_desired_count
+  gateway_desired_count        = var.gateway_desired_count
+  control_plane_env            = merge(local.default_control_plane_env, local.demo_control_plane_env, local.artifact_pull_credentials_env, var.control_plane_env)
+  gateway_env                  = var.gateway_env
+  control_plane_secret_arns = merge(
+    var.control_plane_secret_arns,
+    var.database_url_secret_arn != "" ? { DATABASE_URL = var.database_url_secret_arn } : {},
+  )
   gateway_secret_arns             = var.gateway_secret_arns
   task_secret_arns                = local.task_secret_arns
   secret_kms_key_arns             = var.secret_kms_key_arns

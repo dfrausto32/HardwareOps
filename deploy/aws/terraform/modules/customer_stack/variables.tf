@@ -358,3 +358,9 @@ variable "alarm_rds_connections_threshold" {
   type        = number
   default     = 100
 }
+
+variable "database_url_secret_arn" {
+  description = "ARN of a Secrets Manager secret whose plaintext value is the full DATABASE_URL connection string. When set, DATABASE_URL is injected via ECS valueFrom (encrypted at rest) instead of plaintext task env. Recommended for production. The output database_master_secret_arn locates the RDS-managed secret ARN when db_manage_master_user_password = true, but note that secret stores JSON, not a URL — create a separate URL secret."
+  type        = string
+  default     = ""
+}
