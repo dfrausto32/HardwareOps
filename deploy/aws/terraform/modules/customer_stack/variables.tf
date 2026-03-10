@@ -316,3 +316,45 @@ variable "demo_bootstrap_password" {
   type        = string
   default     = null
 }
+
+variable "alarm_sns_email" {
+  description = "Optional email address for CloudWatch alarm SNS notifications. Leave empty to skip email subscription."
+  type        = string
+  default     = ""
+}
+
+variable "alarm_alb_5xx_threshold" {
+  description = "ALB 5xx error count threshold per 5-minute period before alarm fires."
+  type        = number
+  default     = 10
+}
+
+variable "alarm_ecs_cpu_threshold" {
+  description = "ECS CPU utilization percentage threshold before alarm fires."
+  type        = number
+  default     = 80
+}
+
+variable "alarm_ecs_memory_threshold" {
+  description = "ECS memory utilization percentage threshold before alarm fires."
+  type        = number
+  default     = 80
+}
+
+variable "alarm_rds_cpu_threshold" {
+  description = "RDS CPU utilization percentage threshold before alarm fires."
+  type        = number
+  default     = 80
+}
+
+variable "alarm_rds_free_storage_threshold_gb" {
+  description = "RDS free storage threshold in GB. Alarm fires when free storage falls at or below this value."
+  type        = number
+  default     = 5
+}
+
+variable "alarm_rds_connections_threshold" {
+  description = "RDS database connections threshold before alarm fires."
+  type        = number
+  default     = 100
+}

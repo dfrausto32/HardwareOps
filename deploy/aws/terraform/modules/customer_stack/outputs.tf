@@ -82,3 +82,8 @@ output "demo_agent_efs_file_system_id" {
   description = "EFS file system ID backing demo agent persistent state."
   value       = try(aws_efs_file_system.demo[0].id, null)
 }
+
+output "alerts_sns_topic_arn" {
+  description = "SNS topic ARN for CloudWatch alarm notifications."
+  value       = aws_sns_topic.hardwareops_alerts.arn
+}
