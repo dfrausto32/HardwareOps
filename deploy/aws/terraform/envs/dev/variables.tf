@@ -58,6 +58,12 @@ variable "route53_zone_id" {
   type        = string
 }
 
+variable "create_dns_records" {
+  description = "Create app/devices Route53 records for this environment."
+  type        = bool
+  default     = true
+}
+
 variable "app_host" {
   description = "Operator app host."
   type        = string

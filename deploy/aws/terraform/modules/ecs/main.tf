@@ -33,7 +33,9 @@ locals {
   )))
   task_secret_arns            = distinct(compact(var.task_secret_arns))
   secret_kms_key_arns         = distinct(compact(var.secret_kms_key_arns))
-  artifact_bucket_access      = var.artifact_bucket_arn != null && length(var.artifact_bucket_allowed_prefixes) > 0
+  # Keep this gate plan-time safe. The bucket ARN may be computed by a sibling
+  # module, but whether we need the policy is driven by configured prefixes.
+  artifact_bucket_access      = length(var.artifact_bucket_allowed_prefixes) > 0
   artifact_bucket_object_arns = local.artifact_bucket_access ? [for prefix in var.artifact_bucket_allowed_prefixes : "${var.artifact_bucket_arn}/${trimprefix(prefix, "/")}"] : []
   log_group_resource_arns = compact([
     trimsuffix(aws_cloudwatch_log_group.control_plane.arn, ":*"),

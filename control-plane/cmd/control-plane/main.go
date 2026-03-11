@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -32,6 +33,12 @@ import (
 func main() {
 	cfg := config.FromEnv()
 	logger := log.New(os.Stdout, "", log.LstdFlags)
+
+	cleanupPEMFiles, err := materializePEMFiles(&cfg)
+	if err != nil {
+		logger.Fatalf("materialize PEM env files: %v", err)
+	}
+	defer cleanupPEMFiles()
 
 	if err := config.ValidateHardening(cfg); err != nil {
 		logger.Fatalf("hardened profile validation failed: %v", err)
@@ -548,4 +555,63 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logger.Fatalf("server error: %v", err)
 	}
+}
+
+func materializePEMFiles(cfg *config.Config) (func(), error) {
+	if cfg == nil {
+		return func() {}, nil
+	}
+
+	type pemTarget struct {
+		path *string
+		env  string
+		name string
+		mode os.FileMode
+	}
+
+	targets := []pemTarget{
+		{path: &cfg.CACertPath, env: "CA_CERT_PEM", name: "ca.crt", mode: 0o644},
+		{path: &cfg.CAKeyPath, env: "CA_KEY_PEM", name: "ca.key", mode: 0o600},
+		{path: &cfg.ActiveCACertPath, env: "ACTIVE_CA_CERT_PEM", name: "active-ca.crt", mode: 0o644},
+		{path: &cfg.ActiveCAKeyPath, env: "ACTIVE_CA_KEY_PEM", name: "active-ca.key", mode: 0o600},
+		{path: &cfg.CABundlePath, env: "CA_BUNDLE_PEM", name: "ca-bundle.crt", mode: 0o644},
+		{path: &cfg.TLSClientCA, env: "TLS_CLIENT_CA_PEM", name: "tls-client-ca.crt", mode: 0o644},
+	}
+
+	needsTempDir := false
+	for _, target := range targets {
+		if strings.TrimSpace(*target.path) == "" && strings.TrimSpace(os.Getenv(target.env)) != "" {
+			needsTempDir = true
+			break
+		}
+	}
+	if !needsTempDir {
+		return func() {}, nil
+	}
+
+	dir, err := os.MkdirTemp("", "hardwareops-control-plane-pems-*")
+	if err != nil {
+		return nil, err
+	}
+	cleanup := func() {
+		_ = os.RemoveAll(dir)
+	}
+
+	for _, target := range targets {
+		if strings.TrimSpace(*target.path) != "" {
+			continue
+		}
+		value := strings.TrimSpace(os.Getenv(target.env))
+		if value == "" {
+			continue
+		}
+		path := filepath.Join(dir, target.name)
+		if err := os.WriteFile(path, []byte(value), target.mode); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("write %s from %s: %w", target.name, target.env, err)
+		}
+		*target.path = path
+	}
+
+	return cleanup, nil
 }

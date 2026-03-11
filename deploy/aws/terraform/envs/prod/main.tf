@@ -26,6 +26,7 @@ module "stack" {
   device_ingress_cidrs                    = var.device_ingress_cidrs
   acm_certificate_arn                     = var.acm_certificate_arn
   route53_zone_id                         = var.route53_zone_id
+  create_dns_records                      = var.create_dns_records
   app_host                                = var.app_host
   devices_host                            = var.devices_host
   device_mtls_bucket                      = var.device_mtls_bucket

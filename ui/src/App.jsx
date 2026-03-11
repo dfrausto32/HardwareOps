@@ -794,6 +794,7 @@ export default function App() {
   }, [wsBaseUrl, authToken])
 
   const [authUser, setAuthUser] = useState(null)
+  const [authUserLoaded, setAuthUserLoaded] = useState(false)
   const [authError, setAuthError] = useState('')
   const [loginForm, setLoginForm] = useState({ email: '', password: '' })
   const [loginStatus, setLoginStatus] = useState('')
@@ -921,16 +922,20 @@ export default function App() {
     async function loadMe() {
       if (!authToken) {
         setAuthUser(null)
+        setAuthUserLoaded(true)
         return
       }
+      setAuthUserLoaded(false)
       setAuthError('')
       try {
         const res = await getMe()
         setAuthUser(res)
+        setAuthUserLoaded(true)
       } catch (err) {
         persistAuthToken('')
         setAuthToken('')
         setAuthUser(null)
+        setAuthUserLoaded(true)
         setAuthError(err.message || String(err))
       }
     }
@@ -1865,6 +1870,7 @@ export default function App() {
       setLoginStatus('Signed in')
       setLoginForm((prev) => ({ ...prev, password: '' }))
       setAuthUser(res.user || null)
+      setAuthUserLoaded(true)
       setAuthView('login')
       loadUsers()
     } catch (err) {
@@ -1888,6 +1894,7 @@ export default function App() {
       persistAuthToken(res.token)
       setAuthToken(res.token)
       setAuthUser(res.user || null)
+      setAuthUserLoaded(true)
       setRegisterForm({ token: '', email: '', password: '', displayName: '' })
       setRegisterStatus('')
       setAuthView('login')
@@ -1919,6 +1926,7 @@ export default function App() {
     persistAuthToken('')
     setAuthToken('')
     setAuthUser(null)
+    setAuthUserLoaded(true)
   }
 
   async function loadUsers() {
@@ -4243,6 +4251,18 @@ export default function App() {
   const allDevicesSelected =
     filteredDevices.length > 0 && filteredDevices.every((device) => selectedDeviceSet.has(device.deviceId))
   const someDevicesSelected = selectedDeviceIds.length > 0 && !allDevicesSelected
+  const authGatePending = !authStatus.loaded || (authStatus.enabled && authToken && !authUserLoaded)
+
+  if (authGatePending) {
+    return (
+      <div className="login-screen">
+        <div className="login-card">
+          <div className="brand">HardwareOps</div>
+          <div className="status">Checking authentication...</div>
+        </div>
+      </div>
+    )
+  }
 
   if (authStatus.loaded && authStatus.enabled && !authToken) {
     return (

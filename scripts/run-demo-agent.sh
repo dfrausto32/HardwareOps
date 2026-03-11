@@ -48,7 +48,16 @@ if [ -z "$AGENT_BASE_URL" ]; then
     if [[ "$rest" == */* ]]; then
       pathpart=/${rest#*/}
     fi
-    AGENT_BASE_URL="${scheme}://agent.${hostport}${pathpart}"
+    host=${hostport%%:*}
+    port=""
+    if [[ "$hostport" == *:* ]]; then
+      port=:${hostport#*:}
+    fi
+    if [[ "$host" == app.* ]]; then
+      AGENT_BASE_URL="${scheme}://agent.${host#app.}${port}${pathpart}"
+    else
+      AGENT_BASE_URL="${scheme}://agent.${hostport}${pathpart}"
+    fi
   fi
 fi
 AGENT_HOST_URL="$AGENT_BASE_URL"
@@ -58,16 +67,22 @@ if [[ "$BASE_URL" == http:* ]]; then
   exit 1
 fi
 
-CA_CERT_PATH=${CONTROL_PLANE_CA_CERT_PATH:-$BASE_DIR/dev-ca.crt}
-if [ ! -f "$CA_CERT_PATH" ]; then
-  echo "CA cert not found at $CA_CERT_PATH. Run ./scripts/run-control-plane.sh first." >&2
+CA_CERT_PATH=${CONTROL_PLANE_CA_CERT_PATH:-}
+if [ -z "$CA_CERT_PATH" ] && ([[ "$BASE_URL" =~ ^https?://localhost(:|/|$) ]] || [[ "$BASE_URL" =~ ^https?://127\.0\.0\.1(:|/|$) ]]); then
+  CA_CERT_PATH="$BASE_DIR/dev-ca.crt"
+fi
+if [ -n "$CA_CERT_PATH" ] && [ ! -f "$CA_CERT_PATH" ]; then
+  echo "CA cert not found at $CA_CERT_PATH." >&2
   exit 1
 fi
 
 # Ensure signing keys are available for demo verification.
 source "$BASE_DIR/scripts/ensure-signing-key.sh"
 
-curl_opts=(--cacert "$CA_CERT_PATH")
+curl_opts=()
+if [ -n "$CA_CERT_PATH" ]; then
+  curl_opts+=(--cacert "$CA_CERT_PATH")
+fi
 if [ -n "${CURL_RESOLVE_HOSTS:-}" ]; then
   IFS=',' read -r -a resolve_entries <<<"$CURL_RESOLVE_HOSTS"
   for entry in "${resolve_entries[@]}"; do
@@ -207,6 +222,27 @@ fi
 extra_agent_host_arg=()
 if [[ "$agent_url_host" == *.localhost ]] || [[ "$agent_url_host" == *.local ]]; then
   extra_agent_host_arg=(--add-host "$agent_url_host:host-gateway")
+fi
+docker_resolve_args=()
+if [ -n "${CURL_RESOLVE_HOSTS:-}" ]; then
+  declare -A docker_host_map=()
+  IFS=',' read -r -a docker_resolve_entries <<<"$CURL_RESOLVE_HOSTS"
+  for entry in "${docker_resolve_entries[@]}"; do
+    entry=$(echo "$entry" | xargs)
+    [ -z "$entry" ] && continue
+    host_entry=${entry%%:*}
+    remainder=${entry#*:}
+    if [ "$remainder" = "$entry" ]; then
+      continue
+    fi
+    ip_entry=${remainder##*:}
+    if [ -n "$host_entry" ] && [ -n "$ip_entry" ]; then
+      docker_host_map["$host_entry"]="$ip_entry"
+    fi
+  done
+  for host_entry in "${!docker_host_map[@]}"; do
+    docker_resolve_args+=(--add-host "$host_entry:${docker_host_map[$host_entry]}")
+  done
 fi
 
 if [[ "$ENROLLMENT_MODE" != "legacy" && "$ENROLLMENT_MODE" != "pending" ]]; then
@@ -576,7 +612,14 @@ PY
   if [ -s "$DEVICE_CA_PATH" ]; then
     RUNTIME_CA_SOURCE="$DEVICE_CA_PATH"
   fi
-  cp -f "$RUNTIME_CA_SOURCE" "$CERT_DIR/dev-ca.crt"
+  runtime_ca_mount_args=()
+  if [ -n "$RUNTIME_CA_SOURCE" ]; then
+    cp -f "$RUNTIME_CA_SOURCE" "$CERT_DIR/dev-ca.crt"
+    runtime_ca_mount_args+=(
+      -e CONTROL_PLANE_CA_CERT_PATH=/certs/dev-ca.crt
+      -v "$CERT_DIR/dev-ca.crt:/certs/dev-ca.crt:ro"
+    )
+  fi
   chmod 0644 "$DEVICE_CERT_PATH" "$DEVICE_KEY_PATH" || true
   cp -f "$SIGNING_PUB" "$CERT_DIR/signing.pub"
 
@@ -590,12 +633,12 @@ PY
     --network host \
     --add-host host.docker.internal:host-gateway \
     "${extra_agent_host_arg[@]}" \
+    "${docker_resolve_args[@]}" \
     --privileged \
     --user 0:0 \
     -e CONTROL_PLANE_URL="$AGENT_URL" \
     -e DEVICE_CERT_PATH=/certs/device.crt \
     -e DEVICE_KEY_PATH=/certs/device.key \
-    -e CONTROL_PLANE_CA_CERT_PATH=/certs/dev-ca.crt \
     -e SIGNING_PUB_KEY_PATH=/certs/signing.pub \
     -e SIGNING_KEY_ID="$SIGNING_KEY_ID" \
     -e REQUIRE_ARTIFACT_SIGNATURE="$REQUIRE_ARTIFACT_SIGNATURE" \
@@ -610,7 +653,7 @@ PY
     -v "$DATA_DIR:/data" \
     -v "$DEVICE_CERT_PATH:/certs/device.crt:${cert_mount_mode}" \
     -v "$DEVICE_KEY_PATH:/certs/device.key:ro" \
-    -v "$CERT_DIR/dev-ca.crt:/certs/dev-ca.crt:ro" \
+    "${runtime_ca_mount_args[@]}" \
     -v "$CERT_DIR/signing.pub:/certs/signing.pub:ro" \
     "$IMAGE_NAME" >/dev/null
 

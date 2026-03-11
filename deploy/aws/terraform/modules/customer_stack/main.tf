@@ -130,7 +130,7 @@ resource "aws_efs_file_system" "demo" {
 }
 
 resource "aws_efs_mount_target" "demo" {
-  for_each = local.demo_agents_enabled ? toset(module.network.private_subnet_ids) : toset([])
+  for_each = local.demo_agents_enabled ? module.network.private_subnet_ids_by_az : {}
 
   file_system_id  = aws_efs_file_system.demo[0].id
   subnet_id       = each.value
