@@ -10,7 +10,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 ---
 
 ## Program Snapshot (Parallel Session Staging)
-_Updated: 2026-03-10 (post C-OIDC-SSO merge)_
+_Updated: 2026-03-11 (post trusted-key AWS validation)_
 
 Use this section as the single source of truth for "what is done" vs "what is left."
 
@@ -21,7 +21,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Phase B — Operational Maturity | 🟢 Complete | Audit/metrics/events/lifecycle/CI ingest/bulk ops shipped and operational. |
 | Phase B Extension — UX + Realtime | 🟢 Complete | Bulk actions + realtime updates + auth-session UX reset shipped. |
 | Operational Hardening (between B and C) | 🟢 Complete | Pull-boundary, token exposure, startup guardrails, break-glass backend, proxy trust policy, and abuse controls are all shipped. |
-| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, and trusted-key artifact verification are shipped. Custom RBAC, trust-override UX, deployment wiring for trusted-key management, LDAP, and Vault secrets remain. |
+| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, and trusted-key deployment wiring are shipped. Remaining Phase C work is trust-override UX, password recovery/admin reset, custom RBAC, CI workload identity, provenance policy, LDAP, and broader secrets integration. |
 | Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Live-deployment acceptance gate execution remains. |
 
 ### Active work queue (what is still to do)
@@ -29,7 +29,10 @@ Use this section as the single source of truth for "what is done" vs "what is le
 No items currently in-flight. Queue is clear.
 
 ### Prepared next tasks (agent-scoped)
-2026-03-10 D-hardening batch merged (alarms, secrets, ecs-exec). Candidate items for the next sequence: OIDC SSO and custom RBAC policies.
+- `C-TRUST-OVERRIDE-UI` — group/device/component trust override UX in desired-state editors
+- `C-PASSWORD-RECOVERY` — local-auth recovery/reset workflow + runbook + audit expectations
+- `C-CUSTOM-RBAC` — per-resource policy model on top of fixed roles
+- `C-CI-WORKLOAD-IDENTITY` — OIDC-based CI publish/pull credentials without long-lived secrets
 
 ---
 
@@ -71,6 +74,7 @@ No items currently in-flight. Queue is clear.
 - ✅ CloudWatch alarm Terraform resources (SNS topic + email subscription + 8 managed alarms: ALB 5xx/unhealthy-host, ECS CPU/memory/task-count, RDS CPU/storage/connections; all thresholds parameterized; `aws-hardening-check.sh deployment` alarm checks now have resources to validate).
 - ✅ OIDC SSO (authorization code flow; `go-oidc/v3` + `oauth2`; IdP discovery; group-to-role mapping; user upsert on `auth_provider`+`external_id`; state cookie; `auth.oidc.login` audit events; UI SSO button; hardened-profile guards; per-IdP docs for Okta/Azure AD/Google Workspace).
 - ✅ Trusted-key artifact verification core (trusted signing key registry; global verification policy; control-plane cryptographic verification for create/upload/pull/complete; agent trust bundle distribution and apply-time re-verification; Security-page trust controls; artifact verification state/metrics/tests).
+- ✅ Trusted-key deployment wiring and AWS validation (startup seeding from `TRUSTED_SIGNING_KEYS_*` / `ARTIFACT_TRUST_*`; on-prem and AWS deployment templates updated; AWS `parcel/dev` bootstrapped from Secrets Manager; `scripts/test-artifact-trust.sh` validates unsigned reject / signed accept / wrong-key reject against the live stack).
 
 ---
 
@@ -421,7 +425,7 @@ Confirm priorities with the team before mapping to agents.
 - **Notes:** 
 
 #### Trusted-key artifact verification
-- **Status:** 🟡 In progress
+- **Status:** 🟢 Complete
 - **Scope:** Trusted signing key registry, global verification policy (`allow_unsigned` / `warn_unsigned` / `require_verified`), control-plane cryptographic verification on ingest, agent trust-bundle distribution, and apply-time verification.
 - **Dependencies:** Artifact ingest/update paths, desired-state policy merge, agent signature verification, admin Security UI.
 - **Risks:** Policy drift between deployments, operator confusion around key rotation, and rollout friction for legacy unsigned artifacts.
@@ -430,10 +434,10 @@ Confirm priorities with the team before mapping to agents.
   - Agents persist the distributed trust bundle and re-verify before apply.
   - Desired-state enforcement blocks non-compliant artifacts under strict policy.
   - UI exposes verification state, trusted keys, and global trust policy.
-- **Notes:** Core slice is shipped for `ed25519` and key-based `cosign`. Existing artifacts are marked `legacy`. Remaining tracked work is split into the next two items: deployment wiring/seeding and trust-override UX.
+- **Notes:** Core slice is shipped for `ed25519` and key-based `cosign`. Existing artifacts are marked `legacy`. Follow-on work is trust-override UX and later provenance/keyless policy.
 
 #### Trusted-key management deployment wiring
-- **Status:** 🟡 In progress
+- **Status:** 🟢 Complete
 - **Scope:** Wire trusted key registry and trust-policy defaults into on-prem compose/env examples, AWS Terraform/runtime config, seed scripts, and operator runbooks.
 - **Dependencies:** Trusted-key verification core, deployment templates, installer/bootstrap scripts, AWS/on-prem docs.
 - **Risks:** Drift between local/dev/on-prem/cloud defaults and brittle first-run setup.
@@ -441,7 +445,7 @@ Confirm priorities with the team before mapping to agents.
   - On-prem and AWS reference deployments can bootstrap trusted keys and initial trust policy without manual DB surgery.
   - Seed/runbook path exists for adding initial trusted keys and rotating them safely.
   - Smoke tests cover strict and permissive deployment profiles.
-- **Notes:** Shipped in this pass: control-plane startup now seeds DB policy/registry from `ARTIFACT_TRUST_*` + `TRUSTED_SIGNING_KEYS_*` bootstrap config; prod-lab generates `trusted-signing-keys.json`; on-prem compose/examples, installer/upgrade templates, and AWS Terraform now expose trusted key bootstrap wiring. Remaining work is runbook depth and deployment smoke coverage.
+- **Notes:** Shipped: control-plane startup seeds DB policy/registry from `ARTIFACT_TRUST_*` + `TRUSTED_SIGNING_KEYS_*` bootstrap config; prod-lab generates `trusted-signing-keys.json`; on-prem compose/examples, installer/upgrade templates, and AWS Terraform expose trusted-key bootstrap wiring; AWS `parcel/dev` is validated end-to-end with a Secrets Manager-backed trusted key and `scripts/test-artifact-trust.sh`.
 
 #### Trust override UI (group/device policy overrides)
 - **Status:** ⬜ Planned
@@ -469,6 +473,17 @@ Confirm priorities with the team before mapping to agents.
 - **Risks:** IdP misconfiguration.
 - **Acceptance:** Users can log in via OIDC and get correct roles.
 - **Notes:** `go-oidc/v3` + `golang.org/x/oauth2` for IdP discovery and token exchange. `GET /api/v1/auth/oidc/login` → IdP redirect; `GET /api/v1/auth/oidc/callback` → code exchange → internal JWT issued. Group-to-role mapping via `AUTH_OIDC_ROLE_MAP` JSON; unmapped users get `AUTH_OIDC_DEFAULT_ROLE` (default `viewer`). State cookie (`hwops_oidc_state`, HttpOnly, 600s TTL). Users upserted on `auth_provider`+`external_id` (DB columns already existed). `auth.oidc.login` and `auth.oidc.login.failed` audit events. UI renders SSO button when `authStatus.oidcEnabled`. Hardened profile rejects `AUTH_OIDC_DEFAULT_ROLE=admin` and empty role map. Per-IdP docs for Okta, Azure AD (Entra), and Google Workspace in `auth-secrets-v1.md`.
+
+#### Password recovery / admin reset
+- **Status:** ⬜ Planned
+- **Scope:** Local-auth password recovery path for locked-out operators, including explicit reset steps and audit coverage.
+- **Dependencies:** Local auth mode, user management APIs, break-glass/admin recovery policy, deployment docs.
+- **Risks:** Weak recovery flow becoming an account-takeover path; undocumented operator steps causing outage during lockout.
+- **Acceptance:** 
+  - Documented operator runbook exists for local password recovery in dev, on-prem, and AWS deployments.
+  - Recovery path is auditable and does not require direct DB edits for normal cases.
+  - Emergency admin reset path is explicit, gated, and tested.
+- **Notes:** This should cover both product UX/API and operational runbook steps so customer deployments have a clear recovery story before broader enterprise identity expansion.
 
 #### CI workload identity federation
 - **Status:** ⬜ Planned
