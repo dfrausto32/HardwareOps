@@ -23,7 +23,7 @@ type MinIOConfig struct {
 
 func NewMinIO(cfg MinIOConfig) (*MinIOStore, error) {
 	client, err := minio.New(cfg.Endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
+		Creds:  minioCredentials(cfg),
 		Secure: cfg.UseSSL,
 		Region: cfg.Region,
 	})
@@ -87,4 +87,18 @@ func (s *MinIOStore) GetObject(ctx context.Context, bucket, key string) (io.Read
 		return nil, err
 	}
 	return obj, nil
+}
+
+func minioCredentials(cfg MinIOConfig) *credentials.Credentials {
+	if minioCredentialMode(cfg) == "static" {
+		return credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, "")
+	}
+	return credentials.NewIAM("")
+}
+
+func minioCredentialMode(cfg MinIOConfig) string {
+	if cfg.AccessKey != "" || cfg.SecretKey != "" {
+		return "static"
+	}
+	return "iam"
 }

@@ -88,7 +88,7 @@ func main() {
 	}
 
 	var objStore httpapi.ObjectStore
-	if cfg.S3Endpoint != "" && cfg.S3AccessKey != "" && cfg.S3SecretKey != "" {
+	if cfg.S3Endpoint != "" && cfg.S3Bucket != "" {
 		store, err := objectstore.NewMinIO(objectstore.MinIOConfig{
 			Endpoint:  cfg.S3Endpoint,
 			AccessKey: cfg.S3AccessKey,
@@ -100,6 +100,11 @@ func main() {
 			logger.Fatalf("object store init: %v", err)
 		}
 		objStore = store
+		authMode := "iam"
+		if cfg.S3AccessKey != "" || cfg.S3SecretKey != "" {
+			authMode = "static"
+		}
+		logger.Printf("object store initialized endpoint=%s bucket=%s auth=%s", cfg.S3Endpoint, cfg.S3Bucket, authMode)
 	}
 
 	hub := events.NewHub(128)

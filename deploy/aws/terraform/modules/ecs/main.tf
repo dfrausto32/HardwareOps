@@ -31,8 +31,8 @@ locals {
     values(var.control_plane_secret_arns),
     values(var.gateway_secret_arns),
   )))
-  task_secret_arns            = distinct(compact(var.task_secret_arns))
-  secret_kms_key_arns         = distinct(compact(var.secret_kms_key_arns))
+  task_secret_arns    = distinct(compact(var.task_secret_arns))
+  secret_kms_key_arns = distinct(compact(var.secret_kms_key_arns))
   # Keep this gate plan-time safe. The bucket ARN may be computed by a sibling
   # module, but whether we need the policy is driven by configured prefixes.
   artifact_bucket_access      = length(var.artifact_bucket_allowed_prefixes) > 0
@@ -254,12 +254,6 @@ data "aws_iam_policy_document" "task_inline" {
         test     = "StringEquals"
         variable = "kms:ViaService"
         values   = ["s3.${data.aws_region.current.region}.amazonaws.com"]
-      }
-
-      condition {
-        test     = "StringLike"
-        variable = "kms:EncryptionContext:aws:s3:arn"
-        values   = local.artifact_bucket_object_arns
       }
     }
   }
