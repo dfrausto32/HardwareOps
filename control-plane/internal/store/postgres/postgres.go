@@ -1778,10 +1778,20 @@ func (s *Store) CreateArtifact(artifact store.Artifact) error {
 	if status == "" {
 		status = "active"
 	}
+	verificationStatus := artifact.VerificationStatus
+	if verificationStatus == "" {
+		verificationStatus = "legacy"
+	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO artifacts (artifact_id, name, version, type, status, object_key, sha256, signature, size_bytes, metadata, created_at, deprecated_at, delete_after)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-	`, artifact.ArtifactID, artifact.Name, artifact.Version, atype, status, artifact.ObjectKey, artifact.SHA256, nullIfEmpty(artifact.Signature), artifact.SizeBytes, nullIfEmptyBytes(artifact.MetadataJSON), artifact.CreatedAt, nullIfZeroTime(artifact.DeprecatedAt), nullIfZeroTime(artifact.DeleteAfter))
+		INSERT INTO artifacts (
+			artifact_id, name, version, type, status, object_key, sha256, signature,
+			signature_type, signature_key_id, verification_status, verification_error, verified_at,
+			size_bytes, metadata, created_at, deprecated_at, delete_after
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+	`, artifact.ArtifactID, artifact.Name, artifact.Version, atype, status, artifact.ObjectKey, artifact.SHA256, nullIfEmpty(artifact.Signature),
+		nullIfEmpty(artifact.SignatureType), nullIfEmpty(artifact.SignatureKeyID), verificationStatus, nullIfEmpty(artifact.VerificationError), nullIfZeroTime(artifact.VerifiedAt),
+		artifact.SizeBytes, nullIfEmptyBytes(artifact.MetadataJSON), artifact.CreatedAt, nullIfZeroTime(artifact.DeprecatedAt), nullIfZeroTime(artifact.DeleteAfter))
 	return err
 }
 
@@ -1791,10 +1801,14 @@ func (s *Store) GetArtifact(artifactID string) (store.Artifact, bool, error) {
 
 	var a store.Artifact
 	err := s.pool.QueryRow(ctx, `
-		SELECT artifact_id, name, version, COALESCE(type, 'app_bundle'), COALESCE(status, 'active'), object_key, sha256, COALESCE(signature, ''), size_bytes, COALESCE(metadata, '{}'::jsonb), created_at, COALESCE(deprecated_at, '0001-01-01T00:00:00Z'::timestamptz), COALESCE(delete_after, '0001-01-01T00:00:00Z'::timestamptz)
+		SELECT artifact_id, name, version, COALESCE(type, 'app_bundle'), COALESCE(status, 'active'), object_key, sha256, COALESCE(signature, ''),
+		       COALESCE(signature_type, ''), COALESCE(signature_key_id, ''), COALESCE(verification_status, 'legacy'), COALESCE(verification_error, ''),
+		       COALESCE(verified_at, '0001-01-01T00:00:00Z'::timestamptz),
+		       size_bytes, COALESCE(metadata, '{}'::jsonb), created_at,
+		       COALESCE(deprecated_at, '0001-01-01T00:00:00Z'::timestamptz), COALESCE(delete_after, '0001-01-01T00:00:00Z'::timestamptz)
 		FROM artifacts
 		WHERE artifact_id = $1
-	`, artifactID).Scan(&a.ArtifactID, &a.Name, &a.Version, &a.Type, &a.Status, &a.ObjectKey, &a.SHA256, &a.Signature, &a.SizeBytes, &a.MetadataJSON, &a.CreatedAt, &a.DeprecatedAt, &a.DeleteAfter)
+	`, artifactID).Scan(&a.ArtifactID, &a.Name, &a.Version, &a.Type, &a.Status, &a.ObjectKey, &a.SHA256, &a.Signature, &a.SignatureType, &a.SignatureKeyID, &a.VerificationStatus, &a.VerificationError, &a.VerifiedAt, &a.SizeBytes, &a.MetadataJSON, &a.CreatedAt, &a.DeprecatedAt, &a.DeleteAfter)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.Artifact{}, false, nil
 	}
@@ -1816,7 +1830,11 @@ func (s *Store) ListArtifacts(name, version string, limit, offset int) ([]store.
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT artifact_id, name, version, COALESCE(type, 'app_bundle'), COALESCE(status, 'active'), object_key, sha256, COALESCE(signature, ''), size_bytes, COALESCE(metadata, '{}'::jsonb), created_at, COALESCE(deprecated_at, '0001-01-01T00:00:00Z'::timestamptz), COALESCE(delete_after, '0001-01-01T00:00:00Z'::timestamptz)
+		SELECT artifact_id, name, version, COALESCE(type, 'app_bundle'), COALESCE(status, 'active'), object_key, sha256, COALESCE(signature, ''),
+		       COALESCE(signature_type, ''), COALESCE(signature_key_id, ''), COALESCE(verification_status, 'legacy'), COALESCE(verification_error, ''),
+		       COALESCE(verified_at, '0001-01-01T00:00:00Z'::timestamptz),
+		       size_bytes, COALESCE(metadata, '{}'::jsonb), created_at,
+		       COALESCE(deprecated_at, '0001-01-01T00:00:00Z'::timestamptz), COALESCE(delete_after, '0001-01-01T00:00:00Z'::timestamptz)
 		FROM artifacts
 		WHERE ($1 = '' OR name = $1)
 		  AND ($2 = '' OR version = $2)
@@ -1831,7 +1849,7 @@ func (s *Store) ListArtifacts(name, version string, limit, offset int) ([]store.
 	out := []store.Artifact{}
 	for rows.Next() {
 		var a store.Artifact
-		if err := rows.Scan(&a.ArtifactID, &a.Name, &a.Version, &a.Type, &a.Status, &a.ObjectKey, &a.SHA256, &a.Signature, &a.SizeBytes, &a.MetadataJSON, &a.CreatedAt, &a.DeprecatedAt, &a.DeleteAfter); err != nil {
+		if err := rows.Scan(&a.ArtifactID, &a.Name, &a.Version, &a.Type, &a.Status, &a.ObjectKey, &a.SHA256, &a.Signature, &a.SignatureType, &a.SignatureKeyID, &a.VerificationStatus, &a.VerificationError, &a.VerifiedAt, &a.SizeBytes, &a.MetadataJSON, &a.CreatedAt, &a.DeprecatedAt, &a.DeleteAfter); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -1840,6 +1858,21 @@ func (s *Store) ListArtifacts(name, version string, limit, offset int) ([]store.
 		return nil, rows.Err()
 	}
 	return out, nil
+}
+
+func (s *Store) CountArtifactsByVerificationStatus(status string) (int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var count int
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM artifacts
+		WHERE COALESCE(verification_status, 'legacy') = $1
+	`, status).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func (s *Store) DeprecateArtifact(artifactID string, deprecatedAt, deleteAfter time.Time) error {
@@ -2095,6 +2128,163 @@ func (s *Store) GetArtifactStats() (store.ArtifactStats, error) {
 		return store.ArtifactStats{}, err
 	}
 	return stats, nil
+}
+
+func (s *Store) ListTrustedSigningKeys(includeRetired bool) ([]store.TrustedSigningKey, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	query := `
+		SELECT key_id, display_name, algorithm, public_key_pem, state,
+		       created_at, COALESCE(retired_at, '0001-01-01T00:00:00Z'::timestamptz), COALESCE(notes, '')
+		FROM trusted_signing_keys
+	`
+	args := []any{}
+	if !includeRetired {
+		query += ` WHERE state <> 'retired'`
+	}
+	query += ` ORDER BY created_at DESC`
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []store.TrustedSigningKey{}
+	for rows.Next() {
+		var key store.TrustedSigningKey
+		if err := rows.Scan(&key.KeyID, &key.DisplayName, &key.Algorithm, &key.PublicKeyPEM, &key.State, &key.CreatedAt, &key.RetiredAt, &key.Notes); err != nil {
+			return nil, err
+		}
+		out = append(out, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) GetTrustedSigningKey(keyID string) (store.TrustedSigningKey, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var key store.TrustedSigningKey
+	err := s.pool.QueryRow(ctx, `
+		SELECT key_id, display_name, algorithm, public_key_pem, state,
+		       created_at, COALESCE(retired_at, '0001-01-01T00:00:00Z'::timestamptz), COALESCE(notes, '')
+		FROM trusted_signing_keys
+		WHERE key_id = $1
+	`, keyID).Scan(&key.KeyID, &key.DisplayName, &key.Algorithm, &key.PublicKeyPEM, &key.State, &key.CreatedAt, &key.RetiredAt, &key.Notes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.TrustedSigningKey{}, false, nil
+	}
+	if err != nil {
+		return store.TrustedSigningKey{}, false, err
+	}
+	return key, true, nil
+}
+
+func (s *Store) UpsertTrustedSigningKey(key store.TrustedSigningKey) (store.TrustedSigningKey, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var out store.TrustedSigningKey
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO trusted_signing_keys (key_id, display_name, algorithm, public_key_pem, state, created_at, retired_at, notes)
+		VALUES ($1, $2, $3, $4, $5, COALESCE($6, now()), $7, NULLIF($8, ''))
+		ON CONFLICT (key_id) DO UPDATE SET
+			display_name = EXCLUDED.display_name,
+			algorithm = EXCLUDED.algorithm,
+			public_key_pem = EXCLUDED.public_key_pem,
+			state = EXCLUDED.state,
+			retired_at = EXCLUDED.retired_at,
+			notes = EXCLUDED.notes
+		RETURNING key_id, display_name, algorithm, public_key_pem, state,
+		          created_at, COALESCE(retired_at, '0001-01-01T00:00:00Z'::timestamptz), COALESCE(notes, '')
+	`, key.KeyID, key.DisplayName, key.Algorithm, key.PublicKeyPEM, key.State, nullIfZeroTime(key.CreatedAt), nullIfZeroTime(key.RetiredAt), key.Notes).Scan(
+		&out.KeyID, &out.DisplayName, &out.Algorithm, &out.PublicKeyPEM, &out.State, &out.CreatedAt, &out.RetiredAt, &out.Notes,
+	)
+	if err != nil {
+		return store.TrustedSigningKey{}, err
+	}
+	return out, nil
+}
+
+func (s *Store) RetireTrustedSigningKey(keyID string, retiredAt time.Time) (store.TrustedSigningKey, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var out store.TrustedSigningKey
+	err := s.pool.QueryRow(ctx, `
+		UPDATE trusted_signing_keys
+		SET state = 'retired',
+		    retired_at = $2
+		WHERE key_id = $1
+		RETURNING key_id, display_name, algorithm, public_key_pem, state,
+		          created_at, COALESCE(retired_at, '0001-01-01T00:00:00Z'::timestamptz), COALESCE(notes, '')
+	`, keyID, retiredAt).Scan(
+		&out.KeyID, &out.DisplayName, &out.Algorithm, &out.PublicKeyPEM, &out.State, &out.CreatedAt, &out.RetiredAt, &out.Notes,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.TrustedSigningKey{}, errors.New("trusted signing key not found")
+	}
+	if err != nil {
+		return store.TrustedSigningKey{}, err
+	}
+	return out, nil
+}
+
+func (s *Store) GetArtifactTrustPolicy() (store.ArtifactTrustPolicy, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var policy store.ArtifactTrustPolicy
+	err := s.pool.QueryRow(ctx, `
+		SELECT verification_mode,
+		       COALESCE(allowed_signing_key_ids, '[]'::jsonb),
+		       COALESCE(allowed_signature_types, '[]'::jsonb),
+		       updated_at,
+		       COALESCE(updated_by_user_id, '')
+		FROM artifact_trust_policy
+		WHERE policy_id = 1
+	`).Scan(&policy.VerificationMode, &policy.AllowedSigningKeyIDsJSON, &policy.AllowedSignatureTypesJSON, &policy.UpdatedAt, &policy.UpdatedByUserID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.ArtifactTrustPolicy{}, false, nil
+	}
+	if err != nil {
+		return store.ArtifactTrustPolicy{}, false, err
+	}
+	return policy, true, nil
+}
+
+func (s *Store) SetArtifactTrustPolicy(policy store.ArtifactTrustPolicy) (store.ArtifactTrustPolicy, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var out store.ArtifactTrustPolicy
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO artifact_trust_policy (
+			policy_id, verification_mode, allowed_signing_key_ids, allowed_signature_types, updated_at, updated_by_user_id
+		)
+		VALUES (1, $1, COALESCE($2, '[]'::jsonb), COALESCE($3, '[]'::jsonb), now(), NULLIF($4, ''))
+		ON CONFLICT (policy_id) DO UPDATE SET
+			verification_mode = EXCLUDED.verification_mode,
+			allowed_signing_key_ids = EXCLUDED.allowed_signing_key_ids,
+			allowed_signature_types = EXCLUDED.allowed_signature_types,
+			updated_at = now(),
+			updated_by_user_id = EXCLUDED.updated_by_user_id
+		RETURNING verification_mode,
+		          COALESCE(allowed_signing_key_ids, '[]'::jsonb),
+		          COALESCE(allowed_signature_types, '[]'::jsonb),
+		          updated_at,
+		          COALESCE(updated_by_user_id, '')
+	`, policy.VerificationMode, nullIfEmptyBytes(policy.AllowedSigningKeyIDsJSON), nullIfEmptyBytes(policy.AllowedSignatureTypesJSON), policy.UpdatedByUserID).Scan(
+		&out.VerificationMode, &out.AllowedSigningKeyIDsJSON, &out.AllowedSignatureTypesJSON, &out.UpdatedAt, &out.UpdatedByUserID,
+	)
+	if err != nil {
+		return store.ArtifactTrustPolicy{}, err
+	}
+	return out, nil
 }
 
 func (s *Store) CreateApplyResult(result store.ApplyResult) error {

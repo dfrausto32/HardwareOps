@@ -122,6 +122,7 @@ type CheckinResponse struct {
 	Desired        *DesiredState `json:"desired"`
 	PendingActions []Action      `json:"pendingActions,omitempty"`
 	ServerTime     time.Time     `json:"serverTime"`
+	SigningTrust   *SigningTrustBundle `json:"signingTrust,omitempty"`
 }
 
 type Action struct {
@@ -131,21 +132,36 @@ type Action struct {
 }
 
 type ArtifactResponse struct {
-	ArtifactID string          `json:"artifactId"`
-	Name       string          `json:"name"`
-	Version    string          `json:"version"`
-	Type       string          `json:"type"`
-	ObjectKey  string          `json:"objectKey"`
-	SHA256     string          `json:"sha256"`
-	Signature  string          `json:"signature"`
-	SizeBytes  int64           `json:"sizeBytes"`
-	Metadata   json.RawMessage `json:"metadata"`
+	ArtifactID          string          `json:"artifactId"`
+	Name                string          `json:"name"`
+	Version             string          `json:"version"`
+	Type                string          `json:"type"`
+	ObjectKey           string          `json:"objectKey"`
+	SHA256              string          `json:"sha256"`
+	Signature           string          `json:"signature"`
+	SignatureType       string          `json:"signatureType"`
+	SignatureKeyID      string          `json:"signatureKeyId"`
+	VerificationStatus  string          `json:"verificationStatus"`
+	VerificationError   string          `json:"verificationError"`
+	SizeBytes           int64           `json:"sizeBytes"`
+	Metadata            json.RawMessage `json:"metadata"`
 }
 
 type ReenrollResponse struct {
 	DeviceID  string `json:"deviceId"`
 	CertPEM   string `json:"certPem"`
 	CACertPEM string `json:"caCertPem"`
+}
+
+type SigningTrustKey struct {
+	KeyID        string `json:"keyId"`
+	Algorithm    string `json:"algorithm"`
+	PublicKeyPEM string `json:"publicKeyPem"`
+}
+
+type SigningTrustBundle struct {
+	UpdatedAt time.Time          `json:"updatedAt,omitempty"`
+	Keys      []SigningTrustKey  `json:"keys"`
 }
 
 type PendingEnrollmentRequest struct {
@@ -177,6 +193,7 @@ type ClaimPendingEnrollmentResponse struct {
 	CertPEM      string    `json:"certPem,omitempty"`
 	CACertPEM    string    `json:"caCertPem,omitempty"`
 	ExpiresAt    time.Time `json:"expiresAt,omitempty"`
+	SigningTrust *SigningTrustBundle `json:"signingTrust,omitempty"`
 }
 
 func (c *Client) Reenroll(csrPEM []byte) (ReenrollResponse, error) {

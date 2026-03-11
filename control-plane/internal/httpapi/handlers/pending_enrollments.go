@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/hardwareops/control-plane/internal/artifacttrust"
 	"github.com/hardwareops/control-plane/internal/auth"
 	"github.com/hardwareops/control-plane/internal/events"
 	"github.com/hardwareops/control-plane/internal/license"
@@ -177,6 +178,7 @@ type ClaimPendingEnrollmentResponse struct {
 	CertPEM      string    `json:"certPem,omitempty"`
 	CACertPEM    string    `json:"caCertPem,omitempty"`
 	ExpiresAt    time.Time `json:"expiresAt,omitempty"`
+	SigningTrust *artifacttrust.SigningTrustBundle `json:"signingTrust,omitempty"`
 }
 
 func CreateEnrollmentProfile(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
@@ -938,6 +940,7 @@ func ClaimPendingEnrollment(logger *log.Logger, st store.Store, lic *license.Man
 				Status:       "pending",
 				PollAfterSec: 5,
 				ExpiresAt:    pending.ExpiresAt,
+				SigningTrust: currentSigningTrust(logger, st),
 			})
 			return
 		case "denied":
@@ -946,6 +949,7 @@ func ClaimPendingEnrollment(logger *log.Logger, st store.Store, lic *license.Man
 			writeJSON(w, ClaimPendingEnrollmentResponse{
 				Status: "denied",
 				Reason: pending.DeniedReason,
+				SigningTrust: currentSigningTrust(logger, st),
 			})
 			return
 		case "expired":
@@ -953,6 +957,7 @@ func ClaimPendingEnrollment(logger *log.Logger, st store.Store, lic *license.Man
 			w.WriteHeader(http.StatusGone)
 			writeJSON(w, ClaimPendingEnrollmentResponse{
 				Status: "expired",
+				SigningTrust: currentSigningTrust(logger, st),
 			})
 			return
 		case "conflict":
@@ -961,6 +966,7 @@ func ClaimPendingEnrollment(logger *log.Logger, st store.Store, lic *license.Man
 			writeJSON(w, ClaimPendingEnrollmentResponse{
 				Status: "conflict",
 				Reason: pending.DeniedReason,
+				SigningTrust: currentSigningTrust(logger, st),
 			})
 			return
 		case "issued":
@@ -1095,10 +1101,11 @@ func ClaimPendingEnrollment(logger *log.Logger, st store.Store, lic *license.Man
 
 		record("success", "claim_issued")
 		writeJSON(w, ClaimPendingEnrollmentResponse{
-			Status:    "issued",
-			DeviceID:  deviceID,
-			CertPEM:   string(certPEM),
-			CACertPEM: string(signer.CACertPEM()),
+			Status:      "issued",
+			DeviceID:    deviceID,
+			CertPEM:     string(certPEM),
+			CACertPEM:   string(signer.CACertPEM()),
+			SigningTrust: currentSigningTrust(logger, st),
 		})
 	}
 }

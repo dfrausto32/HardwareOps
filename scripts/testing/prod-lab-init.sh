@@ -60,6 +60,9 @@ cp -f "$CERTS_DIR/ca.key" "$CERTS_DIR/ca-active.key"
 
 "$BASE_DIR/scripts/generate-signing-key.sh" "$STACK_DIR/signing" >/dev/null
 ARTIFACT_SIGNATURE_KEY_ID=$(cat "$STACK_DIR/signing/ed25519.keyid")
+"$BASE_DIR/scripts/build-trusted-signing-keys.sh" \
+  "$STACK_DIR/signing/trusted-signing-keys.json" \
+  "$STACK_DIR/signing/ed25519.pub" >/dev/null
 
 "$BASE_DIR/scripts/generate-signing-key.sh" "$STACK_DIR/license-keys" >/dev/null
 LICENSE_KEY="$STACK_DIR/license-keys/ed25519.key" \
@@ -124,6 +127,10 @@ updates = {
     "DEVICE_IDENTITY_REQUIRE_ON_CHECKIN": "1",
     "ARTIFACT_PULL_ALLOWED_HOSTS": pull_allowed_hosts,
     "ARTIFACT_PULL_ALLOW_INSECURE_HTTP": "0",
+    "ARTIFACT_TRUST_VERIFICATION_MODE": "require_verified",
+    "ARTIFACT_TRUST_ALLOWED_SIGNING_KEY_IDS": artifact_key_id,
+    "ARTIFACT_TRUST_ALLOWED_SIGNATURE_TYPES": "ed25519",
+    "TRUSTED_SIGNING_KEYS_FILE": "/stack/signing/trusted-signing-keys.json",
     "ARTIFACT_SIGNATURE_REQUIRE_DEFAULT": "1",
     "ARTIFACT_SIGNATURE_ENFORCE_INGEST": "1",
     "ARTIFACT_SIGNATURE_KEY_ID": artifact_key_id,
@@ -171,6 +178,7 @@ Agent URL:           $AGENT_BASE_URL
 Bootstrap admin:     $ADMIN_EMAIL
 Bootstrap password:  $AUTH_BOOTSTRAP_PASSWORD
 Artifact key id:     $ARTIFACT_SIGNATURE_KEY_ID
+Trusted key file:    $STACK_DIR/signing/trusted-signing-keys.json
 License file:        $STACK_DIR/license.json
 Trusted proxies:     $TRUST_PROXY_CIDRS
 Compose subnet:      $COMPOSE_SUBNET

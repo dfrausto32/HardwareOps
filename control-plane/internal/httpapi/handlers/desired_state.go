@@ -70,6 +70,14 @@ type DesiredStateListResponse struct {
 }
 
 func PutDesiredStateGroup(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
+	return putDesiredStateGroup(logger, st, trustProxy, ArtifactSignaturePolicy{})
+}
+
+func PutDesiredStateGroupWithPolicy(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
+	return putDesiredStateGroup(logger, st, trustProxy, sigPolicy)
+}
+
+func putDesiredStateGroup(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "groupId")
 		if groupID == "" {
@@ -100,7 +108,7 @@ func PutDesiredStateGroup(logger *log.Logger, st store.Store, trustProxy bool) h
 				return
 			}
 		}
-		components, err := normalizeDesiredComponents(req, "", st)
+		components, err := normalizeDesiredComponents(req, "", st, sigPolicy)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -156,6 +164,14 @@ func PutDesiredStateGroup(logger *log.Logger, st store.Store, trustProxy bool) h
 }
 
 func PutDesiredStateDevice(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
+	return putDesiredStateDevice(logger, st, trustProxy, ArtifactSignaturePolicy{})
+}
+
+func PutDesiredStateDeviceWithPolicy(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
+	return putDesiredStateDevice(logger, st, trustProxy, sigPolicy)
+}
+
+func putDesiredStateDevice(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		deviceID := chi.URLParam(r, "deviceId")
 		if deviceID == "" {
@@ -186,7 +202,7 @@ func PutDesiredStateDevice(logger *log.Logger, st store.Store, trustProxy bool) 
 				return
 			}
 		}
-		components, err := normalizeDesiredComponents(req, "manual", st)
+		components, err := normalizeDesiredComponents(req, "manual", st, sigPolicy)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -371,7 +387,7 @@ type legacyDesired struct {
 	Policy           []byte
 }
 
-func normalizeDesiredComponents(req DesiredStateRequest, source string, st store.Store) (map[string]DesiredComponentResponse, error) {
+func normalizeDesiredComponents(req DesiredStateRequest, source string, st store.Store, sigPolicy ArtifactSignaturePolicy) (map[string]DesiredComponentResponse, error) {
 	components := map[string]DesiredComponentResponse{}
 	for rawKey, comp := range req.Components {
 		key := normalizeDesiredComponentKey(rawKey)
@@ -388,6 +404,18 @@ func normalizeDesiredComponents(req DesiredStateRequest, source string, st store
 		if err != nil {
 			return nil, fmt.Errorf("component %s: %w", key, err)
 		}
+		if comp.ArtifactID != "" && st != nil {
+			artifact, ok, err := st.GetArtifact(comp.ArtifactID)
+			if err != nil {
+				return nil, fmt.Errorf("component %s: artifact lookup failed: %w", key, err)
+			}
+			if !ok {
+				return nil, fmt.Errorf("component %s: artifact not found", key)
+			}
+			if err := sigPolicy.ValidateDesiredArtifact(artifact, comp.Policy); err != nil {
+				return nil, fmt.Errorf("component %s: %w", key, err)
+			}
+		}
 		if artifactType == "" {
 			return nil, fmt.Errorf("component %s requires artifactType", key)
 		}
@@ -403,6 +431,18 @@ func normalizeDesiredComponents(req DesiredStateRequest, source string, st store
 	}
 
 	if len(components) == 0 && (req.ArtifactID != "" || req.DesiredVersion != "" || req.DesiredConfigRev != "" || len(req.Policy) != 0) {
+		if req.ArtifactID != "" && st != nil {
+			artifact, ok, err := st.GetArtifact(req.ArtifactID)
+			if err != nil {
+				return nil, fmt.Errorf("artifact lookup failed: %w", err)
+			}
+			if !ok {
+				return nil, fmt.Errorf("artifact not found")
+			}
+			if err := sigPolicy.ValidateDesiredArtifact(artifact, req.Policy); err != nil {
+				return nil, err
+			}
+		}
 		components["app_bundle"] = DesiredComponentResponse{
 			ArtifactID:       req.ArtifactID,
 			ArtifactType:     "app_bundle",

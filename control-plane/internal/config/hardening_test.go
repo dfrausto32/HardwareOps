@@ -29,6 +29,7 @@ func TestValidateHardening(t *testing.T) {
 		ArtifactSignatureRequireDefault: true,
 		ArtifactSignatureEnforceIngest:  true,
 		ArtifactSignatureKeyID:          "sha256:test-signing-key",
+		TrustedSigningKeysFile:          "/opt/hardwareops/signing/trusted-signing-keys.json",
 	}
 
 	tests := []struct {
@@ -227,25 +228,18 @@ func TestValidateHardening(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "artifact signature default required",
+			name: "strict artifact trust mode required",
 			cfg: func() Config {
 				c := base
+				c.ArtifactTrustVerificationMode = "warn_unsigned"
 				c.ArtifactSignatureRequireDefault = false
-				return c
-			}(),
-			wantErr: true,
-		},
-		{
-			name: "artifact signature ingest enforcement required",
-			cfg: func() Config {
-				c := base
 				c.ArtifactSignatureEnforceIngest = false
 				return c
 			}(),
 			wantErr: true,
 		},
 		{
-			name: "artifact signature key id required",
+			name: "allowed signing key id required",
 			cfg: func() Config {
 				c := base
 				c.ArtifactSignatureKeyID = ""

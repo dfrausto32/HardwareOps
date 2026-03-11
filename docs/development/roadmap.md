@@ -21,7 +21,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Phase B — Operational Maturity | 🟢 Complete | Audit/metrics/events/lifecycle/CI ingest/bulk ops shipped and operational. |
 | Phase B Extension — UX + Realtime | 🟢 Complete | Bulk actions + realtime updates + auth-session UX reset shipped. |
 | Operational Hardening (between B and C) | 🟢 Complete | Pull-boundary, token exposure, startup guardrails, break-glass backend, proxy trust policy, and abuse controls are all shipped. |
-| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, and OIDC SSO all shipped. Custom RBAC, LDAP, and Vault secrets remain as future work. |
+| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, and trusted-key artifact verification are shipped. Custom RBAC, trust-override UX, deployment wiring for trusted-key management, LDAP, and Vault secrets remain. |
 | Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Live-deployment acceptance gate execution remains. |
 
 ### Active work queue (what is still to do)
@@ -70,6 +70,7 @@ No items currently in-flight. Queue is clear.
 - ✅ ECS exec guardrail (`enable_execute_command` default changed to `false` in `modules/ecs`; variable threaded through `customer_stack`; opt-in documented in tfvars examples).
 - ✅ CloudWatch alarm Terraform resources (SNS topic + email subscription + 8 managed alarms: ALB 5xx/unhealthy-host, ECS CPU/memory/task-count, RDS CPU/storage/connections; all thresholds parameterized; `aws-hardening-check.sh deployment` alarm checks now have resources to validate).
 - ✅ OIDC SSO (authorization code flow; `go-oidc/v3` + `oauth2`; IdP discovery; group-to-role mapping; user upsert on `auth_provider`+`external_id`; state cookie; `auth.oidc.login` audit events; UI SSO button; hardened-profile guards; per-IdP docs for Okta/Azure AD/Google Workspace).
+- ✅ Trusted-key artifact verification core (trusted signing key registry; global verification policy; control-plane cryptographic verification for create/upload/pull/complete; agent trust bundle distribution and apply-time re-verification; Security-page trust controls; artifact verification state/metrics/tests).
 
 ---
 
@@ -270,6 +271,8 @@ The 2026-03-10 D-hardening batch merged. Items 1–3 below are now complete. Rem
 3. ~~**CloudWatch alarm Terraform resources**~~ — ✅ Done (#17)
 4. ~~**OIDC SSO**~~ — ✅ Done (#23)
 5. **Custom RBAC policies:** Per-resource permission engine and admin UI.
+6. **Trusted-key management deployment wiring:** On-prem/AWS bootstrap, seed path, and runbook/test coverage.
+7. **Trust override UI:** Group/device/component trust override editor and inheritance UX.
 
 Confirm priorities with the team before mapping to agents.
 
@@ -417,6 +420,40 @@ Confirm priorities with the team before mapping to agents.
 - **Acceptance:** Custom policies enforce least privilege.
 - **Notes:** 
 
+#### Trusted-key artifact verification
+- **Status:** 🟡 In progress
+- **Scope:** Trusted signing key registry, global verification policy (`allow_unsigned` / `warn_unsigned` / `require_verified`), control-plane cryptographic verification on ingest, agent trust-bundle distribution, and apply-time verification.
+- **Dependencies:** Artifact ingest/update paths, desired-state policy merge, agent signature verification, admin Security UI.
+- **Risks:** Policy drift between deployments, operator confusion around key rotation, and rollout friction for legacy unsigned artifacts.
+- **Acceptance:** 
+  - Control-plane verifies signed artifacts against active trusted public keys before registration.
+  - Agents persist the distributed trust bundle and re-verify before apply.
+  - Desired-state enforcement blocks non-compliant artifacts under strict policy.
+  - UI exposes verification state, trusted keys, and global trust policy.
+- **Notes:** Core slice is shipped for `ed25519` and key-based `cosign`. Existing artifacts are marked `legacy`. Remaining tracked work is split into the next two items: deployment wiring/seeding and trust-override UX.
+
+#### Trusted-key management deployment wiring
+- **Status:** 🟡 In progress
+- **Scope:** Wire trusted key registry and trust-policy defaults into on-prem compose/env examples, AWS Terraform/runtime config, seed scripts, and operator runbooks.
+- **Dependencies:** Trusted-key verification core, deployment templates, installer/bootstrap scripts, AWS/on-prem docs.
+- **Risks:** Drift between local/dev/on-prem/cloud defaults and brittle first-run setup.
+- **Acceptance:** 
+  - On-prem and AWS reference deployments can bootstrap trusted keys and initial trust policy without manual DB surgery.
+  - Seed/runbook path exists for adding initial trusted keys and rotating them safely.
+  - Smoke tests cover strict and permissive deployment profiles.
+- **Notes:** Shipped in this pass: control-plane startup now seeds DB policy/registry from `ARTIFACT_TRUST_*` + `TRUSTED_SIGNING_KEYS_*` bootstrap config; prod-lab generates `trusted-signing-keys.json`; on-prem compose/examples, installer/upgrade templates, and AWS Terraform now expose trusted key bootstrap wiring. Remaining work is runbook depth and deployment smoke coverage.
+
+#### Trust override UI (group/device policy overrides)
+- **Status:** ⬜ Planned
+- **Scope:** Expose group/device/component trust-policy overrides in desired-state editors with clear precedence over the global default.
+- **Dependencies:** Trusted-key verification core, desired-state policy model, UI editor components.
+- **Risks:** Operators weakening policy unintentionally or not understanding precedence.
+- **Acceptance:** 
+  - Group/device/component editors can set verification mode and allowed key/type overrides.
+  - UI clearly shows inherited vs overridden trust policy.
+  - Non-compliant selections are blocked or explained inline.
+- **Notes:** Backend policy precedence already exists; this item is the missing operator UX layer.
+
 #### Release channels (customer-defined canary/stable)
 - **Status:** ⬜ Planned
 - **Scope:** Customer-owned channel labels and promotion workflow (for environments that want staged channel operations).
@@ -447,7 +484,7 @@ Confirm priorities with the team before mapping to agents.
 - **Dependencies:** CI provenance generation, policy model, verification pipeline.
 - **Risks:** Operational complexity and false rejects.
 - **Acceptance:** Policy can enforce trusted builder/provenance on selected artifact classes.
-- **Notes:** Phase C hardening item; current v1 remains Ed25519-compatible.
+- **Notes:** Phase C hardening item. Trusted-key verification is already shipped for `ed25519` and key-based `cosign`; this remaining item is specifically about provenance, attestations, Rekor/Fulcio/keyless, and builder identity policy.
 
 #### Vulnerability scanning integration (optional, Tenable Nessus)
 - **Status:** ⬜ Planned

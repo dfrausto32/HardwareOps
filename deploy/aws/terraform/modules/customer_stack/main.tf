@@ -14,15 +14,19 @@ locals {
 
   default_control_plane_env = merge(
     {
-      S3_BUCKET          = module.artifact_store.bucket_name
-      S3_REGION          = data.aws_region.current.region
-      S3_USE_SSL         = "1"
-      S3_ENDPOINT        = "s3.${data.aws_region.current.region}.amazonaws.com"
-      AUTO_MIGRATE       = "1"
-      MIGRATIONS_DIR     = "/app/migrations"
-      TRUST_PROXY        = "1"
-      TRUST_PROXY_CIDRS  = join(",", values(var.private_subnet_cidrs))
-      CLIENT_CERT_HEADER = "X-Client-Cert"
+      S3_BUCKET                              = module.artifact_store.bucket_name
+      S3_REGION                              = data.aws_region.current.region
+      S3_USE_SSL                             = "1"
+      S3_ENDPOINT                            = "s3.${data.aws_region.current.region}.amazonaws.com"
+      AUTO_MIGRATE                           = "1"
+      MIGRATIONS_DIR                         = "/app/migrations"
+      TRUST_PROXY                            = "1"
+      TRUST_PROXY_CIDRS                      = join(",", values(var.private_subnet_cidrs))
+      CLIENT_CERT_HEADER                     = "X-Client-Cert"
+      ARTIFACT_TRUST_VERIFICATION_MODE       = "require_verified"
+      ARTIFACT_TRUST_ALLOWED_SIGNATURE_TYPES = "ed25519,cosign"
+      ARTIFACT_SIGNATURE_REQUIRE_DEFAULT     = "1"
+      ARTIFACT_SIGNATURE_ENFORCE_INGEST      = "1"
     },
     # DATABASE_URL is injected as plaintext only when database_url_secret_arn is not set.
     # Set database_url_secret_arn to eliminate the plaintext credential from ECS task definitions.
@@ -40,6 +44,19 @@ locals {
   artifact_pull_credentials_env = local.artifact_pull_credentials_enabled ? {
     ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID = local.artifact_pull_credentials_secret_id
     ARTIFACT_PULL_CREDENTIALS_AWS_REGION    = data.aws_region.current.region
+  } : {}
+  trusted_signing_keys_secret_id = trimspace(var.trusted_signing_keys_aws_secret_id != null ? var.trusted_signing_keys_aws_secret_id : "")
+  trusted_signing_keys_enabled   = local.trusted_signing_keys_secret_id != ""
+  trusted_signing_keys_secret_arn = startswith(local.trusted_signing_keys_secret_id, "arn:") ? local.trusted_signing_keys_secret_id : format(
+    "arn:%s:secretsmanager:%s:%s:secret:%s*",
+    data.aws_partition.current.partition,
+    data.aws_region.current.region,
+    data.aws_caller_identity.current.account_id,
+    local.trusted_signing_keys_secret_id,
+  )
+  trusted_signing_keys_env = local.trusted_signing_keys_enabled ? {
+    TRUSTED_SIGNING_KEYS_AWS_SECRET_ID = local.trusted_signing_keys_secret_id
+    TRUSTED_SIGNING_KEYS_AWS_REGION    = data.aws_region.current.region
   } : {}
 
   demo_agents_enabled = var.enable_demo_fleet && var.demo_agent_count > 0 && var.demo_agent_image != null && trimspace(var.demo_agent_image) != ""
@@ -63,6 +80,7 @@ locals {
   effective_demo_agent_env = merge(local.demo_default_agent_env, var.demo_agent_env)
   task_secret_arns = concat(
     local.artifact_pull_credentials_enabled ? [local.artifact_pull_credentials_secret_arn] : [],
+    local.trusted_signing_keys_enabled ? [local.trusted_signing_keys_secret_arn] : [],
     var.database_url_secret_arn != "" ? [var.database_url_secret_arn] : [],
   )
 }
@@ -232,7 +250,7 @@ module "ecs" {
   default_dns_resolver         = cidrhost(var.vpc_cidr, 2)
   control_plane_desired_count  = var.control_plane_desired_count
   gateway_desired_count        = var.gateway_desired_count
-  control_plane_env            = merge(local.default_control_plane_env, local.demo_control_plane_env, local.artifact_pull_credentials_env, var.control_plane_env)
+  control_plane_env            = merge(local.default_control_plane_env, local.demo_control_plane_env, local.artifact_pull_credentials_env, local.trusted_signing_keys_env, var.control_plane_env)
   gateway_env                  = var.gateway_env
   control_plane_secret_arns = merge(
     var.control_plane_secret_arns,

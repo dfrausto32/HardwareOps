@@ -84,9 +84,14 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 	operator := requireRole("operator")
 	admin := requireRole("admin")
 	artifactSigPolicy := handlers.ArtifactSignaturePolicy{
-		Require:       deps.ArtifactSignatureRequireDefault,
-		EnforceIngest: deps.ArtifactSignatureEnforceIngest,
-		KeyID:         deps.ArtifactSignatureKeyID,
+		Store:                 deps.Store,
+		VerificationMode:      deps.ArtifactTrustVerificationMode,
+		AllowedSigningKeyIDs:  deps.ArtifactTrustAllowedKeyIDs,
+		AllowedSignatureTypes: deps.ArtifactTrustAllowedSigTypes,
+		Require:               deps.ArtifactSignatureRequireDefault,
+		EnforceIngest:         deps.ArtifactSignatureEnforceIngest,
+		KeyID:                 deps.ArtifactSignatureKeyID,
+		Hardened:              deps.HardenedProfile,
 	}
 
 	if deps.Metrics != nil && deps.MetricsPath != "" {
@@ -129,7 +134,13 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(viewer).Get("/artifacts/lifecycle/status", handlers.GetArtifactLifecycleStatus(deps.ArtifactLifecycle))
 		r.With(admin).Put("/artifacts/lifecycle/policy", handlers.SetArtifactLifecyclePolicy(logger, deps.Store, deps.TrustProxy))
 		r.With(admin).Post("/artifacts/lifecycle/prune", handlers.PruneArtifacts(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, deps.ArtifactLifecycle))
-		r.With(operator).Post("/artifacts", handlers.CreateArtifactWithRealtime(logger, deps.Store, deps.TrustProxy, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events))
+		r.With(operator).Get("/trusted-signing-keys", handlers.ListTrustedSigningKeys(logger, deps.Store, deps.TrustProxy))
+		r.With(admin).Post("/trusted-signing-keys", handlers.PutTrustedSigningKey(logger, deps.Store, deps.TrustProxy))
+		r.With(admin).Patch("/trusted-signing-keys/{keyId}", handlers.PatchTrustedSigningKey(logger, deps.Store, deps.TrustProxy))
+		r.With(admin).Post("/trusted-signing-keys/{keyId}/retire", handlers.RetireTrustedSigningKey(logger, deps.Store, deps.TrustProxy))
+		r.With(operator).Get("/artifact-trust/policy", handlers.GetArtifactTrustPolicy(logger, deps.Store, deps.TrustProxy, artifactSigPolicy))
+		r.With(admin).Put("/artifact-trust/policy", handlers.PutArtifactTrustPolicy(logger, deps.Store, deps.TrustProxy, artifactSigPolicy))
+		r.With(operator).Post("/artifacts", handlers.CreateArtifactWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events))
 		r.With(operator).Post("/artifacts/upload", handlers.UploadArtifactWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, deps.Metrics, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events))
 		r.With(artifactPublisher).Post("/artifacts/pull", handlers.PullArtifactWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.ArtifactPullHosts, deps.ArtifactPullMaxBytes, deps.ArtifactPullTimeout, deps.ArtifactPullAllowInsecureHTTP, deps.ArtifactPullCreds, deps.TrustProxy, deps.Metrics, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events))
 		r.With(artifactPublisher).Post("/artifacts/presign-upload", handlers.PresignArtifactUpload(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.PresignExpires, deps.TrustProxy, deps.Metrics))
@@ -182,9 +193,9 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(operator).Post("/pending-enrollments/{requestId}/deny", handlers.DenyPendingEnrollment(logger, deps.Store, deps.TrustProxy, deps.Metrics))
 		r.With(operator).Post("/pending-enrollments/{requestId}/reset", handlers.ResetPendingEnrollment(logger, deps.Store, deps.TrustProxy, deps.Metrics))
 		r.With(viewer).Get("/desired-state", handlers.ListDesiredState(logger, deps.Store, deps.TrustProxy))
-		r.With(operator).Put("/desired-state/groups/{groupId}", handlers.PutDesiredStateGroup(logger, deps.Store, deps.TrustProxy))
+		r.With(operator).Put("/desired-state/groups/{groupId}", handlers.PutDesiredStateGroupWithPolicy(logger, deps.Store, deps.TrustProxy, artifactSigPolicy))
 		r.With(operator).Delete("/desired-state/groups/{groupId}", handlers.DeleteDesiredStateGroup(logger, deps.Store, deps.TrustProxy))
-		r.With(operator).Put("/desired-state/devices/{deviceId}", handlers.PutDesiredStateDevice(logger, deps.Store, deps.TrustProxy))
+		r.With(operator).Put("/desired-state/devices/{deviceId}", handlers.PutDesiredStateDeviceWithPolicy(logger, deps.Store, deps.TrustProxy, artifactSigPolicy))
 		r.With(operator).Delete("/desired-state/devices/{deviceId}", handlers.DeleteDesiredStateDevice(logger, deps.Store, deps.TrustProxy))
 		r.With(viewer).Get("/logs/{deviceId}", handlers.GetDeviceLogs(logger, deps.Store, deps.LogDir, deps.TrustProxy))
 		r.With(viewer).Get("/events/history", handlers.ListRuntimeEvents(logger, deps.Store, deps.TrustProxy))

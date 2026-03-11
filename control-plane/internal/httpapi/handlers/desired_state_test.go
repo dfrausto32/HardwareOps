@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hardwareops/control-plane/internal/artifacttrust"
 	"github.com/hardwareops/control-plane/internal/store"
 	"github.com/hardwareops/control-plane/internal/store/memory"
 )
@@ -138,6 +139,47 @@ func TestPutDesiredStateGroup_InvalidCheckinInterval(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestPutDesiredStateDevice_RejectsUnverifiedArtifactWhenStrictTrustPolicyEnabled(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+
+	artifactID := uuid.NewString()
+	if err := mem.CreateArtifact(store.Artifact{
+		ArtifactID:          artifactID,
+		Name:                "agent",
+		Version:             "1.0.0",
+		Type:                "agent_bundle",
+		ObjectKey:           "artifacts/test.tar.gz",
+		SHA256:              "abc",
+		SizeBytes:           3,
+		Status:              "active",
+		VerificationStatus:  artifacttrust.VerificationStatusLegacy,
+		CreatedAt:           time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("create artifact: %v", err)
+	}
+	if _, err := mem.SetArtifactTrustPolicy(store.ArtifactTrustPolicy{
+		VerificationMode: artifacttrust.VerificationModeRequire,
+	}); err != nil {
+		t.Fatalf("set trust policy: %v", err)
+	}
+
+	id := uuid.NewString()
+	body := []byte(`{"components":{"agent_bundle":{"artifactId":"` + artifactID + `","artifactType":"agent_bundle","desiredVersion":"1.0.0"}}}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/desired-state/devices/"+id, bytes.NewReader(body))
+	req = withURLParam(req, "deviceId", id)
+	w := httptest.NewRecorder()
+
+	PutDesiredStateDeviceWithPolicy(logger, mem, false, ArtifactSignaturePolicy{Store: mem}).ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte("must be verified for strict policy")) {
+		t.Fatalf("expected trust policy rejection, got %s", w.Body.String())
 	}
 }
 

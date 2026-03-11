@@ -127,11 +127,35 @@ type Artifact struct {
 	ObjectKey    string
 	SHA256       string
 	Signature    string
+	SignatureType string
+	SignatureKeyID string
+	VerificationStatus string
+	VerificationError  string
+	VerifiedAt    time.Time
 	SizeBytes    int64
 	MetadataJSON []byte
 	CreatedAt    time.Time
 	DeprecatedAt time.Time
 	DeleteAfter  time.Time
+}
+
+type TrustedSigningKey struct {
+	KeyID        string
+	DisplayName  string
+	Algorithm    string
+	PublicKeyPEM string
+	State        string
+	CreatedAt    time.Time
+	RetiredAt    time.Time
+	Notes        string
+}
+
+type ArtifactTrustPolicy struct {
+	VerificationMode         string
+	AllowedSigningKeyIDsJSON []byte
+	AllowedSignatureTypesJSON []byte
+	UpdatedAt                time.Time
+	UpdatedByUserID          string
 }
 
 type ArtifactStats struct {
@@ -362,6 +386,7 @@ type Store interface {
 	CreateArtifact(artifact Artifact) error
 	GetArtifact(artifactID string) (Artifact, bool, error)
 	ListArtifacts(name, version string, limit, offset int) ([]Artifact, error)
+	CountArtifactsByVerificationStatus(status string) (int, error)
 	DeprecateArtifact(artifactID string, deprecatedAt, deleteAfter time.Time) error
 	RestoreArtifact(artifactID string) error
 	ListArtifactsForPrune(cutoff time.Time, limit int) ([]Artifact, error)
@@ -372,6 +397,12 @@ type Store interface {
 	SetReleaseAutoUpdateSettings(settings ReleaseAutoUpdateSettings) (ReleaseAutoUpdateSettings, error)
 	DeleteArtifact(artifactID string) error
 	GetArtifactStats() (ArtifactStats, error)
+	ListTrustedSigningKeys(includeRetired bool) ([]TrustedSigningKey, error)
+	GetTrustedSigningKey(keyID string) (TrustedSigningKey, bool, error)
+	UpsertTrustedSigningKey(key TrustedSigningKey) (TrustedSigningKey, error)
+	RetireTrustedSigningKey(keyID string, retiredAt time.Time) (TrustedSigningKey, error)
+	GetArtifactTrustPolicy() (ArtifactTrustPolicy, bool, error)
+	SetArtifactTrustPolicy(policy ArtifactTrustPolicy) (ArtifactTrustPolicy, error)
 	CreateApplyResult(result ApplyResult) error
 	CreateRuntimeEvent(event RuntimeEvent) error
 	ListRuntimeEvents(filter RuntimeEventFilter) ([]RuntimeEvent, error)

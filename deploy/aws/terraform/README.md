@@ -46,6 +46,7 @@ Acceptance helper: `../../../scripts/aws-hardening-check.sh`.
 - image URIs for gateway/control-plane
 - optional demo fleet image URI (`demo_agent_image`) when `enable_demo_fleet = true`
 - optional pull credential secret (`artifact_pull_credentials_aws_secret_id`) for adapter `credentialRef`
+- optional trusted signing key bootstrap secret (`trusted_signing_keys_aws_secret_id`) for artifact verification
 - optional customer-managed secret KMS keys (`secret_kms_key_arns`)
 - secrets map for sensitive env values (for example `DATABASE_URL`)
 4. Run:
@@ -68,6 +69,7 @@ After apply, run:
 - `ingress_cidrs` remains the shared fallback for both listeners; set `app_ingress_cidrs` and `device_ingress_cidrs` only when you need different policies.
 - WAF is associated to the shared ALB, but its managed rules and optional rate limit are scope-down matched to `app_host` so device mTLS traffic is not filtered by app rules.
 - `artifact_pull_credentials_aws_secret_id` can be set to a secret **name or ARN**, but ARN is recommended for least-privilege IAM policy generation.
+- `trusted_signing_keys_aws_secret_id` can be set to a secret **name or ARN** containing trusted signing key JSON. Use `control_plane_env.ARTIFACT_TRUST_ALLOWED_SIGNING_KEY_IDS` to pin specific key IDs when needed.
 - Set `secret_kms_key_arns` only when referenced Secrets Manager secrets use customer-managed KMS keys; AWS-managed Secrets Manager keys do not need extra input here.
 - For local auth mode, ensure `AUTH_JWT_SECRET` and bootstrap credentials are set in `control_plane_env`.
 - For token-based first-time enrollment, start with `device_mtls_mode = "passthrough"`, enroll devices, then switch to `device_mtls_mode = "verify"` and re-apply.

@@ -185,52 +185,87 @@ Local Artifactory smoke test:
 
 ## Signing Model
 
-### Current v1 (Ed25519, offline)
+### Current v1 (trusted key verification)
 
 - CI/packer computes `sha256(artifact.tar.gz)` and signs it with an Ed25519 private key.
-- The signature and key ID are stored in artifact metadata (`signature`, `signatureKeyId`).
-- The agent verifies the signature before apply.
+- Control-plane stores `signature`, `signatureType`, and `signatureKeyId`.
+- Control-plane verifies the detached signature during create/upload/pull/complete against the active trusted key registry.
+- Agents receive the active signing trust bundle during enroll/claim/check-in and verify again before apply.
 
-**Why it works:** simple, fast, offline-friendly; minimal key material and no external service dependency.
+**Why it works:** simple, fast, offline-friendly; no private signing key enters the control-plane or browser.
 
-**What's missing:** no public transparency log; no keyless identity verification.
+**What's missing:** no public transparency log; no keyless identity verification; no provenance/attestations in this slice.
 
-### Signature enforcement
+### Verification modes
 
 Control-plane managed policy (recommended for production):
 
 | Variable | Effect |
 |---|---|
-| `ARTIFACT_SIGNATURE_REQUIRE_DEFAULT=1` | Adds `applyPolicy.requireSignature=true` to desired components when not explicitly set |
-| `ARTIFACT_SIGNATURE_KEY_ID=sha256:...` | Injects pinned key ID into desired `applyPolicy` when not explicitly set |
-| `ARTIFACT_SIGNATURE_ENFORCE_INGEST=1` | Rejects unsigned artifacts (and wrong key ID) on create/upload/pull/complete |
+| `ARTIFACT_TRUST_VERIFICATION_MODE=require_verified` | Bootstrap DB/global policy starts strict |
+| `ARTIFACT_TRUST_ALLOWED_SIGNING_KEY_IDS=sha256:...,sha256:...` | Bootstrap policy pins allowed signing key IDs |
+| `ARTIFACT_TRUST_ALLOWED_SIGNATURE_TYPES=ed25519,cosign` | Bootstrap policy restricts accepted signature formats |
+| `ARTIFACT_SIGNATURE_REQUIRE_DEFAULT=1` | Bootstrap default becomes `require_verified` |
+| `ARTIFACT_SIGNATURE_KEY_ID=sha256:...` | Bootstrap policy pins allowed signing key ID |
+| `ARTIFACT_SIGNATURE_ENFORCE_INGEST=1` | Bootstrap default rejects unsigned/untrusted artifacts on create/upload/pull/complete |
 
-Agent-side enforcement (env):
-- `REQUIRE_ARTIFACT_SIGNATURE=1` — hard-fail unsigned artifacts
+Global policy modes:
+- `allow_unsigned`
+- `warn_unsigned`
+- `require_verified`
+
+Agent-side legacy fallback (env):
 - `SIGNING_PUB_KEY_PATH=/path/to/ed25519.pub`
-- `SIGNING_KEY_ID=sha256:...` — optional key-identity pin
+- `SIGNING_KEY_ID=sha256:...` — optional key-identity pin when no control-plane trust bundle exists
 
-### Future path: Cosign/Sigstore
+### Trusted signing key bootstrap sources
 
-To extend to Cosign without breaking existing artifacts, add `signatureType` and optional `cosignBundle` to artifact metadata:
-- `signatureType`: `ed25519` | `cosign`
-- `signature`: base64 for Ed25519
-- `signatureKeyId`: key identifier for Ed25519
-- `cosignBundle`: JSON (optional), for Cosign verification
+The control-plane seeds the trusted key registry on startup from one or more bootstrap sources:
 
-This keeps Ed25519 as the v1 default while letting Cosign signing be adopted incrementally in CI. Consider Cosign when you need:
-- Audit-grade transparency log (Rekor)
-- Keyless signing tied to enterprise identity (Fulcio)
-- SLSA provenance / SBOM attestations
+- `TRUSTED_SIGNING_KEYS_FILE=/path/to/trusted-signing-keys.json`
+- `TRUSTED_SIGNING_KEYS_JSON='{"keys":[...]}'`
+- `TRUSTED_SIGNING_KEYS_AWS_SECRET_ID=hardwareops/customer/prod/trusted-signing-keys`
+- `TRUSTED_SIGNING_KEYS_AWS_REGION=us-east-1`
+
+Supported JSON payload:
+
+```json
+{
+  "keys": [
+    {
+      "keyId": "sha256:...",
+      "displayName": "release-ed25519",
+      "algorithm": "ed25519",
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----",
+      "notes": "primary release signer"
+    }
+  ]
+}
+```
+
+Helper:
+
+- `scripts/build-trusted-signing-keys.sh <out-file> <public-key-path>`
+
+### Cosign scope
+
+This slice supports `signatureType=cosign` for key-based offline verification with trusted PEM public keys. It does **not** include:
+- Rekor transparency log verification
+- Fulcio/keyless identity
+- Cosign attestation/provenance workflows
+
+Those stay in the later supply-chain policy track.
 
 ---
 
 ## Manual Upload Workflow
 
-Manual upload does not change unless signature verification is enforced.
+Manual upload supports detached signature verification and policy-driven unsigned behavior.
 
-- **Unsigned (default):** Upload via UI or `POST /api/v1/artifacts/upload` with no signature.
-- **Signed:** Use `scripts/pack-upload-artifact.sh` with `SIGNING_KEY` + `SIGNING_KEY_ID` to attach a signature.
+- **Unsigned:** Upload via UI or `POST /api/v1/artifacts/upload` with no signature. Accepted only when policy is `allow_unsigned` or `warn_unsigned`.
+- **Signed:** Upload through the UI with detached signature file + signature type + signing key ID, or use `scripts/pack-upload-artifact.sh` with `SIGNING_KEY`, `SIGNING_KEY_ID`, and optional `SIGNATURE_TYPE`.
+
+See `docs/development/artifact-trusted-upload-ui.md` for the UI contract and remaining gaps.
 
 ---
 
@@ -238,7 +273,10 @@ Manual upload does not change unless signature verification is enforced.
 
 For all ingest paths:
 - Always provide and verify `sha256`.
-- Use `signature` + `signatureKeyId` when artifacts are signed.
+- Use `signature` + `signatureType` + `signatureKeyId` when artifacts are signed.
+- Prefer `require_verified` in cloud/hardened deployments.
+- Use `warn_unsigned` or `allow_unsigned` only for explicitly disconnected/on-prem environments.
+- Seed the trusted key registry from file/JSON/Secrets Manager before switching to strict mode.
 
 For pull:
 - Set `ARTIFACT_PULL_ALLOWED_HOSTS` explicitly.

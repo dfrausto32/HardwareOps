@@ -1137,6 +1137,22 @@ tr.artifact-group-start td {
   color: #f2d79b;
 }
 
+.pill.verified {
+  border-color: #1f7a3a;
+  color: #b6f0c4;
+}
+
+.pill.legacy {
+  border-color: #5f5f8a;
+  color: #d2d4ff;
+}
+
+.pill.failed,
+.pill.untrusted {
+  border-color: var(--accent);
+  color: #ffb2b2;
+}
+
 .drawer-backdrop,
 .modal-backdrop {
   position: fixed;
@@ -1222,6 +1238,11 @@ tr.artifact-group-start td {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.artifact-trust-cell {
+  display: grid;
+  gap: 4px;
 }
 
 .artifact-action-main {

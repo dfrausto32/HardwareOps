@@ -5,6 +5,8 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"github.com/hardwareops/control-plane/internal/artifacttrust"
 )
 
 type trustedProxyCIDRValidationOptions struct {
@@ -120,14 +122,32 @@ func ValidateHardening(cfg Config) error {
 	if cfg.ArtifactPullAllowInsecureHTTP {
 		return fmt.Errorf("HARDENED_PROFILE requires ARTIFACT_PULL_ALLOW_INSECURE_HTTP=0")
 	}
-	if !cfg.ArtifactSignatureRequireDefault {
-		return fmt.Errorf("HARDENED_PROFILE requires ARTIFACT_SIGNATURE_REQUIRE_DEFAULT=1")
+	defaultPolicy, err := artifacttrust.EnforcePolicyFloor(artifacttrust.DeriveDefaultPolicy(artifacttrust.DefaultPolicyConfig{
+		HardenedProfile:         cfg.HardenedProfile,
+		VerificationMode:        cfg.ArtifactTrustVerificationMode,
+		AllowedSigningKeyIDs:    cfg.ArtifactTrustAllowedSigningKeyIDs,
+		AllowedSignatureTypes:   cfg.ArtifactTrustAllowedSignatureTypes,
+		RequireSignatureDefault: cfg.ArtifactSignatureRequireDefault,
+		EnforceIngest:           cfg.ArtifactSignatureEnforceIngest,
+		RequiredKeyID:           cfg.ArtifactSignatureKeyID,
+	}), true)
+	if err != nil {
+		return fmt.Errorf("HARDENED_PROFILE artifact trust policy invalid: %w", err)
 	}
-	if !cfg.ArtifactSignatureEnforceIngest {
-		return fmt.Errorf("HARDENED_PROFILE requires ARTIFACT_SIGNATURE_ENFORCE_INGEST=1")
+	if defaultPolicy.VerificationMode != artifacttrust.VerificationModeRequire {
+		return fmt.Errorf("HARDENED_PROFILE requires strict artifact trust policy (verificationMode=require_verified)")
 	}
-	if strings.TrimSpace(cfg.ArtifactSignatureKeyID) == "" {
-		return fmt.Errorf("HARDENED_PROFILE requires ARTIFACT_SIGNATURE_KEY_ID")
+	allowedKeyIDs, err := artifacttrust.DecodeStringArray(defaultPolicy.AllowedSigningKeyIDsJSON, false, nil)
+	if err != nil {
+		return fmt.Errorf("HARDENED_PROFILE artifact trust policy invalid: %w", err)
+	}
+	if len(allowedKeyIDs) == 0 {
+		return fmt.Errorf("HARDENED_PROFILE requires at least one allowed signing key id")
+	}
+	if strings.TrimSpace(cfg.TrustedSigningKeysFile) == "" &&
+		strings.TrimSpace(cfg.TrustedSigningKeysJSON) == "" &&
+		strings.TrimSpace(cfg.TrustedSigningKeysAWSSecretID) == "" {
+		return fmt.Errorf("HARDENED_PROFILE requires trusted signing key bootstrap source (TRUSTED_SIGNING_KEYS_FILE/JSON/AWS_SECRET_ID)")
 	}
 	trustedProxyValidation := trustedProxyCIDRValidationOptions{}
 	if cfg.TrustProxy {

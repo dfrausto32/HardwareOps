@@ -261,6 +261,44 @@ export async function pruneArtifacts(limit = 100) {
   })
 }
 
+export async function listTrustedSigningKeys(includeRetired = false) {
+  const qs = new URLSearchParams()
+  if (includeRetired) qs.set('includeRetired', '1')
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  return requestJson(`/api/v1/trusted-signing-keys${suffix}`)
+}
+
+export async function createTrustedSigningKey(payload: Record<string, unknown>) {
+  return requestJson('/api/v1/trusted-signing-keys', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function updateTrustedSigningKey(keyId: string, payload: Record<string, unknown>) {
+  return requestJson(`/api/v1/trusted-signing-keys/${encodeURIComponent(keyId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function retireTrustedSigningKey(keyId: string) {
+  return requestJson(`/api/v1/trusted-signing-keys/${encodeURIComponent(keyId)}/retire`, {
+    method: 'POST',
+  })
+}
+
+export async function getArtifactTrustPolicy() {
+  return requestJson('/api/v1/artifact-trust/policy')
+}
+
+export async function setArtifactTrustPolicy(payload: Record<string, unknown>) {
+  return requestJson('/api/v1/artifact-trust/policy', {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
 export async function getReleaseAutoUpdateStatus() {
   return requestJson('/api/v1/release-auto-update')
 }

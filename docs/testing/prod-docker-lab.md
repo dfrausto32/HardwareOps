@@ -47,6 +47,7 @@ This generates a dedicated lab workspace (default: `/tmp/hardwareops-prod-docker
 - `<LAB_ROOT>/stack/license.json`
 - `<LAB_ROOT>/stack/license-keys/*`
 - `<LAB_ROOT>/stack/signing/*`
+- `<LAB_ROOT>/stack/signing/trusted-signing-keys.json`
 
 Defaults are tuned for production parity:
 
@@ -55,7 +56,7 @@ Defaults are tuned for production parity:
 - `LICENSE_ENFORCE=1` with generated signed lab license
 - `DEVICE_IDENTITY_MODE=enforce`
 - `TRUST_PROXY_CIDRS=127.0.0.1/32,::1/128,172.16.0.0/12` so the Docker-network gateway can forward client-cert headers
-- signature policy defaults enabled
+- trusted signing key registry bootstrapped from the generated lab key
 - remote maintenance runner mode (control-plane without docker socket)
 
 If your shell does not resolve `*.localhost` subdomains automatically, add:

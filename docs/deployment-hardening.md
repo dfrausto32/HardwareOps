@@ -87,6 +87,10 @@ DEVICE_IDENTITY_REQUIRE_ON_ENROLL=1
 DEVICE_IDENTITY_REQUIRE_ON_CHECKIN=1
 ARTIFACT_PULL_ALLOWED_HOSTS=<comma-separated approved pull hosts>
 ARTIFACT_PULL_ALLOW_INSECURE_HTTP=0
+ARTIFACT_TRUST_VERIFICATION_MODE=require_verified
+ARTIFACT_TRUST_ALLOWED_SIGNING_KEY_IDS=<comma-separated key ids>
+ARTIFACT_TRUST_ALLOWED_SIGNATURE_TYPES=ed25519,cosign
+TRUSTED_SIGNING_KEYS_FILE=/opt/hardwareops/signing/trusted-signing-keys.json
 ARTIFACT_SIGNATURE_REQUIRE_DEFAULT=1
 ARTIFACT_SIGNATURE_ENFORCE_INGEST=1
 ARTIFACT_SIGNATURE_KEY_ID=<pinned signing key id>
@@ -98,7 +102,7 @@ BACKUP_RUNNER_URL=http://maintenance-runner:8090
 BACKUP_RUNNER_TOKEN=<16+ char random token>
 ```
 
-With `HARDENED_PROFILE=1`, `TRUST_PROXY=1` now requires `TRUST_PROXY_CIDRS` to be explicitly set. Do not rely on broad private-network fallbacks.
+With `HARDENED_PROFILE=1`, `TRUST_PROXY=1` now requires `TRUST_PROXY_CIDRS` to be explicitly set, and artifact trust bootstrap must include a strict verification mode plus a trusted signing key source. Do not rely on broad private-network fallbacks.
 
 Do **not** use:
 - `TRUST_PROXY_CIDRS=0.0.0.0/0`

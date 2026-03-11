@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hardwareops/control-plane/internal/artifacttrust"
 	"github.com/hardwareops/control-plane/internal/events"
 	"github.com/hardwareops/control-plane/internal/metrics"
 	"github.com/hardwareops/control-plane/internal/store"
@@ -66,6 +67,7 @@ type DeviceCheckinResponse struct {
 	Desired        *DesiredState `json:"desired"`
 	PendingActions []Action      `json:"pendingActions"`
 	ServerTime     time.Time     `json:"serverTime"`
+	SigningTrust   *artifacttrust.SigningTrustBundle `json:"signingTrust,omitempty"`
 }
 
 type DesiredState struct {
@@ -419,6 +421,7 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 			Desired:        desiredResp,
 			PendingActions: pending,
 			ServerTime:     now,
+			SigningTrust:   currentSigningTrust(logger, st),
 		}
 
 		payload, _ := json.Marshal(map[string]any{
@@ -614,12 +617,16 @@ func componentHasError(comps map[string]DeviceComponentState) bool {
 }
 
 func toCheckinComponent(comp DesiredComponentResponse, signaturePolicy ArtifactSignaturePolicy) DesiredComponent {
+	applyPolicy, err := signaturePolicy.MergeApplyPolicy(comp.Policy)
+	if err != nil {
+		applyPolicy = comp.Policy
+	}
 	return DesiredComponent{
 		ArtifactID:      comp.ArtifactID,
 		ArtifactType:    comp.ArtifactType,
 		SoftwareVersion: comp.DesiredVersion,
 		ConfigRev:       comp.DesiredConfigRev,
-		ApplyPolicy:     signaturePolicy.MergeApplyPolicy(comp.Policy),
+		ApplyPolicy:     applyPolicy,
 		Source:          comp.Source,
 		Locked:          comp.Locked,
 	}

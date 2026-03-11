@@ -151,7 +151,69 @@ Recommended Terraform input form:
 artifact_pull_credentials_aws_secret_id = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/acme/prod/artifact-pull-credentials-AbCdEf"
 ```
 
-### 6.3 Production secret-ARN map
+### 6.3 Trusted signing key bootstrap secret
+
+If the environment uses `require_verified`, bootstrap the trusted signing key registry from Secrets Manager before apply.
+
+1. Build the trusted key payload from the release public key:
+
+```bash
+./scripts/build-trusted-signing-keys.sh /tmp/trusted-signing-keys.json /path/to/ed25519.pub
+cat /tmp/trusted-signing-keys.json
+```
+
+Payload shape:
+
+```json
+{
+  "keys": [
+    {
+      "keyId": "sha256:...",
+      "displayName": "vendor-release-ed25519",
+      "algorithm": "ed25519",
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----",
+      "notes": "primary release signer"
+    }
+  ]
+}
+```
+
+2. Create or update the secret:
+
+```bash
+aws secretsmanager create-secret \
+  --name hardwareops/acme/prod/trusted-signing-keys \
+  --secret-string file:///tmp/trusted-signing-keys.json \
+|| aws secretsmanager put-secret-value \
+  --secret-id hardwareops/acme/prod/trusted-signing-keys \
+  --secret-string file:///tmp/trusted-signing-keys.json
+```
+
+3. Reference it in Terraform:
+
+```hcl
+trusted_signing_keys_aws_secret_id = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/acme/prod/trusted-signing-keys-AbCdEf"
+
+control_plane_env = {
+  ARTIFACT_TRUST_VERIFICATION_MODE       = "require_verified"
+  ARTIFACT_TRUST_ALLOWED_SIGNING_KEY_IDS = "sha256:..."
+  ARTIFACT_TRUST_ALLOWED_SIGNATURE_TYPES = "ed25519"
+  ARTIFACT_SIGNATURE_KEY_ID              = "sha256:..."
+}
+```
+
+4. After apply, verify startup:
+- control-plane logs contain `artifact trust initialized mode=require_verified`
+- Security -> Artifact Trust shows the active key and strict mode
+- unsigned upload is rejected
+- signed upload with the pinned key succeeds
+
+Use one secret per customer environment:
+- `hardwareops/<customer>/<env>/trusted-signing-keys`
+
+Treat this secret as the bootstrap/additive source. Ongoing key lifecycle still happens through the UI/API registry.
+
+### 6.4 Production secret-ARN map
 
 For production, move sensitive values out of `control_plane_env` and into `control_plane_secret_arns`.
 

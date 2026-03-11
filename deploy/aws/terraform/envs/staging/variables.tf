@@ -153,6 +153,12 @@ variable "artifact_pull_credentials_aws_secret_id" {
   default     = null
 }
 
+variable "trusted_signing_keys_aws_secret_id" {
+  description = "Optional Secrets Manager secret ID/ARN containing trusted signing key bootstrap JSON."
+  type        = string
+  default     = null
+}
+
 variable "secret_kms_key_arns" {
   description = "Optional customer-managed KMS key ARNs used by referenced Secrets Manager secrets."
   type        = list(string)

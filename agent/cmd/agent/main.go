@@ -107,6 +107,9 @@ func main() {
 				os.Exit(1)
 			}
 		} else {
+			if resp != nil && resp.SigningTrust != nil {
+				applySigningTrust(&st, resp.SigningTrust)
+			}
 			if cfg.AutoReenroll && resp != nil && len(resp.PendingActions) > 0 {
 				if reenrolled, err := handlePendingActions(resp.PendingActions, cfg, c, &st, logger); err != nil {
 					logger.Warnf("handle pending actions: %v", err)
@@ -124,10 +127,11 @@ func main() {
 
 			if len(desiredComponents) > 0 {
 				applyOpts := artifacts.ApplyOptions{
-					AllowUnsupported:     cfg.AllowUnsupportedApply,
+					AllowUnsupported:    cfg.AllowUnsupportedApply,
 					SigningPublicKeyPath: cfg.SigningPubKeyPath,
-					SigningKeyID:         cfg.SigningKeyID,
-					RequireSignature:     cfg.RequireSignature,
+					SigningKeyID:        cfg.SigningKeyID,
+					RequireSignature:    cfg.RequireSignature,
+					TrustKeys:           trustKeysFromState(st),
 				}
 				applyErr := applyDesiredComponents(cfg.ArtifactRoot, c, desiredComponents, &st, logger, applyOpts)
 				if applyErr != nil {
@@ -323,12 +327,18 @@ func jitterDuration(max time.Duration, rng *rand.Rand) time.Duration {
 	return time.Duration(rng.Int63n(int64(max)))
 }
 
-func signatureKeyIDFromMetadata(meta json.RawMessage) string {
-	if len(meta) == 0 {
+func signatureKeyIDFromMetadata(meta *client.ArtifactResponse) string {
+	if meta == nil {
+		return ""
+	}
+	if strings.TrimSpace(meta.SignatureKeyID) != "" {
+		return strings.TrimSpace(meta.SignatureKeyID)
+	}
+	if len(meta.Metadata) == 0 {
 		return ""
 	}
 	var obj map[string]any
-	if err := json.Unmarshal(meta, &obj); err != nil {
+	if err := json.Unmarshal(meta.Metadata, &obj); err != nil {
 		return ""
 	}
 	raw, ok := obj["signatureKeyId"]
@@ -457,13 +467,16 @@ func applyDesiredComponent(component, root string, c *client.Client, desired cli
 		ConfigRev:       desired.ConfigRev,
 		DownloadURL:     presign,
 	}, artifacts.ArtifactMeta{
-		ArtifactID:     desired.ArtifactID,
-		SHA256:         meta.SHA256,
-		SizeBytes:      meta.SizeBytes,
-		Version:        meta.Version,
-		Type:           meta.Type,
-		Signature:      meta.Signature,
-		SignatureKeyID: signatureKeyIDFromMetadata(meta.Metadata),
+		ArtifactID:         desired.ArtifactID,
+		SHA256:             meta.SHA256,
+		SizeBytes:          meta.SizeBytes,
+		Version:            meta.Version,
+		Type:               meta.Type,
+		Signature:          meta.Signature,
+		SignatureType:      signatureTypeFromMetadata(meta),
+		SignatureKeyID:     signatureKeyIDFromMetadata(meta),
+		VerificationStatus: meta.VerificationStatus,
+		VerificationError:  meta.VerificationError,
 	}, c.HTTPClient(), logger, componentOpts)
 	if err != nil {
 		errMsg := fmt.Sprintf("apply artifact: %v", err)
@@ -508,8 +521,11 @@ func applyDesiredComponent(component, root string, c *client.Client, desired cli
 }
 
 type applyPolicy struct {
-	RequireSignature *bool  `json:"requireSignature,omitempty"`
-	SigningKeyID     string `json:"signingKeyId,omitempty"`
+	VerificationMode      string   `json:"verificationMode,omitempty"`
+	AllowedSigningKeyIDs  []string `json:"allowedSigningKeyIds,omitempty"`
+	AllowedSignatureTypes []string `json:"allowedSignatureTypes,omitempty"`
+	RequireSignature      *bool    `json:"requireSignature,omitempty"`
+	SigningKeyID          string   `json:"signingKeyId,omitempty"`
 }
 
 func mergeApplyPolicyOptions(base artifacts.ApplyOptions, raw json.RawMessage) artifacts.ApplyOptions {
@@ -521,6 +537,15 @@ func mergeApplyPolicyOptions(base artifacts.ApplyOptions, raw json.RawMessage) a
 		return base
 	}
 	out := base
+	if mode := strings.TrimSpace(policy.VerificationMode); mode != "" {
+		out.VerificationMode = mode
+	}
+	if len(policy.AllowedSigningKeyIDs) > 0 {
+		out.AllowedSigningKeyIDs = policy.AllowedSigningKeyIDs
+	}
+	if len(policy.AllowedSignatureTypes) > 0 {
+		out.AllowedSignatureTypes = policy.AllowedSignatureTypes
+	}
 	if policy.RequireSignature != nil {
 		out.RequireSignature = *policy.RequireSignature
 	}
@@ -528,6 +553,62 @@ func mergeApplyPolicyOptions(base artifacts.ApplyOptions, raw json.RawMessage) a
 		out.SigningKeyID = keyID
 	}
 	return out
+}
+
+func applySigningTrust(st *state.State, bundle *client.SigningTrustBundle) {
+	if st == nil || bundle == nil {
+		return
+	}
+	keys := make([]state.SigningTrustKey, 0, len(bundle.Keys))
+	for _, key := range bundle.Keys {
+		if strings.TrimSpace(key.KeyID) == "" || strings.TrimSpace(key.PublicKeyPEM) == "" {
+			continue
+		}
+		keys = append(keys, state.SigningTrustKey{
+			KeyID:        strings.TrimSpace(key.KeyID),
+			Algorithm:    strings.TrimSpace(key.Algorithm),
+			PublicKeyPEM: key.PublicKeyPEM,
+		})
+	}
+	st.SigningTrustUpdatedAt = bundle.UpdatedAt
+	st.SigningTrustKeys = keys
+}
+
+func trustKeysFromState(st state.State) []artifacts.TrustKey {
+	out := make([]artifacts.TrustKey, 0, len(st.SigningTrustKeys))
+	for _, key := range st.SigningTrustKeys {
+		out = append(out, artifacts.TrustKey{
+			KeyID:        key.KeyID,
+			Algorithm:    key.Algorithm,
+			PublicKeyPEM: key.PublicKeyPEM,
+		})
+	}
+	return out
+}
+
+func signatureTypeFromMetadata(meta *client.ArtifactResponse) string {
+	if meta == nil {
+		return ""
+	}
+	if strings.TrimSpace(meta.SignatureType) != "" {
+		return strings.TrimSpace(meta.SignatureType)
+	}
+	if len(meta.Metadata) == 0 {
+		return ""
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(meta.Metadata, &obj); err != nil {
+		return ""
+	}
+	raw, ok := obj["signatureType"]
+	if !ok {
+		return ""
+	}
+	val, ok := raw.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(val)
 }
 
 func reportApplyError(c *client.Client, st *state.State, component string, errMsg string, outcome artifacts.ApplyOutcome, logger *logging.Logger, artifactID string) error {

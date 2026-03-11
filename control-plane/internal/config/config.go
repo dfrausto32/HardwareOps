@@ -51,9 +51,16 @@ type Config struct {
 	ArtifactPullMaxBytes                 int64
 	ArtifactPullTimeout                  time.Duration
 	ArtifactPullAllowInsecureHTTP        bool
+	ArtifactTrustVerificationMode        string
+	ArtifactTrustAllowedSigningKeyIDs    []string
+	ArtifactTrustAllowedSignatureTypes   []string
 	ArtifactSignatureRequireDefault      bool
 	ArtifactSignatureEnforceIngest       bool
 	ArtifactSignatureKeyID               string
+	TrustedSigningKeysJSON               string
+	TrustedSigningKeysFile               string
+	TrustedSigningKeysAWSSecretID        string
+	TrustedSigningKeysAWSRegion          string
 	ArtifactPullCredentialsJSON          string
 	ArtifactPullCredentialsFile          string
 	ArtifactPullCredentialsAWSSecretID   string
@@ -191,9 +198,16 @@ func FromEnv() Config {
 		ArtifactPullMaxBytes:                 getenvInt64("ARTIFACT_PULL_MAX_BYTES", 1024*1024*1024),
 		ArtifactPullTimeout:                  parseDurationDefault(getenvDefault("ARTIFACT_PULL_TIMEOUT", "15m"), 15*time.Minute),
 		ArtifactPullAllowInsecureHTTP:        parseBoolEnvDefault("ARTIFACT_PULL_ALLOW_INSECURE_HTTP", false),
+		ArtifactTrustVerificationMode:        strings.TrimSpace(os.Getenv("ARTIFACT_TRUST_VERIFICATION_MODE")),
+		ArtifactTrustAllowedSigningKeyIDs:    parseCSV(getenvDefault("ARTIFACT_TRUST_ALLOWED_SIGNING_KEY_IDS", "")),
+		ArtifactTrustAllowedSignatureTypes:   parseCSV(getenvDefault("ARTIFACT_TRUST_ALLOWED_SIGNATURE_TYPES", "")),
 		ArtifactSignatureRequireDefault:      parseBoolEnvDefault("ARTIFACT_SIGNATURE_REQUIRE_DEFAULT", false),
 		ArtifactSignatureEnforceIngest:       parseBoolEnvDefault("ARTIFACT_SIGNATURE_ENFORCE_INGEST", false),
 		ArtifactSignatureKeyID:               strings.TrimSpace(os.Getenv("ARTIFACT_SIGNATURE_KEY_ID")),
+		TrustedSigningKeysJSON:               os.Getenv("TRUSTED_SIGNING_KEYS_JSON"),
+		TrustedSigningKeysFile:               os.Getenv("TRUSTED_SIGNING_KEYS_FILE"),
+		TrustedSigningKeysAWSSecretID:        os.Getenv("TRUSTED_SIGNING_KEYS_AWS_SECRET_ID"),
+		TrustedSigningKeysAWSRegion:          os.Getenv("TRUSTED_SIGNING_KEYS_AWS_REGION"),
 		ArtifactPullCredentialsJSON:          os.Getenv("ARTIFACT_PULL_CREDENTIALS_JSON"),
 		ArtifactPullCredentialsFile:          os.Getenv("ARTIFACT_PULL_CREDENTIALS_FILE"),
 		ArtifactPullCredentialsAWSSecretID:   os.Getenv("ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID"),

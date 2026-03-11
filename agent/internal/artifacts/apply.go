@@ -3,7 +3,10 @@ package artifacts
 import (
 	"archive/tar"
 	"compress/gzip"
+	"crypto"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
@@ -31,13 +34,16 @@ type Desired struct {
 }
 
 type ArtifactMeta struct {
-	ArtifactID     string
-	SHA256         string
-	SizeBytes      int64
-	Version        string
-	Type           string
-	Signature      string
-	SignatureKeyID string
+	ArtifactID          string
+	SHA256              string
+	SizeBytes           int64
+	Version             string
+	Type                string
+	Signature           string
+	SignatureType       string
+	SignatureKeyID      string
+	VerificationStatus  string
+	VerificationError   string
 }
 
 type Manifest struct {
@@ -223,25 +229,90 @@ func downloadAndVerify(client *http.Client, url, dest, expectedSHA string) (stri
 }
 
 func verifySignature(meta ArtifactMeta, shaHex string, opts ApplyOptions) error {
+	mode := normalizeVerificationMode(opts)
 	if meta.Signature == "" {
-		if opts.RequireSignature {
+		if mode == "require_verified" || opts.RequireSignature {
 			return fmt.Errorf("artifact signature required but missing")
 		}
 		return nil
 	}
+	if meta.SignatureKeyID != "" && len(opts.AllowedSigningKeyIDs) > 0 && !containsFold(opts.AllowedSigningKeyIDs, meta.SignatureKeyID) {
+		if mode == "require_verified" {
+			return fmt.Errorf("signature key id mismatch")
+		}
+		return nil
+	}
+	if meta.SignatureType != "" && len(opts.AllowedSignatureTypes) > 0 && !containsFold(opts.AllowedSignatureTypes, meta.SignatureType) {
+		if mode == "require_verified" {
+			return fmt.Errorf("signature type mismatch")
+		}
+		return nil
+	}
+	if mode == "require_verified" && len(opts.TrustKeys) > 0 && !strings.EqualFold(strings.TrimSpace(meta.VerificationStatus), "verified") {
+		return fmt.Errorf("artifact verification status is %s", strings.TrimSpace(meta.VerificationStatus))
+	}
+	if len(opts.TrustKeys) > 0 {
+		if err := verifyWithTrustBundle(meta, shaHex, opts); err != nil {
+			if mode == "require_verified" {
+				return err
+			}
+		}
+		return nil
+	}
 	if opts.SigningPublicKeyPath == "" {
-		return fmt.Errorf("signature verification requires SIGNING_PUB_KEY_PATH")
+		if mode == "require_verified" || opts.RequireSignature {
+			return fmt.Errorf("signature verification requires signing trust or SIGNING_PUB_KEY_PATH")
+		}
+		return nil
 	}
 	if opts.SigningKeyID != "" {
 		if meta.SignatureKeyID == "" || !strings.EqualFold(meta.SignatureKeyID, opts.SigningKeyID) {
-			return fmt.Errorf("signature key id mismatch")
+			if mode == "require_verified" || opts.RequireSignature {
+				return fmt.Errorf("signature key id mismatch")
+			}
+			return nil
 		}
 	}
-	pubKey, err := loadEd25519PublicKey(opts.SigningPublicKeyPath)
+	if err := verifyEd25519(meta, shaHex, opts.SigningPublicKeyPath); err != nil {
+		if mode == "require_verified" || opts.RequireSignature {
+			return err
+		}
+	}
+	return nil
+}
+
+func verifyWithTrustBundle(meta ArtifactMeta, shaHex string, opts ApplyOptions) error {
+	key, ok := selectTrustKey(meta, opts.TrustKeys, opts)
+	if !ok {
+		return fmt.Errorf("trusted signing key not found")
+	}
+	if meta.SignatureType == "" || strings.EqualFold(meta.SignatureType, "ed25519") {
+		return verifyEd25519PEM(meta, shaHex, key.PublicKeyPEM)
+	}
+	if strings.EqualFold(meta.SignatureType, "cosign") {
+		return verifyCosignPEM(meta, shaHex, key.PublicKeyPEM)
+	}
+	return fmt.Errorf("unsupported signature type: %s", meta.SignatureType)
+}
+
+func verifyEd25519(meta ArtifactMeta, shaHex, path string) error {
+	pubKey, err := loadEd25519PublicKey(path)
 	if err != nil {
 		return fmt.Errorf("load signing public key: %w", err)
 	}
-	sigBytes, err := base64.StdEncoding.DecodeString(meta.Signature)
+	return verifyEd25519Raw(meta.Signature, shaHex, pubKey)
+}
+
+func verifyEd25519PEM(meta ArtifactMeta, shaHex, publicKeyPEM string) error {
+	pubKey, err := loadEd25519PublicKeyPEM(publicKeyPEM)
+	if err != nil {
+		return fmt.Errorf("load signing public key: %w", err)
+	}
+	return verifyEd25519Raw(meta.Signature, shaHex, pubKey)
+}
+
+func verifyEd25519Raw(signature, shaHex string, pubKey ed25519.PublicKey) error {
+	sigBytes, err := base64.StdEncoding.DecodeString(signature)
 	if err != nil {
 		return fmt.Errorf("invalid signature encoding")
 	}
@@ -255,12 +326,53 @@ func verifySignature(meta ArtifactMeta, shaHex string, opts ApplyOptions) error 
 	return nil
 }
 
+func verifyCosignPEM(meta ArtifactMeta, shaHex, publicKeyPEM string) error {
+	pubAny, err := parsePublicKeyPEM(publicKeyPEM)
+	if err != nil {
+		return fmt.Errorf("load signing public key: %w", err)
+	}
+	sigBytes, err := base64.StdEncoding.DecodeString(meta.Signature)
+	if err != nil {
+		return fmt.Errorf("invalid signature encoding")
+	}
+	shaBytes, err := hex.DecodeString(shaHex)
+	if err != nil {
+		return fmt.Errorf("invalid sha256 for signature verification")
+	}
+	switch pubKey := pubAny.(type) {
+	case *ecdsa.PublicKey:
+		if !ecdsa.VerifyASN1(pubKey, shaBytes, sigBytes) {
+			return fmt.Errorf("signature verification failed")
+		}
+		return nil
+	case *rsa.PublicKey:
+		if err := rsa.VerifyPKCS1v15(pubKey, crypto.SHA256, shaBytes, sigBytes); err == nil {
+			return nil
+		}
+		if err := rsa.VerifyPSS(pubKey, crypto.SHA256, shaBytes, sigBytes, nil); err == nil {
+			return nil
+		}
+		return fmt.Errorf("signature verification failed")
+	case ed25519.PublicKey:
+		if !ed25519.Verify(pubKey, shaBytes, sigBytes) {
+			return fmt.Errorf("signature verification failed")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported public key type")
+	}
+}
+
 func loadEd25519PublicKey(path string) (ed25519.PublicKey, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	block, _ := pem.Decode(data)
+	return loadEd25519PublicKeyPEM(string(data))
+}
+
+func loadEd25519PublicKeyPEM(publicKeyPEM string) (ed25519.PublicKey, error) {
+	block, _ := pem.Decode([]byte(publicKeyPEM))
 	if block == nil {
 		return nil, fmt.Errorf("invalid public key pem")
 	}
@@ -273,6 +385,64 @@ func loadEd25519PublicKey(path string) (ed25519.PublicKey, error) {
 		return nil, fmt.Errorf("public key is not ed25519")
 	}
 	return pubKey, nil
+}
+
+func parsePublicKeyPEM(publicKeyPEM string) (any, error) {
+	block, _ := pem.Decode([]byte(publicKeyPEM))
+	if block == nil {
+		return nil, fmt.Errorf("invalid public key pem")
+	}
+	pubAny, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	return pubAny, nil
+}
+
+func normalizeVerificationMode(opts ApplyOptions) string {
+	mode := strings.TrimSpace(strings.ToLower(opts.VerificationMode))
+	switch mode {
+	case "allow_unsigned":
+		return "allow_unsigned"
+	case "require_verified":
+		return "require_verified"
+	default:
+		if opts.RequireSignature {
+			return "require_verified"
+		}
+		return "warn_unsigned"
+	}
+}
+
+func containsFold(items []string, needle string) bool {
+	for _, item := range items {
+		if strings.EqualFold(strings.TrimSpace(item), strings.TrimSpace(needle)) {
+			return true
+		}
+	}
+	return false
+}
+
+func selectTrustKey(meta ArtifactMeta, keys []TrustKey, opts ApplyOptions) (TrustKey, bool) {
+	candidates := keys
+	if meta.SignatureKeyID != "" {
+		for _, key := range candidates {
+			if strings.EqualFold(strings.TrimSpace(key.KeyID), strings.TrimSpace(meta.SignatureKeyID)) {
+				return key, true
+			}
+		}
+	}
+	if opts.SigningKeyID != "" {
+		for _, key := range candidates {
+			if strings.EqualFold(strings.TrimSpace(key.KeyID), strings.TrimSpace(opts.SigningKeyID)) {
+				return key, true
+			}
+		}
+	}
+	if len(candidates) == 1 {
+		return candidates[0], true
+	}
+	return TrustKey{}, false
 }
 
 func extractTarGz(archivePath, dest string) error {

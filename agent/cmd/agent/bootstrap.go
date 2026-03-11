@@ -176,6 +176,12 @@ func bootstrapApprovalIdentity(cfg config.Config, st *state.State, logger *loggi
 
 		switch resp.Status {
 		case "pending":
+			if resp.SigningTrust != nil {
+				applySigningTrust(st, resp.SigningTrust)
+				if err := state.Save(cfg.StatePath, *st); err != nil {
+					logger.Warnf("save state: %v", err)
+				}
+			}
 			bs.State = agentbootstrap.StatePendingApproval
 			if !resp.ExpiresAt.IsZero() {
 				bs.ExpiresAt = resp.ExpiresAt
@@ -187,6 +193,12 @@ func bootstrapApprovalIdentity(cfg config.Config, st *state.State, logger *loggi
 			logger.Infof("pending enrollment awaiting approval request=%s", bs.RequestID)
 			time.Sleep(claimPollInterval(cfg, resp.PollAfterSec))
 		case "issued":
+			if resp.SigningTrust != nil {
+				applySigningTrust(st, resp.SigningTrust)
+				if err := state.Save(cfg.StatePath, *st); err != nil {
+					logger.Warnf("save state: %v", err)
+				}
+			}
 			bs.State = agentbootstrap.StateMaterializeIdentity
 			bs.IssuedDeviceID = resp.DeviceID
 			bs.IssuedCertPEM = resp.CertPEM

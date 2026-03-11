@@ -17,6 +17,12 @@ import {
   getArtifactLifecycleStatus,
   setArtifactLifecyclePolicy,
   pruneArtifacts,
+  listTrustedSigningKeys,
+  createTrustedSigningKey,
+  updateTrustedSigningKey,
+  retireTrustedSigningKey,
+  getArtifactTrustPolicy,
+  setArtifactTrustPolicy as saveArtifactTrustPolicy,
   getReleaseAutoUpdateStatus,
   setReleaseAutoUpdateSettings,
   runReleaseAutoUpdate,
@@ -126,6 +132,11 @@ const autoTrackModes = [
   { id: 'inherit', label: 'Inherit' },
   { id: 'enabled', label: 'Enabled' },
   { id: 'disabled', label: 'Disabled' },
+]
+
+const signatureTypeOptions = [
+  { id: 'ed25519', label: 'Ed25519' },
+  { id: 'cosign', label: 'Cosign (key-based)' },
 ]
 
 function parsePolicyObject(raw) {
@@ -328,6 +339,54 @@ function normalizeArtifactStatus(val) {
   return normalized
 }
 
+function normalizeVerificationStatus(val, artifact) {
+  const normalized = String(val || '').trim().toLowerCase()
+  if (normalized) return normalized
+  if (artifact?.signature) return 'legacy'
+  return 'unsigned'
+}
+
+function verificationPillLabel(artifact) {
+  const status = normalizeVerificationStatus(artifact?.verificationStatus, artifact)
+  switch (status) {
+    case 'verified':
+      return 'verified'
+    case 'legacy':
+      return 'legacy'
+    case 'failed':
+      return 'failed'
+    case 'untrusted':
+      return 'untrusted'
+    default:
+      return 'unsigned'
+  }
+}
+
+function artifactSignerSummary(artifact) {
+  const parts = []
+  if (artifact?.signatureType) parts.push(String(artifact.signatureType))
+  if (artifact?.signatureKeyId) parts.push(String(artifact.signatureKeyId))
+  return parts.join(' · ') || '—'
+}
+
+function artifactAllowedByTrustPolicy(artifact, policy) {
+  const mode = String(policy?.verificationMode || 'warn_unsigned')
+  if (mode !== 'require_verified') return true
+  const status = normalizeVerificationStatus(artifact?.verificationStatus, artifact)
+  if (status !== 'verified') return false
+  const allowedKeyIds = Array.isArray(policy?.allowedSigningKeyIds) ? policy.allowedSigningKeyIds.filter(Boolean) : []
+  if (allowedKeyIds.length > 0 && !allowedKeyIds.includes(String(artifact?.signatureKeyId || ''))) {
+    return false
+  }
+  const allowedSignatureTypes = Array.isArray(policy?.allowedSignatureTypes)
+    ? policy.allowedSignatureTypes.filter(Boolean)
+    : []
+  if (allowedSignatureTypes.length > 0 && !allowedSignatureTypes.includes(String(artifact?.signatureType || ''))) {
+    return false
+  }
+  return true
+}
+
 function filterArtifactGroupsByType(groups, type) {
   const target = normalizeArtifactType(type)
   if (!target) return groups
@@ -335,6 +394,15 @@ function filterArtifactGroupsByType(groups, type) {
     .map((group) => ({
       ...group,
       versions: group.versions.filter((artifact) => normalizeArtifactType(artifact.type) === target),
+    }))
+    .filter((group) => group.versions.length > 0)
+}
+
+function filterArtifactGroupsByTrustPolicy(groups, policy) {
+  return (groups || [])
+    .map((group) => ({
+      ...group,
+      versions: (group.versions || []).filter((artifact) => artifactAllowedByTrustPolicy(artifact, policy)),
     }))
     .filter((group) => group.versions.length > 0)
 }
@@ -1051,6 +1119,26 @@ export default function App() {
   const [selectedArtifactIds, setSelectedArtifactIds] = useState([])
   const [artifactsError, setArtifactsError] = useState('')
   const [artifactsStatus, setArtifactsStatus] = useState('')
+  const [artifactTrustPolicy, setArtifactTrustPolicyState] = useState({
+    verificationMode: 'warn_unsigned',
+    allowedSigningKeyIds: [],
+    allowedSignatureTypes: [],
+    updatedAt: '',
+    updatedByUserId: '',
+  })
+  const [artifactTrustStatus, setArtifactTrustStatus] = useState('')
+  const [artifactTrustError, setArtifactTrustError] = useState('')
+  const [trustedSigningKeys, setTrustedSigningKeys] = useState([])
+  const [trustedSigningKeysLoading, setTrustedSigningKeysLoading] = useState(false)
+  const [trustedSigningKeysLoaded, setTrustedSigningKeysLoaded] = useState(false)
+  const [trustedSigningKeyModalOpen, setTrustedSigningKeyModalOpen] = useState(false)
+  const [editingTrustedSigningKeyId, setEditingTrustedSigningKeyId] = useState('')
+  const [trustedSigningKeyForm, setTrustedSigningKeyForm] = useState({
+    displayName: '',
+    algorithm: 'ed25519',
+    publicKeyPem: '',
+    notes: '',
+  })
   const [artifactLifecyclePolicy, setArtifactLifecyclePolicy] = useState({
     deprecatedDeleteAfterDays: 30,
     updatedAt: '',
@@ -1455,6 +1543,8 @@ export default function App() {
     loadDevices()
     loadGroups()
     loadArtifacts()
+    loadArtifactTrustPolicy({ silent: true }).catch(() => {})
+    loadTrustedSigningKeys({ silent: true }).catch(() => {})
     loadArtifactLifecyclePolicy()
     loadArtifactLifecycleStatus()
     loadReleaseAutoUpdate()
@@ -1563,6 +1653,8 @@ export default function App() {
   const canViewAudit = permissions.canViewAudit
   const canManageUsers = permissions.canManageUsers
   const canManageArtifacts = permissions.canManageArtifacts
+  const canViewArtifactTrust = canManageArtifacts || canManageUsers
+  const canManageArtifactTrust = canManageUsers
   const canManageArtifactLifecycle = permissions.canManageArtifactLifecycle
   const canManageDesiredState = permissions.canManageDesiredState
   const canManageGroups = permissions.canManageGroups
@@ -1587,6 +1679,12 @@ export default function App() {
     if (canManageArtifacts) return
     setArtifactUploadOpen(false)
   }, [canManageArtifacts])
+
+  useEffect(() => {
+    if (canManageArtifactTrust) return
+    setTrustedSigningKeyModalOpen(false)
+    setEditingTrustedSigningKeyId('')
+  }, [canManageArtifactTrust])
 
   useEffect(() => {
     if (canManageGroups) return
@@ -1630,13 +1728,17 @@ export default function App() {
     loadRotationStatus()
     loadEnrollmentProfiles()
     loadPendingEnrollments()
+    loadArtifactTrustPolicy({ silent: true }).catch(() => {})
+    loadTrustedSigningKeys({ silent: true }).catch(() => {})
     const timer = setInterval(() => {
       loadRotationStatus()
       loadEnrollmentProfiles({ silent: true })
       loadPendingEnrollments({ silent: true })
+      loadArtifactTrustPolicy({ silent: true }).catch(() => {})
+      loadTrustedSigningKeys({ silent: true }).catch(() => {})
     }, 15000)
     return () => clearInterval(timer)
-  }, [view])
+  }, [view, canViewArtifactTrust])
 
   useEffect(() => {
     if (view !== 'security') return
@@ -2101,6 +2203,56 @@ export default function App() {
       .catch((err) => setArtifactsError(err.message || String(err)))
   }
 
+  function loadArtifactTrustPolicy({ silent = false } = {}) {
+    if (!canViewArtifactTrust) {
+      setArtifactTrustPolicyState({
+        verificationMode: 'warn_unsigned',
+        allowedSigningKeyIds: [],
+        allowedSignatureTypes: [],
+        updatedAt: '',
+        updatedByUserId: '',
+      })
+      return Promise.resolve(null)
+    }
+    if (!silent) setArtifactTrustError('')
+    return getArtifactTrustPolicy()
+      .then((res) => {
+        setArtifactTrustPolicyState({
+          verificationMode: String(res?.verificationMode || 'warn_unsigned'),
+          allowedSigningKeyIds: Array.isArray(res?.allowedSigningKeyIds) ? res.allowedSigningKeyIds : [],
+          allowedSignatureTypes: Array.isArray(res?.allowedSignatureTypes) ? res.allowedSignatureTypes : [],
+          updatedAt: res?.updatedAt || '',
+          updatedByUserId: res?.updatedByUserId || '',
+        })
+        return res
+      })
+      .catch((err) => {
+        if (!silent) setArtifactTrustError(err.message || String(err))
+        throw err
+      })
+  }
+
+  function loadTrustedSigningKeys({ includeRetired = true, silent = false } = {}) {
+    if (!canViewArtifactTrust) {
+      setTrustedSigningKeys([])
+      setTrustedSigningKeysLoaded(false)
+      return Promise.resolve(null)
+    }
+    setTrustedSigningKeysLoading(true)
+    if (!silent) setArtifactTrustError('')
+    return listTrustedSigningKeys(includeRetired)
+      .then((res) => {
+        setTrustedSigningKeys(Array.isArray(res?.items) ? res.items : [])
+        setTrustedSigningKeysLoaded(true)
+        return res
+      })
+      .catch((err) => {
+        if (!silent) setArtifactTrustError(err.message || String(err))
+        throw err
+      })
+      .finally(() => setTrustedSigningKeysLoading(false))
+  }
+
   function loadReleaseAutoUpdate() {
     getReleaseAutoUpdateStatus()
       .then((res) => {
@@ -2125,13 +2277,59 @@ export default function App() {
       .catch((err) => setDesiredError(err.message || String(err)))
   }
 
-  function handleUpload(e) {
+  async function buildArtifactUploadFormData(form) {
+    const formData = new FormData(form)
+    const signatureFile = formData.get('signatureFile')
+    formData.delete('signatureFile')
+    const signatureType = String(formData.get('signatureType') || '').trim()
+
+    if (signatureFile instanceof File && signatureFile.size > 0) {
+      const signatureText = (await signatureFile.text()).trim()
+      if (!signatureText) {
+        throw new Error('signature file is empty')
+      }
+      formData.set('signature', signatureText)
+      formData.set('signatureType', signatureType || 'ed25519')
+    } else {
+      formData.delete('signature')
+      formData.delete('signatureType')
+    }
+
+    const signatureKeyId = String(formData.get('signatureKeyId') || '').trim()
+    if (signatureKeyId) {
+      formData.set('signatureKeyId', signatureKeyId)
+    } else {
+      formData.delete('signatureKeyId')
+    }
+
+    if (artifactTrustPolicy.verificationMode === 'require_verified') {
+      if (!(signatureFile instanceof File && signatureFile.size > 0)) {
+        throw new Error('trusted upload required: detached signature file is required')
+      }
+      if (!signatureKeyId) {
+        throw new Error('trusted upload required: signing key ID is required')
+      }
+    }
+    if (signatureKeyId && artifactTrustPolicy.allowedSigningKeyIds.length > 0 && !artifactTrustPolicy.allowedSigningKeyIds.includes(signatureKeyId)) {
+      throw new Error('signing key is not allowed by the current trust policy')
+    }
+    if (signatureFile instanceof File && signatureFile.size > 0) {
+      const effectiveSignatureType = String(formData.get('signatureType') || '').trim()
+      if (artifactTrustPolicy.allowedSignatureTypes.length > 0 && !artifactTrustPolicy.allowedSignatureTypes.includes(effectiveSignatureType)) {
+        throw new Error('signature type is not allowed by the current trust policy')
+      }
+    }
+
+    return formData
+  }
+
+  async function handleUpload(e) {
     e.preventDefault()
     if (!canManageArtifacts) return
     const form = e.currentTarget
-    const formData = new FormData(form)
     setUploadStatus('Uploading...')
-    uploadArtifact(formData)
+    buildArtifactUploadFormData(form)
+      .then((formData) => uploadArtifact(formData))
       .then((resp) => {
         setUploadStatus(`Uploaded artifact ${resp.artifactId}`)
         form.reset()
@@ -2139,6 +2337,109 @@ export default function App() {
         setArtifactUploadOpen(false)
       })
       .catch((err) => setUploadStatus(err.message || String(err)))
+  }
+
+  function handleOpenArtifactUpload() {
+    if (!canManageArtifacts) return
+    loadArtifactTrustPolicy({ silent: true }).catch(() => {})
+    loadTrustedSigningKeys({ silent: true }).catch(() => {})
+    setUploadStatus('')
+    setArtifactUploadOpen(true)
+  }
+
+  async function handleSaveArtifactTrustPolicy() {
+    if (!canManageArtifactTrust) return
+    setArtifactTrustStatus('Saving trust policy...')
+    setArtifactTrustError('')
+    try {
+      const res = await saveArtifactTrustPolicy({
+        verificationMode: artifactTrustPolicy.verificationMode,
+        allowedSigningKeyIds: artifactTrustPolicy.allowedSigningKeyIds,
+        allowedSignatureTypes: artifactTrustPolicy.allowedSignatureTypes,
+      })
+      setArtifactTrustPolicyState({
+        verificationMode: String(res?.verificationMode || 'warn_unsigned'),
+        allowedSigningKeyIds: Array.isArray(res?.allowedSigningKeyIds) ? res.allowedSigningKeyIds : [],
+        allowedSignatureTypes: Array.isArray(res?.allowedSignatureTypes) ? res.allowedSignatureTypes : [],
+        updatedAt: res?.updatedAt || '',
+        updatedByUserId: res?.updatedByUserId || '',
+      })
+      setArtifactTrustStatus('Trust policy updated')
+    } catch (err) {
+      setArtifactTrustError(err.message || String(err))
+      setArtifactTrustStatus('')
+    }
+  }
+
+  function handleOpenCreateTrustedSigningKey() {
+    if (!canManageArtifactTrust) return
+    setEditingTrustedSigningKeyId('')
+    setTrustedSigningKeyForm({
+      displayName: '',
+      algorithm: 'ed25519',
+      publicKeyPem: '',
+      notes: '',
+    })
+    setArtifactTrustStatus('')
+    setTrustedSigningKeyModalOpen(true)
+  }
+
+  function handleStartEditTrustedSigningKey(key) {
+    if (!canManageArtifactTrust || !key) return
+    setEditingTrustedSigningKeyId(key.keyId)
+    setTrustedSigningKeyForm({
+      displayName: key.displayName || '',
+      algorithm: key.algorithm || 'ed25519',
+      publicKeyPem: key.publicKeyPem || '',
+      notes: key.notes || '',
+    })
+    setArtifactTrustStatus('')
+    setTrustedSigningKeyModalOpen(true)
+  }
+
+  async function handleSaveTrustedSigningKey(e) {
+    e.preventDefault()
+    if (!canManageArtifactTrust) return
+    setArtifactTrustStatus(editingTrustedSigningKeyId ? 'Updating trusted key...' : 'Creating trusted key...')
+    setArtifactTrustError('')
+    try {
+      if (editingTrustedSigningKeyId) {
+        await updateTrustedSigningKey(editingTrustedSigningKeyId, {
+          displayName: trustedSigningKeyForm.displayName,
+          notes: trustedSigningKeyForm.notes,
+        })
+      } else {
+        await createTrustedSigningKey({
+          displayName: trustedSigningKeyForm.displayName,
+          algorithm: trustedSigningKeyForm.algorithm,
+          publicKeyPem: trustedSigningKeyForm.publicKeyPem,
+          notes: trustedSigningKeyForm.notes,
+        })
+      }
+      await loadTrustedSigningKeys({ silent: true })
+      setArtifactTrustStatus(editingTrustedSigningKeyId ? 'Trusted key updated' : 'Trusted key created')
+      setTrustedSigningKeyModalOpen(false)
+      setEditingTrustedSigningKeyId('')
+    } catch (err) {
+      setArtifactTrustError(err.message || String(err))
+      setArtifactTrustStatus('')
+    }
+  }
+
+  async function handleRetireTrustedSigningKey(key) {
+    if (!canManageArtifactTrust || !key) return
+    const confirmed = window.confirm(`Retire trusted key ${key.displayName || key.keyId}? New uploads using this key will be rejected.`)
+    if (!confirmed) return
+    setArtifactTrustStatus('Retiring trusted key...')
+    setArtifactTrustError('')
+    try {
+      await retireTrustedSigningKey(key.keyId)
+      await loadTrustedSigningKeys({ silent: true })
+      setArtifactTrustStatus('Trusted key retired')
+    } catch (err) {
+      setArtifactTrustError(err.message || String(err))
+      setArtifactTrustStatus('')
+    }
   }
 
   function handleDesiredDevice(e) {
@@ -4094,6 +4395,10 @@ export default function App() {
   const allArtifactsSelected =
     visibleArtifactRows.length > 0 && visibleArtifactRows.every((artifactId) => selectedArtifactSet.has(artifactId))
   const someArtifactsSelected = selectedArtifactIds.length > 0 && !allArtifactsSelected
+  const activeTrustedSigningKeys = useMemo(
+    () => trustedSigningKeys.filter((key) => String(key.state || '').toLowerCase() !== 'retired'),
+    [trustedSigningKeys],
+  )
 
   const groupSelectorById = useMemo(() => {
     const map = {}
@@ -4825,7 +5130,7 @@ export default function App() {
               <div className="section-header">
                 <h2>Artifacts</h2>
                 <div className="inline-row">
-                  <button onClick={() => setArtifactUploadOpen(true)} className="button" disabled={!canManageArtifacts}>
+                  <button onClick={handleOpenArtifactUpload} className="button" disabled={!canManageArtifacts}>
                     Upload
                   </button>
                   <button
@@ -4885,7 +5190,7 @@ export default function App() {
                       <th>Version</th>
                       <th>Type</th>
                       <th>Lifecycle</th>
-                      <th>Signed</th>
+                      <th>Trust</th>
                       <th>Refs</th>
                       <th>Delete After</th>
                       <th>Created</th>
@@ -4923,9 +5228,12 @@ export default function App() {
                               </span>
                             </td>
                             <td>
-                              <span className={`pill ${a.signature ? 'signed' : 'unsigned'}`}>
-                                {a.signature ? 'signed' : 'unsigned'}
-                              </span>
+                              <div className="artifact-trust-cell">
+                                <span className={`pill ${normalizeVerificationStatus(a.verificationStatus, a)}`}>
+                                  {verificationPillLabel(a)}
+                                </span>
+                                <div className="detail-note">{artifactSignerSummary(a)}</div>
+                              </div>
                             </td>
                             <td>{refs}</td>
                             <td>{lifecycle === 'deprecated' ? formatTime(a.deleteAfter) : '—'}</td>
@@ -5749,6 +6057,150 @@ export default function App() {
                         </div>
                       </div>
                     )}
+                  </>
+                )}
+              </div>
+
+              <div className="settings-section">
+                <div className="settings-title">Artifact Trust</div>
+                {!canViewArtifactTrust ? (
+                  <div className="placeholder">Operator role required to view artifact trust settings.</div>
+                ) : (
+                  <>
+                    <div className="inline-row">
+                      <button className="button ghost" onClick={() => loadArtifactTrustPolicy()}>
+                        Refresh policy
+                      </button>
+                      <button className="button ghost" onClick={() => loadTrustedSigningKeys()}>
+                        Refresh keys
+                      </button>
+                      {canManageArtifactTrust && (
+                        <button className="button ghost" onClick={handleOpenCreateTrustedSigningKey}>
+                          New trusted key
+                        </button>
+                      )}
+                    </div>
+                    {artifactTrustError && <div className="error">{artifactTrustError}</div>}
+                    {artifactTrustStatus && <div className="status">{artifactTrustStatus}</div>}
+                    <div className="form compact">
+                      <div className="field">
+                        <label>Verification Mode</label>
+                        <select
+                          value={artifactTrustPolicy.verificationMode}
+                          disabled={!canManageArtifactTrust}
+                          onChange={(e) => setArtifactTrustPolicyState((prev) => ({ ...prev, verificationMode: e.target.value }))}
+                        >
+                          <option value="allow_unsigned">allow_unsigned</option>
+                          <option value="warn_unsigned">warn_unsigned</option>
+                          <option value="require_verified">require_verified</option>
+                        </select>
+                      </div>
+                      <div className="field">
+                        <label>Allowed Signature Types</label>
+                        <div className="inline-row">
+                          {signatureTypeOptions.map((option) => (
+                            <label key={option.id} className="chip">
+                              <input
+                                type="checkbox"
+                                disabled={!canManageArtifactTrust}
+                                checked={artifactTrustPolicy.allowedSignatureTypes.includes(option.id)}
+                                onChange={() =>
+                                  setArtifactTrustPolicyState((prev) => ({
+                                    ...prev,
+                                    allowedSignatureTypes: prev.allowedSignatureTypes.includes(option.id)
+                                      ? prev.allowedSignatureTypes.filter((item) => item !== option.id)
+                                      : [...prev.allowedSignatureTypes, option.id],
+                                  }))}
+                              />
+                              {option.label}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="field full">
+                        <label>Allowed Signing Keys</label>
+                        <div className="inline-row">
+                          {activeTrustedSigningKeys.length === 0 && <span className="placeholder">No active trusted keys.</span>}
+                          {activeTrustedSigningKeys.map((key) => (
+                            <label key={key.keyId} className="chip">
+                              <input
+                                type="checkbox"
+                                disabled={!canManageArtifactTrust}
+                                checked={artifactTrustPolicy.allowedSigningKeyIds.includes(key.keyId)}
+                                onChange={() =>
+                                  setArtifactTrustPolicyState((prev) => ({
+                                    ...prev,
+                                    allowedSigningKeyIds: prev.allowedSigningKeyIds.includes(key.keyId)
+                                      ? prev.allowedSigningKeyIds.filter((item) => item !== key.keyId)
+                                      : [...prev.allowedSigningKeyIds, key.keyId],
+                                  }))}
+                              />
+                              {key.displayName || key.keyId}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="field actions">
+                        <button className="button ghost" onClick={handleSaveArtifactTrustPolicy} disabled={!canManageArtifactTrust}>
+                          Save policy
+                        </button>
+                        <span className="detail-note">
+                          Updated {formatTime(artifactTrustPolicy.updatedAt)} by {artifactTrustPolicy.updatedByUserId || '—'}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Name</th>
+                            <th>Key ID</th>
+                            <th>Algorithm</th>
+                            <th>Status</th>
+                            <th>Notes</th>
+                            <th>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {trustedSigningKeys.map((key) => (
+                            <tr key={key.keyId}>
+                              <td>{key.displayName || '—'}</td>
+                              <td className="mono">{key.keyId}</td>
+                              <td>{key.algorithm}</td>
+                              <td>
+                                <span className={`pill ${String(key.state || '').toLowerCase() === 'retired' ? 'legacy' : 'verified'}`}>
+                                  {key.state || 'active'}
+                                </span>
+                              </td>
+                              <td>{key.notes || '—'}</td>
+                              <td>
+                                <div className="inline-row">
+                                  <button
+                                    className="button ghost"
+                                    onClick={() => handleStartEditTrustedSigningKey(key)}
+                                    disabled={!canManageArtifactTrust}
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    className="button ghost"
+                                    onClick={() => handleRetireTrustedSigningKey(key)}
+                                    disabled={!canManageArtifactTrust || String(key.state || '').toLowerCase() === 'retired'}
+                                  >
+                                    Retire
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                          {trustedSigningKeys.length === 0 && (
+                            <tr>
+                              <td colSpan={6}>{trustedSigningKeysLoading ? 'Loading trusted signing keys...' : 'No trusted signing keys.'}</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
                   </>
                 )}
               </div>
@@ -6610,6 +7062,7 @@ export default function App() {
                         const locked = Boolean(row.locked)
                         const type = normalizeArtifactType(row.artifactType)
                         const groupsForType = filterArtifactGroupsByType(activeArtifactGroups, type)
+                        const allowedGroupsForType = filterArtifactGroupsByTrustPolicy(groupsForType, artifactTrustPolicy)
                         const allGroupsForType = filterArtifactGroupsByType(artifactGroups, type)
                         const selected = artifacts.find((a) => a.artifactId === row.artifactId)
                         const selectedGroup = selected
@@ -6663,7 +7116,7 @@ export default function App() {
                                 value={selected?.name || ''}
                                 onChange={(e) => {
                                   const name = e.target.value
-                                  const group = groupsForType.find((g) => g.name === name)
+                                  const group = allowedGroupsForType.find((g) => g.name === name)
                                   if (!group) {
                                     updateDeviceComponent(idx, { artifactId: '', desiredVersion: '' })
                                   } else {
@@ -6678,7 +7131,7 @@ export default function App() {
                                 disabled={locked}
                               >
                                 <option value="">Select artifact</option>
-                                {groupsForType.map((group) => (
+                                {allowedGroupsForType.map((group) => (
                                   <option key={group.name} value={group.name}>{group.name}</option>
                                 ))}
                               </select>
@@ -6706,7 +7159,7 @@ export default function App() {
                                 disabled={locked}
                               >
                                 <option value="">Select version</option>
-                                {(selectedGroup?.versions || []).map((artifact) => (
+                                {(selectedGroup?.versions || []).filter((artifact) => artifactAllowedByTrustPolicy(artifact, artifactTrustPolicy)).map((artifact) => (
                                   <option key={artifact.artifactId} value={artifact.version}>
                                     {artifact.version}
                                   </option>
@@ -6728,6 +7181,12 @@ export default function App() {
                                 disabled={locked}
                               />
                             </div>
+                            {selected && (
+                              <div className="detail-note">
+                                Trust: {verificationPillLabel(selected)} ({artifactSignerSummary(selected)})
+                                {!artifactAllowedByTrustPolicy(selected, artifactTrustPolicy) && ' — blocked by current trust policy'}
+                              </div>
+                            )}
                           </div>
                         )
                       })}
@@ -6796,6 +7255,64 @@ export default function App() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {canManageArtifactTrust && trustedSigningKeyModalOpen && (
+        <div className="modal-backdrop" onClick={() => setTrustedSigningKeyModalOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="section-header">
+              <h3>{editingTrustedSigningKeyId ? 'Edit Trusted Signing Key' : 'New Trusted Signing Key'}</h3>
+              <button className="button ghost" onClick={() => setTrustedSigningKeyModalOpen(false)}>
+                Close
+              </button>
+            </div>
+            <form className="form compact" onSubmit={handleSaveTrustedSigningKey}>
+              <div className="field">
+                <label>Display Name</label>
+                <input
+                  value={trustedSigningKeyForm.displayName}
+                  onChange={(e) => setTrustedSigningKeyForm((prev) => ({ ...prev, displayName: e.target.value }))}
+                  placeholder="Release signing key"
+                />
+              </div>
+              <div className="field">
+                <label>Algorithm</label>
+                <select
+                  value={trustedSigningKeyForm.algorithm}
+                  disabled={Boolean(editingTrustedSigningKeyId)}
+                  onChange={(e) => setTrustedSigningKeyForm((prev) => ({ ...prev, algorithm: e.target.value }))}
+                >
+                  <option value="ed25519">ed25519</option>
+                  <option value="cosign">cosign</option>
+                </select>
+              </div>
+              <div className="field full">
+                <label>Public Key PEM</label>
+                <textarea
+                  rows={8}
+                  value={trustedSigningKeyForm.publicKeyPem}
+                  disabled={Boolean(editingTrustedSigningKeyId)}
+                  onChange={(e) => setTrustedSigningKeyForm((prev) => ({ ...prev, publicKeyPem: e.target.value }))}
+                  placeholder="-----BEGIN PUBLIC KEY-----"
+                />
+              </div>
+              <div className="field full">
+                <label>Notes</label>
+                <textarea
+                  rows={3}
+                  value={trustedSigningKeyForm.notes}
+                  onChange={(e) => setTrustedSigningKeyForm((prev) => ({ ...prev, notes: e.target.value }))}
+                  placeholder="Rotation window, owner, provenance notes..."
+                />
+              </div>
+              <div className="field actions">
+                <button className="button ghost" type="submit">
+                  {editingTrustedSigningKeyId ? 'Save changes' : 'Create key'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -7079,54 +7596,58 @@ export default function App() {
                     <th>Name</th>
                     <th>ID</th>
                     <th>Version</th>
-                    <th>Signed</th>
+                    <th>Trust</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {artifactModalGroups.map((group) => (
-                    group.versions.map((a, idx) => (
+                    group.versions.map((a, idx) => {
+                      const selectable = artifactAllowedByTrustPolicy(a, artifactTrustPolicy)
+                      return (
                       <tr key={a.artifactId} className={idx === 0 ? 'artifact-group-start' : ''}>
                         <td>{idx === 0 ? group.name : ''}</td>
                         <td className="mono">{a.artifactId}</td>
                         <td>{a.version}</td>
                         <td>
-                          <span className={`pill ${a.signature ? 'signed' : 'unsigned'}`}>
-                            {a.signature ? 'signed' : 'unsigned'}
+                          <span className={`pill ${normalizeVerificationStatus(a.verificationStatus, a)}`}>
+                            {verificationPillLabel(a)}
                           </span>
+                          <div className="detail-note">{artifactSignerSummary(a)}</div>
                         </td>
                         <td>
                           <button
                             className="button ghost"
-                          onClick={() => {
-                            if (artifactPickerTarget?.scope === 'group') {
-                              updateGroupComponent(artifactPickerTarget.index, {
-                                artifactId: a.artifactId,
-                                desiredVersion: a.version,
-                                artifactType: normalizeArtifactType(a.type),
-                              })
-                            } else if (artifactPickerTarget?.scope === 'groupBulk') {
-                              updateGroupMultiDesiredComponent(artifactPickerTarget.index, {
-                                artifactId: a.artifactId,
-                                desiredVersion: a.version,
-                                artifactType: normalizeArtifactType(a.type),
-                              })
-                            } else if (artifactPickerTarget?.scope === 'device') {
-                              updateDeviceComponent(artifactPickerTarget.index, {
-                                artifactId: a.artifactId,
-                                desiredVersion: a.version,
-                                artifactType: normalizeArtifactType(a.type),
-                              })
-                            }
-                            setArtifactModalOpen(false)
-                            setArtifactPickerTarget(null)
-                          }}
+                            disabled={!selectable}
+                            onClick={() => {
+                              if (artifactPickerTarget?.scope === 'group') {
+                                updateGroupComponent(artifactPickerTarget.index, {
+                                  artifactId: a.artifactId,
+                                  desiredVersion: a.version,
+                                  artifactType: normalizeArtifactType(a.type),
+                                })
+                              } else if (artifactPickerTarget?.scope === 'groupBulk') {
+                                updateGroupMultiDesiredComponent(artifactPickerTarget.index, {
+                                  artifactId: a.artifactId,
+                                  desiredVersion: a.version,
+                                  artifactType: normalizeArtifactType(a.type),
+                                })
+                              } else if (artifactPickerTarget?.scope === 'device') {
+                                updateDeviceComponent(artifactPickerTarget.index, {
+                                  artifactId: a.artifactId,
+                                  desiredVersion: a.version,
+                                  artifactType: normalizeArtifactType(a.type),
+                                })
+                              }
+                              setArtifactModalOpen(false)
+                              setArtifactPickerTarget(null)
+                            }}
                           >
-                            Select
+                            {selectable ? 'Select' : 'Blocked'}
                           </button>
                         </td>
                       </tr>
-                    ))
+                    )})
                   ))}
                   {artifactModalGroups.length === 0 && (
                     <tr>
@@ -7161,6 +7682,54 @@ export default function App() {
               <div className="full">
                 <label>Bundle</label>
                 <input name="file" type="file" required />
+              </div>
+              <div className="full">
+                <label>Detached Signature (optional)</label>
+                <input name="signatureFile" type="file" accept=".sig,.txt,.b64,text/plain" />
+                <div className="hint">
+                  Upload the detached base64 signature file for this bundle. Leave blank for unsigned upload when policy allows it.
+                </div>
+              </div>
+              <div>
+                <label>Signature Type</label>
+                <select name="signatureType" defaultValue="ed25519">
+                  {signatureTypeOptions.map((option) => (
+                    <option key={option.id} value={option.id}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="full">
+                <label>Signing Key ID (optional)</label>
+                <input name="signatureKeyId" placeholder="sha256:..." list="trusted-signing-key-ids" />
+                <datalist id="trusted-signing-key-ids">
+                  {activeTrustedSigningKeys.map((key) => (
+                    <option key={key.keyId} value={key.keyId}>
+                      {key.displayName || key.keyId}
+                    </option>
+                  ))}
+                </datalist>
+                <div className="hint">
+                  Use the trusted public key ID that matches the detached signature. This is recorded with the artifact and used by signature policy.
+                </div>
+              </div>
+              <div className="full">
+                <div className="hint">
+                  Current trust policy: <strong>{artifactTrustPolicy.verificationMode || 'warn_unsigned'}</strong>.
+                  {artifactTrustPolicy.verificationMode === 'require_verified'
+                    ? ' Signed upload is required.'
+                    : ' Unsigned upload is allowed by policy.'}
+                </div>
+                {artifactTrustPolicy.allowedSignatureTypes?.length > 0 && (
+                  <div className="hint">
+                    Allowed signature types: {artifactTrustPolicy.allowedSignatureTypes.join(', ')}
+                  </div>
+                )}
+                {artifactTrustPolicy.allowedSigningKeyIds?.length > 0 && (
+                  <div className="hint">
+                    Allowed signing keys: {artifactTrustPolicy.allowedSigningKeyIds.join(', ')}
+                  </div>
+                )}
+                {artifactTrustError && <div className="error">{artifactTrustError}</div>}
               </div>
               <div className="full inline-row">
                 <button className="button" type="submit">Upload</button>
@@ -7383,6 +7952,7 @@ export default function App() {
                   const locked = Boolean(row.locked)
                   const type = normalizeArtifactType(row.artifactType)
                   const groupsForType = filterArtifactGroupsByType(activeArtifactGroups, type)
+                  const allowedGroupsForType = filterArtifactGroupsByTrustPolicy(groupsForType, artifactTrustPolicy)
                   const allGroupsForType = filterArtifactGroupsByType(artifactGroups, type)
                   const selected = artifacts.find((a) => a.artifactId === row.artifactId)
                   const selectedGroup = selected
@@ -7436,7 +8006,7 @@ export default function App() {
                           value={selected?.name || ''}
                           onChange={(e) => {
                             const name = e.target.value
-                            const group = groupsForType.find((g) => g.name === name)
+                            const group = allowedGroupsForType.find((g) => g.name === name)
                             if (!group) {
                               updateGroupMultiDesiredComponent(idx, { artifactId: '', desiredVersion: '' })
                             } else {
@@ -7451,7 +8021,7 @@ export default function App() {
                           disabled={locked}
                         >
                           <option value="">Select artifact</option>
-                          {groupsForType.map((group) => (
+                          {allowedGroupsForType.map((group) => (
                             <option key={group.name} value={group.name}>{group.name}</option>
                           ))}
                         </select>
@@ -7479,7 +8049,7 @@ export default function App() {
                           disabled={locked}
                         >
                           <option value="">Select version</option>
-                          {(selectedGroup?.versions || []).map((artifact) => (
+                          {(selectedGroup?.versions || []).filter((artifact) => artifactAllowedByTrustPolicy(artifact, artifactTrustPolicy)).map((artifact) => (
                             <option key={artifact.artifactId} value={artifact.version}>
                               {artifact.version}
                             </option>
@@ -7501,6 +8071,12 @@ export default function App() {
                           disabled={locked}
                         />
                       </div>
+                      {selected && (
+                        <div className="detail-note">
+                          Trust: {verificationPillLabel(selected)} ({artifactSignerSummary(selected)})
+                          {!artifactAllowedByTrustPolicy(selected, artifactTrustPolicy) && ' — blocked by current trust policy'}
+                        </div>
+                      )}
                     </div>
                   )
                 })}
@@ -7657,6 +8233,7 @@ export default function App() {
                   const locked = Boolean(row.locked)
                   const type = normalizeArtifactType(row.artifactType)
                   const groupsForType = filterArtifactGroupsByType(activeArtifactGroups, type)
+                  const allowedGroupsForType = filterArtifactGroupsByTrustPolicy(groupsForType, artifactTrustPolicy)
                   const allGroupsForType = filterArtifactGroupsByType(artifactGroups, type)
                   const selected = artifacts.find((a) => a.artifactId === row.artifactId)
                   const selectedGroup = selected
@@ -7710,7 +8287,7 @@ export default function App() {
                           value={selected?.name || ''}
                           onChange={(e) => {
                             const name = e.target.value
-                            const group = groupsForType.find((g) => g.name === name)
+                            const group = allowedGroupsForType.find((g) => g.name === name)
                             if (!group) {
                               updateGroupComponent(idx, { artifactId: '', desiredVersion: '' })
                             } else {
@@ -7725,7 +8302,7 @@ export default function App() {
                           disabled={locked}
                         >
                           <option value="">Select artifact</option>
-                          {groupsForType.map((group) => (
+                          {allowedGroupsForType.map((group) => (
                             <option key={group.name} value={group.name}>{group.name}</option>
                           ))}
                         </select>
@@ -7753,7 +8330,7 @@ export default function App() {
                           disabled={locked}
                         >
                           <option value="">Select version</option>
-                          {(selectedGroup?.versions || []).map((artifact) => (
+                          {(selectedGroup?.versions || []).filter((artifact) => artifactAllowedByTrustPolicy(artifact, artifactTrustPolicy)).map((artifact) => (
                             <option key={artifact.artifactId} value={artifact.version}>
                               {artifact.version}
                             </option>
@@ -7775,6 +8352,12 @@ export default function App() {
                           disabled={locked}
                         />
                       </div>
+                      {selected && (
+                        <div className="detail-note">
+                          Trust: {verificationPillLabel(selected)} ({artifactSignerSummary(selected)})
+                          {!artifactAllowedByTrustPolicy(selected, artifactTrustPolicy) && ' — blocked by current trust policy'}
+                        </div>
+                      )}
                     </div>
                   )
                 })}

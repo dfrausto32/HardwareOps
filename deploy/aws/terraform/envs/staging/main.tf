@@ -47,6 +47,7 @@ module "stack" {
   gateway_desired_count                   = var.gateway_desired_count
   control_plane_env                       = var.control_plane_env
   artifact_pull_credentials_aws_secret_id = var.artifact_pull_credentials_aws_secret_id
+  trusted_signing_keys_aws_secret_id      = var.trusted_signing_keys_aws_secret_id
   secret_kms_key_arns                     = var.secret_kms_key_arns
   gateway_env                             = var.gateway_env
   control_plane_secret_arns               = var.control_plane_secret_arns

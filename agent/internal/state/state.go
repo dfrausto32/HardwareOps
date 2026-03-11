@@ -21,7 +21,15 @@ type State struct {
 	LastPreApplyStatus  string                    `json:"lastPreApplyStatus"`
 	LastPreApplyError   string                    `json:"lastPreApplyError"`
 	LastPreApplyAt      time.Time                 `json:"lastPreApplyAt"`
+	SigningTrustUpdatedAt time.Time               `json:"signingTrustUpdatedAt,omitempty"`
+	SigningTrustKeys     []SigningTrustKey        `json:"signingTrustKeys,omitempty"`
 	Components          map[string]ComponentState `json:"components,omitempty"`
+}
+
+type SigningTrustKey struct {
+	KeyID        string `json:"keyId"`
+	Algorithm    string `json:"algorithm"`
+	PublicKeyPEM string `json:"publicKeyPem"`
 }
 
 type ComponentState struct {

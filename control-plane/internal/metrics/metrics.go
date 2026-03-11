@@ -35,6 +35,9 @@ type Metrics struct {
 	applyTotal            *prometheus.CounterVec
 	preApplyTotal         *prometheus.CounterVec
 	artifactUploadTotal   *prometheus.CounterVec
+	artifactVerifyTotal   *prometheus.CounterVec
+	artifactUntrusted     *prometheus.CounterVec
+	artifactVerifyState   *prometheus.GaugeVec
 	artifactPresignTotal  *prometheus.CounterVec
 	artifactPruneTotal    *prometheus.CounterVec
 	artifactPruneDeleted  prometheus.Counter
@@ -145,6 +148,18 @@ func New() *Metrics {
 		Name: "hwops_artifact_upload_total",
 		Help: "Artifact uploads by status.",
 	}, []string{"status"})
+	artifactVerifyTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hwops_artifact_verification_total",
+		Help: "Artifact verification decisions by operation, status, and signature type.",
+	}, []string{"operation", "status", "signature_type"})
+	artifactUntrusted := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hwops_artifact_untrusted_total",
+		Help: "Artifact verification attempts rejected as untrusted by operation.",
+	}, []string{"operation"})
+	artifactVerifyState := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "hwops_artifact_verification_state_total",
+		Help: "Artifacts currently tracked by verification status.",
+	}, []string{"status"})
 	artifactPresignTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "hwops_artifact_presign_total",
 		Help: "Artifact presign requests by status.",
@@ -186,11 +201,14 @@ func New() *Metrics {
 		Help: "Pending actions issued to devices by type.",
 	}, []string{"type"})
 
-	reg.MustRegister(httpRequests, httpDuration, deviceTotal, deviceStatus, dbOpenConns, dbInUse, dbWaitCount, s3ObjectsTotal, s3BytesTotal, checkinTotal, enrollTokenTotal, enrollTotal, pendingEnrollActive, pendingEnrollQueueAge, pendingEnrollOldest, pendingEnrollThrottle, applyTotal, preApplyTotal, artifactUploadTotal, artifactPresignTotal, artifactPruneTotal, artifactPruneDeleted, artifactPruneSkipped, artifactPruneLastRun, artifactPruneFails, rateLimitTotal, upgradeTotal, backupTotal, pendingActionsTotal)
+	reg.MustRegister(httpRequests, httpDuration, deviceTotal, deviceStatus, dbOpenConns, dbInUse, dbWaitCount, s3ObjectsTotal, s3BytesTotal, checkinTotal, enrollTokenTotal, enrollTotal, pendingEnrollActive, pendingEnrollQueueAge, pendingEnrollOldest, pendingEnrollThrottle, applyTotal, preApplyTotal, artifactUploadTotal, artifactVerifyTotal, artifactUntrusted, artifactVerifyState, artifactPresignTotal, artifactPruneTotal, artifactPruneDeleted, artifactPruneSkipped, artifactPruneLastRun, artifactPruneFails, rateLimitTotal, upgradeTotal, backupTotal, pendingActionsTotal)
 	pendingEnrollActive.Set(0)
 	pendingEnrollOldest.Set(0)
 	for _, bucket := range pendingEnrollAgeBuckets {
 		pendingEnrollQueueAge.WithLabelValues(bucket).Set(0)
+	}
+	for _, status := range []string{"unsigned", "legacy", "verified", "failed", "untrusted"} {
+		artifactVerifyState.WithLabelValues(status).Set(0)
 	}
 
 	return &Metrics{
@@ -214,6 +232,9 @@ func New() *Metrics {
 		applyTotal:            applyTotal,
 		preApplyTotal:         preApplyTotal,
 		artifactUploadTotal:   artifactUploadTotal,
+		artifactVerifyTotal:   artifactVerifyTotal,
+		artifactUntrusted:     artifactUntrusted,
+		artifactVerifyState:   artifactVerifyState,
 		artifactPresignTotal:  artifactPresignTotal,
 		artifactPruneTotal:    artifactPruneTotal,
 		artifactPruneDeleted:  artifactPruneDeleted,
@@ -403,6 +424,38 @@ func (m *Metrics) IncArtifactUpload(status string) {
 		status = "error"
 	}
 	m.artifactUploadTotal.WithLabelValues(status).Inc()
+}
+
+func (m *Metrics) IncArtifactVerification(operation, status, signatureType string) {
+	if m == nil {
+		return
+	}
+	if operation == "" {
+		operation = "unknown"
+	}
+	if status == "" {
+		status = "unknown"
+	}
+	if signatureType == "" {
+		signatureType = "none"
+	}
+	m.artifactVerifyTotal.WithLabelValues(operation, status, signatureType).Inc()
+	if status == "untrusted" {
+		m.artifactUntrusted.WithLabelValues(operation).Inc()
+	}
+}
+
+func (m *Metrics) SetArtifactVerificationState(status string, count int) {
+	if m == nil {
+		return
+	}
+	if status == "" {
+		status = "unknown"
+	}
+	if count < 0 {
+		count = 0
+	}
+	m.artifactVerifyState.WithLabelValues(status).Set(float64(count))
 }
 
 func (m *Metrics) IncArtifactPresign(status string) {

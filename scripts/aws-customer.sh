@@ -36,6 +36,8 @@ DEVICE_MTLS_MODE="passthrough"
 CONTROL_PLANE_IMAGE=""
 GATEWAY_IMAGE=""
 ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID=""
+TRUSTED_SIGNING_KEYS_AWS_SECRET_ID=""
+ARTIFACT_SIGNING_KEY_ID=""
 DB_MASTER_PASSWORD=""
 DB_MANAGE_MASTER_USER_PASSWORD=0
 AUTH_BOOTSTRAP_EMAIL=""
@@ -104,6 +106,10 @@ Customer setup options (init):
   --gateway-image <uri>        Gateway image URI
   --artifact-pull-credentials-secret-id <id-or-arn>
                               Optional Secrets Manager secret ID/ARN for pull adapter credentials
+  --trusted-signing-keys-secret-id <id-or-arn>
+                              Optional Secrets Manager secret ID/ARN for trusted signing keys JSON
+  --artifact-signing-key-id <key-id>
+                              Optional pinned signing key ID for strict artifact trust policy
   --auth-bootstrap-email <email>    Local auth bootstrap admin email (default generated)
   --auth-bootstrap-password <pwd>   Local auth bootstrap admin password (default random)
   --enable-demo-fleet               Enable ECS demo agent fleet
@@ -177,7 +183,10 @@ Customer-specific:
            "password": "password"
          }
        }
- 12) Optional demo fleet setup:
+ 12) Optional trusted signing key bootstrap:
+     - Secrets Manager secret ID/ARN containing trusted signing key JSON
+     - Optional pinned signing key ID used in strict artifact trust policy
+ 13) Optional demo fleet setup:
      - demo agent image URI in ECR
      - bootstrap credentials for demo enrollment token creation
 
@@ -442,6 +451,14 @@ control_plane_env = {
   AUTH_JWT_SECRET         = "$auth_jwt_secret"
   AUTH_BOOTSTRAP_EMAIL    = "$auth_bootstrap_email"
   AUTH_BOOTSTRAP_PASSWORD = "$auth_bootstrap_password"
+EOF
+  if [ -n "$ARTIFACT_SIGNING_KEY_ID" ]; then
+    cat >> "$path" <<EOF
+  ARTIFACT_TRUST_ALLOWED_SIGNING_KEY_IDS = "$ARTIFACT_SIGNING_KEY_ID"
+  ARTIFACT_SIGNATURE_KEY_ID              = "$ARTIFACT_SIGNING_KEY_ID"
+EOF
+  fi
+  cat >> "$path" <<EOF
 }
 
 gateway_env = {}
@@ -465,6 +482,9 @@ gateway_secret_arns = {}
 EOF
   if [ -n "$ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID" ]; then
     printf 'artifact_pull_credentials_aws_secret_id = "%s"\n' "$ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID" >> "$path"
+  fi
+  if [ -n "$TRUSTED_SIGNING_KEYS_AWS_SECRET_ID" ]; then
+    printf 'trusted_signing_keys_aws_secret_id = "%s"\n' "$TRUSTED_SIGNING_KEYS_AWS_SECRET_ID" >> "$path"
   fi
 }
 
@@ -701,6 +721,8 @@ while [ $# -gt 0 ]; do
     --control-plane-image) CONTROL_PLANE_IMAGE=$2; shift 2 ;;
     --gateway-image) GATEWAY_IMAGE=$2; shift 2 ;;
     --artifact-pull-credentials-secret-id) ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID=$2; shift 2 ;;
+    --trusted-signing-keys-secret-id) TRUSTED_SIGNING_KEYS_AWS_SECRET_ID=$2; shift 2 ;;
+    --artifact-signing-key-id) ARTIFACT_SIGNING_KEY_ID=$2; shift 2 ;;
     --auth-bootstrap-email) AUTH_BOOTSTRAP_EMAIL=$2; shift 2 ;;
     --auth-bootstrap-password) AUTH_BOOTSTRAP_PASSWORD=$2; shift 2 ;;
     --enable-demo-fleet) ENABLE_DEMO_FLEET=1; shift ;;

@@ -23,6 +23,8 @@ type Store struct {
 	desiredDevices       map[string]store.DesiredStateDevice
 	artifacts            map[string]store.Artifact
 	artifactPolicy       store.ArtifactLifecyclePolicy
+	artifactTrustPolicy  *store.ArtifactTrustPolicy
+	trustedSigningKeys   map[string]store.TrustedSigningKey
 	releaseAuto          store.ReleaseAutoUpdateSettings
 	applyResults         map[string]store.ApplyResult
 	runtimeEvents        []store.RuntimeEvent
@@ -51,6 +53,8 @@ func New() *Store {
 		desiredDevices:       map[string]store.DesiredStateDevice{},
 		artifacts:            map[string]store.Artifact{},
 		artifactPolicy:       store.ArtifactLifecyclePolicy{DeprecatedDeleteAfterDays: 30, UpdatedAt: time.Now().UTC()},
+		artifactTrustPolicy:  nil,
+		trustedSigningKeys:   map[string]store.TrustedSigningKey{},
 		releaseAuto:          store.ReleaseAutoUpdateSettings{Enabled: false, AllowUnsigned: false, UpdatedAt: time.Now().UTC()},
 		applyResults:         map[string]store.ApplyResult{},
 		runtimeEvents:        []store.RuntimeEvent{},
@@ -1010,6 +1014,9 @@ func (s *Store) CreateArtifact(artifact store.Artifact) error {
 	if artifact.Status == "" {
 		artifact.Status = "active"
 	}
+	if artifact.VerificationStatus == "" {
+		artifact.VerificationStatus = "legacy"
+	}
 	s.artifacts[artifact.ArtifactID] = artifact
 	return nil
 }
@@ -1051,6 +1058,21 @@ func (s *Store) ListArtifacts(name, version string, limit, offset int) ([]store.
 	return out[start:end], nil
 }
 
+func (s *Store) CountArtifactsByVerificationStatus(status string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if status == "" {
+		return 0, errors.New("verification status required")
+	}
+	count := 0
+	for _, a := range s.artifacts {
+		if a.VerificationStatus == status {
+			count++
+		}
+	}
+	return count, nil
+}
+
 func (s *Store) DeprecateArtifact(artifactID string, deprecatedAt, deleteAfter time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1083,6 +1105,89 @@ func (s *Store) RestoreArtifact(artifactID string) error {
 	artifact.DeleteAfter = time.Time{}
 	s.artifacts[artifactID] = artifact
 	return nil
+}
+
+func (s *Store) ListTrustedSigningKeys(includeRetired bool) ([]store.TrustedSigningKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]store.TrustedSigningKey, 0, len(s.trustedSigningKeys))
+	for _, key := range s.trustedSigningKeys {
+		if !includeRetired && key.State == "retired" {
+			continue
+		}
+		out = append(out, key)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
+func (s *Store) GetTrustedSigningKey(keyID string) (store.TrustedSigningKey, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key, ok := s.trustedSigningKeys[keyID]
+	return key, ok, nil
+}
+
+func (s *Store) UpsertTrustedSigningKey(key store.TrustedSigningKey) (store.TrustedSigningKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if key.KeyID == "" {
+		return store.TrustedSigningKey{}, errors.New("key_id required")
+	}
+	if key.CreatedAt.IsZero() {
+		key.CreatedAt = time.Now().UTC()
+	}
+	if key.State == "" {
+		key.State = "active"
+	}
+	if existing, ok := s.trustedSigningKeys[key.KeyID]; ok {
+		if key.CreatedAt.IsZero() {
+			key.CreatedAt = existing.CreatedAt
+		}
+		if key.State == "" {
+			key.State = existing.State
+		}
+		if key.RetiredAt.IsZero() {
+			key.RetiredAt = existing.RetiredAt
+		}
+	}
+	s.trustedSigningKeys[key.KeyID] = key
+	return key, nil
+}
+
+func (s *Store) RetireTrustedSigningKey(keyID string, retiredAt time.Time) (store.TrustedSigningKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key, ok := s.trustedSigningKeys[keyID]
+	if !ok {
+		return store.TrustedSigningKey{}, errors.New("trusted signing key not found")
+	}
+	key.State = "retired"
+	key.RetiredAt = retiredAt
+	s.trustedSigningKeys[keyID] = key
+	return key, nil
+}
+
+func (s *Store) GetArtifactTrustPolicy() (store.ArtifactTrustPolicy, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.artifactTrustPolicy == nil {
+		return store.ArtifactTrustPolicy{}, false, nil
+	}
+	return *s.artifactTrustPolicy, true, nil
+}
+
+func (s *Store) SetArtifactTrustPolicy(policy store.ArtifactTrustPolicy) (store.ArtifactTrustPolicy, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if policy.UpdatedAt.IsZero() {
+		policy.UpdatedAt = time.Now().UTC()
+	}
+	copy := policy
+	s.artifactTrustPolicy = &copy
+	return copy, nil
 }
 
 func (s *Store) ListArtifactsForPrune(cutoff time.Time, limit int) ([]store.Artifact, error) {

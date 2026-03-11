@@ -3,19 +3,27 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"io"
 	"log"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/hardwareops/control-plane/internal/artifactingest"
+	"github.com/hardwareops/control-plane/internal/artifacttrust"
+	"github.com/hardwareops/control-plane/internal/metrics"
 	"github.com/hardwareops/control-plane/internal/store"
 	"github.com/hardwareops/control-plane/internal/store/memory"
 )
@@ -544,6 +552,134 @@ func TestArtifactLifecyclePolicy(t *testing.T) {
 	if resp.DeprecatedDeleteAfterDays != 14 {
 		t.Fatalf("expected 14 days, got %d", resp.DeprecatedDeleteAfterDays)
 	}
+}
+
+func TestUploadArtifact_VerifiesTrustedEd25519Signature(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+	obj := newFakeObjectStore()
+	metricsCollector := metrics.New()
+
+	keyID, privateKey := upsertTrustedEd25519Key(t, mem)
+	if _, err := mem.SetArtifactTrustPolicy(store.ArtifactTrustPolicy{VerificationMode: artifacttrust.VerificationModeRequire}); err != nil {
+		t.Fatalf("set trust policy: %v", err)
+	}
+
+	payload := []byte("signed artifact body")
+	signature := signArtifactDigestBase64(privateKey, payload)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("name", "agent")
+	_ = mw.WriteField("version", "1.0.1")
+	_ = mw.WriteField("signature", signature)
+	_ = mw.WriteField("signatureType", artifacttrust.SignatureTypeEd25519)
+	_ = mw.WriteField("signatureKeyId", keyID)
+	fw, _ := mw.CreateFormFile("file", "agent-1.0.1.tar.gz")
+	_, _ = fw.Write(payload)
+	_ = mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts/upload", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	w := httptest.NewRecorder()
+
+	UploadArtifact(logger, mem, obj, "artifacts", false, metricsCollector, ArtifactSignaturePolicy{Store: mem}).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var resp UploadArtifactResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	artifact, ok, err := mem.GetArtifact(resp.ArtifactID)
+	if err != nil || !ok {
+		t.Fatalf("artifact missing err=%v ok=%t", err, ok)
+	}
+	if artifact.VerificationStatus != artifacttrust.VerificationStatusVerified {
+		t.Fatalf("expected verified status, got %s (%s)", artifact.VerificationStatus, artifact.VerificationError)
+	}
+	metricsBody := scrapeMetricsBody(t, metricsCollector)
+	if !strings.Contains(metricsBody, `hwops_artifact_verification_total{operation="upload",signature_type="ed25519",status="verified"} 1`) {
+		t.Fatalf("expected verification metric, got:\n%s", metricsBody)
+	}
+	if !strings.Contains(metricsBody, `hwops_artifact_verification_state_total{status="verified"} 1`) {
+		t.Fatalf("expected verification state metric, got:\n%s", metricsBody)
+	}
+}
+
+func TestUploadArtifact_RejectsUnsignedWhenStrictTrustPolicyEnabled(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+	obj := newFakeObjectStore()
+
+	if _, err := mem.SetArtifactTrustPolicy(store.ArtifactTrustPolicy{VerificationMode: artifacttrust.VerificationModeRequire}); err != nil {
+		t.Fatalf("set trust policy: %v", err)
+	}
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("name", "agent")
+	_ = mw.WriteField("version", "1.0.2")
+	fw, _ := mw.CreateFormFile("file", "agent-1.0.2.tar.gz")
+	_, _ = fw.Write([]byte("unsigned body"))
+	_ = mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts/upload", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	w := httptest.NewRecorder()
+
+	UploadArtifact(logger, mem, obj, "artifacts", false, nil, ArtifactSignaturePolicy{Store: mem}).ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "artifact signature required but missing") {
+		t.Fatalf("expected strict rejection, got %s", w.Body.String())
+	}
+}
+
+func upsertTrustedEd25519Key(t *testing.T, mem *memory.Store) (string, ed25519.PrivateKey) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	pkix, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		t.Fatalf("marshal public key: %v", err)
+	}
+	publicKeyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pkix}))
+	keyID, err := artifacttrust.ComputeKeyIDFromPublicKeyPEM(publicKeyPEM)
+	if err != nil {
+		t.Fatalf("compute key id: %v", err)
+	}
+	if _, err := mem.UpsertTrustedSigningKey(store.TrustedSigningKey{
+		KeyID:        keyID,
+		DisplayName:  "test-ed25519",
+		Algorithm:    artifacttrust.SignatureTypeEd25519,
+		PublicKeyPEM: publicKeyPEM,
+		State:        artifacttrust.KeyStateActive,
+		CreatedAt:    time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("upsert trusted key: %v", err)
+	}
+	return keyID, priv
+}
+
+func signArtifactDigestBase64(privateKey ed25519.PrivateKey, body []byte) string {
+	sum := sha256.Sum256(body)
+	return base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, sum[:]))
+}
+
+func scrapeMetricsBody(t *testing.T, metricsCollector *metrics.Metrics) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	w := httptest.NewRecorder()
+	metricsCollector.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("metrics status: %d", w.Code)
+	}
+	return w.Body.String()
 }
 
 func newFakeObjectStore() *fakeObjectStore {

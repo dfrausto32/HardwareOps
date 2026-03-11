@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hardwareops/control-plane/internal/artifacttrust"
 	"github.com/hardwareops/control-plane/internal/events"
 	"github.com/hardwareops/control-plane/internal/license"
 	"github.com/hardwareops/control-plane/internal/metrics"
@@ -41,6 +42,7 @@ type DeviceEnrollResponse struct {
 	DeviceID  string `json:"deviceId"`
 	CertPEM   string `json:"certPem"`
 	CACertPEM string `json:"caCertPem"`
+	SigningTrust *artifacttrust.SigningTrustBundle `json:"signingTrust,omitempty"`
 }
 
 const (
@@ -262,9 +264,10 @@ func deviceEnroll(logger *log.Logger, st store.Store, lic *license.Manager, sign
 		logger.Printf("enroll device=%s fingerprint=%s ip=%s", deviceID, fingerprint, clientIP(r, trustProxy))
 
 		resp := DeviceEnrollResponse{
-			DeviceID:  deviceID,
-			CertPEM:   string(certPEM),
-			CACertPEM: string(signer.CACertPEM()),
+			DeviceID:    deviceID,
+			CertPEM:     string(certPEM),
+			CACertPEM:   string(signer.CACertPEM()),
+			SigningTrust: currentSigningTrust(logger, st),
 		}
 		event := buildAuditEvent(r, trustProxy, AuditActor{Type: "device", ID: deviceID, AuthMethod: "enrollment_token"}, "device.enroll", "device", deviceID)
 		event.MetadataJSON = auditJSON(map[string]any{

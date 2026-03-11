@@ -19,6 +19,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/hardwareops/control-plane/internal/artifactingest"
+	"github.com/hardwareops/control-plane/internal/artifacttrust"
 	"github.com/hardwareops/control-plane/internal/events"
 	"github.com/hardwareops/control-plane/internal/lifecycle"
 	"github.com/hardwareops/control-plane/internal/metrics"
@@ -33,6 +34,7 @@ type CreateArtifactRequest struct {
 	ObjectKey      string          `json:"objectKey"`
 	SHA256         string          `json:"sha256"`
 	Signature      string          `json:"signature"`
+	SignatureType  string          `json:"signatureType,omitempty"`
 	SignatureKeyID string          `json:"signatureKeyId"`
 	SizeBytes      int64           `json:"sizeBytes"`
 	Metadata       json.RawMessage `json:"metadata"`
@@ -47,6 +49,11 @@ type ArtifactResponse struct {
 	ObjectKey      string          `json:"objectKey"`
 	SHA256         string          `json:"sha256"`
 	Signature      string          `json:"signature,omitempty"`
+	SignatureType  string          `json:"signatureType,omitempty"`
+	SignatureKeyID string          `json:"signatureKeyId,omitempty"`
+	VerificationStatus string      `json:"verificationStatus,omitempty"`
+	VerificationError  string      `json:"verificationError,omitempty"`
+	VerifiedAt     *time.Time      `json:"verifiedAt,omitempty"`
 	SizeBytes      int64           `json:"sizeBytes"`
 	Metadata       json.RawMessage `json:"metadata,omitempty"`
 	CreatedAt      time.Time       `json:"createdAt"`
@@ -107,6 +114,7 @@ type PullArtifactRequest struct {
 	Source         *PullSourceSpec `json:"source,omitempty"`
 	SHA256         string          `json:"sha256"`
 	Signature      string          `json:"signature"`
+	SignatureType  string          `json:"signatureType,omitempty"`
 	SignatureKeyID string          `json:"signatureKeyId"`
 	SizeBytes      int64           `json:"sizeBytes"`
 	Metadata       json.RawMessage `json:"metadata"`
@@ -164,18 +172,26 @@ type ArtifactLifecycleStatusResponse struct {
 }
 
 func CreateArtifact(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
-	return createArtifact(logger, st, trustProxy, sigPolicy, nil, nil)
+	return createArtifact(logger, st, nil, "", trustProxy, sigPolicy, nil, nil)
 }
 
 func CreateArtifactWithReleaseAuto(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger) http.HandlerFunc {
-	return createArtifact(logger, st, trustProxy, sigPolicy, releaseAuto, nil)
+	return createArtifact(logger, st, nil, "", trustProxy, sigPolicy, releaseAuto, nil)
 }
 
-func CreateArtifactWithRealtime(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub) http.HandlerFunc {
-	return createArtifact(logger, st, trustProxy, sigPolicy, releaseAuto, hub)
+func CreateArtifactWithObjectStore(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
+	return createArtifact(logger, st, objStore, bucket, trustProxy, sigPolicy, nil, nil)
 }
 
-func createArtifact(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub) http.HandlerFunc {
+func CreateArtifactWithReleaseAutoObjectStore(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger) http.HandlerFunc {
+	return createArtifact(logger, st, objStore, bucket, trustProxy, sigPolicy, releaseAuto, nil)
+}
+
+func CreateArtifactWithRealtime(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub) http.HandlerFunc {
+	return createArtifact(logger, st, objStore, bucket, trustProxy, sigPolicy, releaseAuto, hub)
+}
+
+func createArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req CreateArtifactRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -196,11 +212,12 @@ func createArtifact(logger *log.Logger, st store.Store, trustProxy bool, sigPoli
 			http.Error(w, "metadata must be valid json", http.StatusBadRequest)
 			return
 		}
-		if err := sigPolicy.ValidateIngest(req.Signature, req.SignatureKeyID); err != nil {
+		signatureType, err := normalizeSignatureTypeForRequest(req.Signature, req.SignatureType)
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		meta, err = mergeSignatureKeyID(meta, req.SignatureKeyID)
+		meta, err = mergeSignatureFields(meta, req.SignatureKeyID, signatureType)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -213,18 +230,40 @@ func createArtifact(logger *log.Logger, st store.Store, trustProxy bool, sigPoli
 			return
 		}
 
+		verification := artifacttrust.VerificationResult{}
+		actualSHA := req.SHA256
+		sizeBytes := req.SizeBytes
+		if objStore != nil && bucket != "" {
+			verification, actualSHA, sizeBytes, err = verifyStoredArtifact(r.Context(), st, objStore, bucket, req.ObjectKey, req.SHA256, req.Signature, signatureType, req.SignatureKeyID, sigPolicy)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		} else {
+			verification, err = fallbackCreateArtifactVerification(req.Signature, signatureType, req.SignatureKeyID, sigPolicy)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+
 		artifact := store.Artifact{
-			ArtifactID:   artifactID,
-			Name:         req.Name,
-			Version:      req.Version,
-			Type:         atype,
-			Status:       "active",
-			ObjectKey:    req.ObjectKey,
-			SHA256:       req.SHA256,
-			Signature:    req.Signature,
-			SizeBytes:    req.SizeBytes,
-			MetadataJSON: meta,
-			CreatedAt:    time.Now().UTC(),
+			ArtifactID:          artifactID,
+			Name:                req.Name,
+			Version:             req.Version,
+			Type:                atype,
+			Status:              "active",
+			ObjectKey:           req.ObjectKey,
+			SHA256:              actualSHA,
+			Signature:           req.Signature,
+			SignatureType:       signatureType,
+			SignatureKeyID:      strings.TrimSpace(req.SignatureKeyID),
+			VerificationStatus:  verification.Status,
+			VerificationError:   verification.Error,
+			VerifiedAt:          verification.VerifiedAt,
+			SizeBytes:           sizeBytes,
+			MetadataJSON:        meta,
+			CreatedAt:           time.Now().UTC(),
 		}
 		if err := st.CreateArtifact(artifact); err != nil {
 			logger.Printf("create artifact error: %v", err)
@@ -235,12 +274,16 @@ func createArtifact(logger *log.Logger, st store.Store, trustProxy bool, sigPoli
 
 		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.create", "artifact", artifact.ArtifactID)
 		event.AfterJSON = auditJSON(map[string]any{
-			"artifactId": artifact.ArtifactID,
-			"name":       artifact.Name,
-			"version":    artifact.Version,
-			"type":       artifact.Type,
-			"sha256":     artifact.SHA256,
-			"sizeBytes":  artifact.SizeBytes,
+			"artifactId":          artifact.ArtifactID,
+			"name":                artifact.Name,
+			"version":             artifact.Version,
+			"type":                artifact.Type,
+			"sha256":              artifact.SHA256,
+			"sizeBytes":           artifact.SizeBytes,
+			"verificationStatus":  artifact.VerificationStatus,
+			"verificationError":   artifact.VerificationError,
+			"signatureType":       artifact.SignatureType,
+			"signatureKeyId":      artifact.SignatureKeyID,
 		})
 		writeAudit(logger, st, event, nil)
 		emitArtifactRegisteredEvent(logger, st, hub, artifact, "create")
@@ -320,14 +363,17 @@ func uploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 			return
 		}
 		signature := strings.TrimSpace(r.FormValue("signature"))
+		signatureTypeRaw := strings.TrimSpace(r.FormValue("signatureType"))
 		signatureKeyID := strings.TrimSpace(r.FormValue("signatureKeyId"))
-		if err := sigPolicy.ValidateIngest(signature, signatureKeyID); err != nil {
+		signatureType, err := normalizeSignatureTypeForRequest(signature, signatureTypeRaw)
+		if err != nil {
 			record("error")
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		meta, err = mergeSignatureKeyID(meta, signatureKeyID)
+		meta, err = mergeSignatureFields(meta, signatureKeyID, signatureType)
 		if err != nil {
+			record("error")
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -360,7 +406,7 @@ func uploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 			contentType = "application/gzip"
 		}
 
-		size, err := objStore.PutObject(r.Context(), bucket, objectKey, tee, header.Size, contentType)
+		_, err = objStore.PutObject(r.Context(), bucket, objectKey, tee, header.Size, contentType)
 		if err != nil {
 			logger.Printf("put object error: %v", err)
 			record("error")
@@ -369,18 +415,31 @@ func uploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 		}
 
 		sha := hex.EncodeToString(h.Sum(nil))
+		verification, actualSHA, sizeBytes, err := verifyStoredArtifact(r.Context(), st, objStore, bucket, objectKey, sha, signature, signatureType, signatureKeyID, sigPolicy)
+		recordArtifactVerificationMetrics(metricsCollector, "upload", verification)
+		if err != nil {
+			record("error")
+			_ = objStore.DeleteObject(r.Context(), bucket, objectKey)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		artifact := store.Artifact{
-			ArtifactID:   artifactID,
-			Name:         name,
-			Version:      version,
-			Type:         atype,
-			Status:       "active",
-			ObjectKey:    objectKey,
-			SHA256:       sha,
-			Signature:    signature,
-			SizeBytes:    size,
-			MetadataJSON: meta,
-			CreatedAt:    time.Now().UTC(),
+			ArtifactID:          artifactID,
+			Name:                name,
+			Version:             version,
+			Type:                atype,
+			Status:              "active",
+			ObjectKey:           objectKey,
+			SHA256:              actualSHA,
+			Signature:           signature,
+			SignatureType:       signatureType,
+			SignatureKeyID:      signatureKeyID,
+			VerificationStatus:  verification.Status,
+			VerificationError:   verification.Error,
+			VerifiedAt:          verification.VerifiedAt,
+			SizeBytes:           sizeBytes,
+			MetadataJSON:        meta,
+			CreatedAt:           time.Now().UTC(),
 		}
 		if err := st.CreateArtifact(artifact); err != nil {
 			logger.Printf("create artifact error: %v", err)
@@ -390,15 +449,20 @@ func uploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 			return
 		}
 		record("success")
+		refreshArtifactVerificationMetrics(st, metricsCollector)
 
 		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.upload", "artifact", artifactID)
 		event.AfterJSON = auditJSON(map[string]any{
-			"artifactId": artifactID,
-			"name":       name,
-			"version":    version,
-			"type":       atype,
-			"sha256":     sha,
-			"sizeBytes":  size,
+			"artifactId":         artifactID,
+			"name":               name,
+			"version":            version,
+			"type":               atype,
+			"sha256":             actualSHA,
+			"sizeBytes":          sizeBytes,
+			"verificationStatus": verification.Status,
+			"verificationError":  verification.Error,
+			"signatureType":      signatureType,
+			"signatureKeyId":     signatureKeyID,
 		})
 		writeAudit(logger, st, event, nil)
 		emitArtifactRegisteredEvent(logger, st, hub, artifact, "upload")
@@ -409,8 +473,8 @@ func uploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 		resp := UploadArtifactResponse{
 			ArtifactID: artifactID,
 			ObjectKey:  objectKey,
-			SHA256:     sha,
-			SizeBytes:  size,
+			SHA256:     actualSHA,
+			SizeBytes:  sizeBytes,
 			Name:       name,
 			Version:    version,
 			Type:       atype,
@@ -504,12 +568,13 @@ func pullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, buck
 			http.Error(w, "metadata must be valid json", http.StatusBadRequest)
 			return
 		}
-		if err := sigPolicy.ValidateIngest(req.Signature, req.SignatureKeyID); err != nil {
+		signatureType, err := normalizeSignatureTypeForRequest(req.Signature, req.SignatureType)
+		if err != nil {
 			record("error")
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		meta, err = mergeSignatureKeyID(meta, req.SignatureKeyID)
+		meta, err = mergeSignatureFields(meta, req.SignatureKeyID, signatureType)
 		if err != nil {
 			record("error")
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -625,7 +690,7 @@ func pullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, buck
 		if contentType == "" {
 			contentType = "application/gzip"
 		}
-		size, err := objStore.PutObject(r.Context(), bucket, objectKey, tmpFile, written, contentType)
+		_, err = objStore.PutObject(r.Context(), bucket, objectKey, tmpFile, written, contentType)
 		if err != nil {
 			logger.Printf("put pulled object error: %v", err)
 			record("error")
@@ -633,18 +698,32 @@ func pullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, buck
 			return
 		}
 
+		verification, actualSHA, actualSize, err := verifyStoredArtifact(r.Context(), st, objStore, bucket, objectKey, req.SHA256, req.Signature, signatureType, req.SignatureKeyID, sigPolicy)
+		recordArtifactVerificationMetrics(metricsCollector, "pull", verification)
+		if err != nil {
+			record("error")
+			_ = objStore.DeleteObject(r.Context(), bucket, objectKey)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
 		artifact := store.Artifact{
-			ArtifactID:   artifactID,
-			Name:         req.Name,
-			Version:      req.Version,
-			Type:         atype,
-			Status:       "active",
-			ObjectKey:    objectKey,
-			SHA256:       req.SHA256,
-			Signature:    strings.TrimSpace(req.Signature),
-			SizeBytes:    size,
-			MetadataJSON: meta,
-			CreatedAt:    time.Now().UTC(),
+			ArtifactID:          artifactID,
+			Name:                req.Name,
+			Version:             req.Version,
+			Type:                atype,
+			Status:              "active",
+			ObjectKey:           objectKey,
+			SHA256:              actualSHA,
+			Signature:           strings.TrimSpace(req.Signature),
+			SignatureType:       signatureType,
+			SignatureKeyID:      strings.TrimSpace(req.SignatureKeyID),
+			VerificationStatus:  verification.Status,
+			VerificationError:   verification.Error,
+			VerifiedAt:          verification.VerifiedAt,
+			SizeBytes:           actualSize,
+			MetadataJSON:        meta,
+			CreatedAt:           time.Now().UTC(),
 		}
 		if err := st.CreateArtifact(artifact); err != nil {
 			logger.Printf("create pulled artifact error: %v", err)
@@ -654,19 +733,24 @@ func pullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, buck
 			return
 		}
 		record("success")
+		refreshArtifactVerificationMetrics(st, metricsCollector)
 
 		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.pull", "artifact", artifactID)
 		event.AfterJSON = auditJSON(map[string]any{
-			"artifactId":    artifactID,
-			"name":          req.Name,
-			"version":       req.Version,
-			"type":          atype,
-			"objectKey":     objectKey,
-			"sha256":        req.SHA256,
-			"sizeBytes":     size,
-			"sourceKind":    sourceSpec.Kind,
-			"source":        scrubSourceURL(sourceSpec.URI),
-			"credentialRef": sourceSpec.CredentialRef,
+			"artifactId":         artifactID,
+			"name":               req.Name,
+			"version":            req.Version,
+			"type":               atype,
+			"objectKey":          objectKey,
+			"sha256":             actualSHA,
+			"sizeBytes":          actualSize,
+			"sourceKind":         sourceSpec.Kind,
+			"source":             scrubSourceURL(sourceSpec.URI),
+			"credentialRef":      sourceSpec.CredentialRef,
+			"verificationStatus": verification.Status,
+			"verificationError":  verification.Error,
+			"signatureType":      signatureType,
+			"signatureKeyId":     req.SignatureKeyID,
 		})
 		writeAudit(logger, st, event, nil)
 		emitArtifactRegisteredEvent(logger, st, hub, artifact, "pull")
@@ -677,8 +761,8 @@ func pullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, buck
 		out := UploadArtifactResponse{
 			ArtifactID: artifactID,
 			ObjectKey:  objectKey,
-			SHA256:     req.SHA256,
-			SizeBytes:  size,
+			SHA256:     actualSHA,
+			SizeBytes:  actualSize,
 			Name:       req.Name,
 			Version:    req.Version,
 			Type:       atype,
@@ -827,12 +911,13 @@ func completeArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectS
 			http.Error(w, "metadata must be valid json", http.StatusBadRequest)
 			return
 		}
-		if err := sigPolicy.ValidateIngest(req.Signature, req.SignatureKeyID); err != nil {
+		signatureType, err := normalizeSignatureTypeForRequest(req.Signature, req.SignatureType)
+		if err != nil {
 			record("error")
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		meta, err = mergeSignatureKeyID(meta, req.SignatureKeyID)
+		meta, err = mergeSignatureFields(meta, req.SignatureKeyID, signatureType)
 		if err != nil {
 			record("error")
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -879,18 +964,31 @@ func completeArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectS
 			return
 		}
 
+		verification, actualSHA, actualSize, err := verifyStoredArtifact(r.Context(), st, objStore, bucket, req.ObjectKey, req.SHA256, req.Signature, signatureType, req.SignatureKeyID, sigPolicy)
+		recordArtifactVerificationMetrics(metricsCollector, "complete", verification)
+		if err != nil {
+			record("error")
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
 		artifact := store.Artifact{
-			ArtifactID:   req.ArtifactID,
-			Name:         req.Name,
-			Version:      req.Version,
-			Type:         atype,
-			Status:       "active",
-			ObjectKey:    req.ObjectKey,
-			SHA256:       req.SHA256,
-			Signature:    strings.TrimSpace(req.Signature),
-			SizeBytes:    size,
-			MetadataJSON: meta,
-			CreatedAt:    time.Now().UTC(),
+			ArtifactID:          req.ArtifactID,
+			Name:                req.Name,
+			Version:             req.Version,
+			Type:                atype,
+			Status:              "active",
+			ObjectKey:           req.ObjectKey,
+			SHA256:              actualSHA,
+			Signature:           strings.TrimSpace(req.Signature),
+			SignatureType:       signatureType,
+			SignatureKeyID:      strings.TrimSpace(req.SignatureKeyID),
+			VerificationStatus:  verification.Status,
+			VerificationError:   verification.Error,
+			VerifiedAt:          verification.VerifiedAt,
+			SizeBytes:           actualSize,
+			MetadataJSON:        meta,
+			CreatedAt:           time.Now().UTC(),
 		}
 		if err := st.CreateArtifact(artifact); err != nil {
 			logger.Printf("create artifact error: %v", err)
@@ -900,16 +998,21 @@ func completeArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectS
 			return
 		}
 		record("success")
+		refreshArtifactVerificationMetrics(st, metricsCollector)
 
 		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.upload.complete", "artifact", req.ArtifactID)
 		event.AfterJSON = auditJSON(map[string]any{
-			"artifactId": req.ArtifactID,
-			"name":       req.Name,
-			"version":    req.Version,
-			"type":       atype,
-			"objectKey":  req.ObjectKey,
-			"sha256":     req.SHA256,
-			"sizeBytes":  size,
+			"artifactId":         req.ArtifactID,
+			"name":               req.Name,
+			"version":            req.Version,
+			"type":               atype,
+			"objectKey":          req.ObjectKey,
+			"sha256":             actualSHA,
+			"sizeBytes":          actualSize,
+			"verificationStatus": verification.Status,
+			"verificationError":  verification.Error,
+			"signatureType":      signatureType,
+			"signatureKeyId":     req.SignatureKeyID,
 		})
 		writeAudit(logger, st, event, nil)
 		emitArtifactRegisteredEvent(logger, st, hub, artifact, "complete")
@@ -920,8 +1023,8 @@ func completeArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectS
 		resp := UploadArtifactResponse{
 			ArtifactID: req.ArtifactID,
 			ObjectKey:  req.ObjectKey,
-			SHA256:     req.SHA256,
-			SizeBytes:  size,
+			SHA256:     actualSHA,
+			SizeBytes:  actualSize,
 			Name:       req.Name,
 			Version:    req.Version,
 			Type:       atype,
@@ -1472,20 +1575,25 @@ func artifactToResponse(a store.Artifact, refs int) ArtifactResponse {
 		status = "active"
 	}
 	return ArtifactResponse{
-		ArtifactID:     a.ArtifactID,
-		Name:           a.Name,
-		Version:        a.Version,
-		Type:           a.Type,
-		Status:         status,
-		ObjectKey:      a.ObjectKey,
-		SHA256:         a.SHA256,
-		Signature:      a.Signature,
-		SizeBytes:      a.SizeBytes,
-		Metadata:       json.RawMessage(a.MetadataJSON),
-		CreatedAt:      a.CreatedAt,
-		DeprecatedAt:   timePtr(a.DeprecatedAt),
-		DeleteAfter:    timePtr(a.DeleteAfter),
-		ReferenceCount: refs,
+		ArtifactID:         a.ArtifactID,
+		Name:               a.Name,
+		Version:            a.Version,
+		Type:               a.Type,
+		Status:             status,
+		ObjectKey:          a.ObjectKey,
+		SHA256:             a.SHA256,
+		Signature:          a.Signature,
+		SignatureType:      a.SignatureType,
+		SignatureKeyID:     a.SignatureKeyID,
+		VerificationStatus: a.VerificationStatus,
+		VerificationError:  a.VerificationError,
+		VerifiedAt:         timePtr(a.VerifiedAt),
+		SizeBytes:          a.SizeBytes,
+		Metadata:           json.RawMessage(a.MetadataJSON),
+		CreatedAt:          a.CreatedAt,
+		DeprecatedAt:       timePtr(a.DeprecatedAt),
+		DeleteAfter:        timePtr(a.DeleteAfter),
+		ReferenceCount:     refs,
 	}
 }
 
@@ -1530,22 +1638,154 @@ func parseMetadataString(val string) ([]byte, error) {
 	return raw, nil
 }
 
-func mergeSignatureKeyID(meta []byte, keyID string) ([]byte, error) {
-	if strings.TrimSpace(keyID) == "" {
+func mergeSignatureFields(meta []byte, keyID, signatureType string) ([]byte, error) {
+	keyID = strings.TrimSpace(keyID)
+	signatureType = strings.TrimSpace(signatureType)
+	if keyID == "" && signatureType == "" {
 		return meta, nil
 	}
 	if len(meta) == 0 || string(meta) == "null" {
-		out, _ := json.Marshal(map[string]any{"signatureKeyId": keyID})
+		obj := map[string]any{}
+		if keyID != "" {
+			obj["signatureKeyId"] = keyID
+		}
+		if signatureType != "" {
+			obj["signatureType"] = signatureType
+		}
+		out, _ := json.Marshal(obj)
 		return out, nil
 	}
 	var obj map[string]any
 	if err := json.Unmarshal(meta, &obj); err != nil {
-		return nil, fmt.Errorf("metadata must be a JSON object when signatureKeyId is provided")
+		return nil, fmt.Errorf("metadata must be a JSON object when signature fields are provided")
 	}
 	if obj == nil {
 		obj = map[string]any{}
 	}
-	obj["signatureKeyId"] = keyID
+	if keyID != "" {
+		obj["signatureKeyId"] = keyID
+	}
+	if signatureType != "" {
+		obj["signatureType"] = signatureType
+	}
 	out, _ := json.Marshal(obj)
 	return out, nil
+}
+
+func normalizeSignatureTypeForRequest(signature, signatureType string) (string, error) {
+	if strings.TrimSpace(signature) == "" {
+		return "", nil
+	}
+	return artifacttrust.NormalizeSignatureType(signatureType)
+}
+
+func verifyStoredArtifact(ctx context.Context, st store.Store, objStore ObjectStore, bucket, objectKey, expectedSHA, signature, signatureType, signatureKeyID string, sigPolicy ArtifactSignaturePolicy) (artifacttrust.VerificationResult, string, int64, error) {
+	if objStore == nil || bucket == "" {
+		return artifacttrust.VerificationResult{}, "", 0, fmt.Errorf("object store not configured")
+	}
+	reader, err := objStore.GetObject(ctx, bucket, objectKey)
+	if err != nil {
+		return artifacttrust.VerificationResult{}, "", 0, fmt.Errorf("object read error")
+	}
+	defer reader.Close()
+	body, actualSHA, err := artifacttrust.ReadAllAndSHA256(reader)
+	if err != nil {
+		return artifacttrust.VerificationResult{}, "", 0, fmt.Errorf("object read error")
+	}
+	if expectedSHA != "" && !strings.EqualFold(actualSHA, strings.TrimSpace(expectedSHA)) {
+		return artifacttrust.VerificationResult{}, "", 0, fmt.Errorf("sha256 mismatch")
+	}
+	globalPolicy, err := sigPolicy.ResolvePolicy(nil)
+	if err != nil {
+		return artifacttrust.VerificationResult{}, "", 0, err
+	}
+	signature = strings.TrimSpace(signature)
+	signatureKeyID = strings.TrimSpace(signatureKeyID)
+	if signature == "" {
+		result, decisionErr := artifacttrust.VerificationOutcomeForIngest(globalPolicy, "", "", "", nil, nil)
+		return result, actualSHA, int64(len(body)), decisionErr
+	}
+	if signatureKeyID == "" {
+		result := artifacttrust.VerificationResult{
+			Status:         artifacttrust.VerificationStatusUntrusted,
+			Error:          "signatureKeyId required when signature is provided",
+			SignatureType:  signatureType,
+			SignatureKeyID: signatureKeyID,
+		}
+			if globalPolicy.VerificationMode == artifacttrust.VerificationModeRequire {
+				return result, actualSHA, int64(len(body)), errors.New(result.Error)
+			}
+		return result, actualSHA, int64(len(body)), nil
+	}
+	key, ok, err := st.GetTrustedSigningKey(signatureKeyID)
+	if err != nil {
+		return artifacttrust.VerificationResult{}, "", 0, err
+	}
+	var keyRef *store.TrustedSigningKey
+	if ok {
+		keyRef = &key
+		if key.State != artifacttrust.KeyStateActive {
+			keyRef = nil
+		}
+	}
+	verifyErr := error(nil)
+	if keyRef != nil {
+		verifyErr = artifacttrust.VerifyArtifact(signatureType, signature, keyRef.PublicKeyPEM, actualSHA, body)
+	}
+	result, decisionErr := artifacttrust.VerificationOutcomeForIngest(globalPolicy, signature, signatureType, signatureKeyID, keyRef, verifyErr)
+	return result, actualSHA, int64(len(body)), decisionErr
+}
+
+func recordArtifactVerificationMetrics(metricsCollector *metrics.Metrics, operation string, result artifacttrust.VerificationResult) {
+	if metricsCollector == nil {
+		return
+	}
+	if result.Status == "" {
+		return
+	}
+	metricsCollector.IncArtifactVerification(operation, result.Status, result.SignatureType)
+}
+
+func refreshArtifactVerificationMetrics(st store.Store, metricsCollector *metrics.Metrics) {
+	if st == nil || metricsCollector == nil {
+		return
+	}
+	for _, status := range []string{
+		artifacttrust.VerificationStatusUnsigned,
+		artifacttrust.VerificationStatusLegacy,
+		artifacttrust.VerificationStatusVerified,
+		artifacttrust.VerificationStatusFailed,
+		artifacttrust.VerificationStatusUntrusted,
+	} {
+		count, err := st.CountArtifactsByVerificationStatus(status)
+		if err != nil {
+			continue
+		}
+		metricsCollector.SetArtifactVerificationState(status, count)
+	}
+}
+
+func fallbackCreateArtifactVerification(signature, signatureType, signatureKeyID string, sigPolicy ArtifactSignaturePolicy) (artifacttrust.VerificationResult, error) {
+	globalPolicy, err := sigPolicy.ResolvePolicy(nil)
+	if err != nil {
+		return artifacttrust.VerificationResult{}, err
+	}
+	signature = strings.TrimSpace(signature)
+	signatureKeyID = strings.TrimSpace(signatureKeyID)
+	if signature == "" {
+		return artifacttrust.VerificationOutcomeForIngest(globalPolicy, "", "", "", nil, nil)
+	}
+	result := artifacttrust.VerificationResult{
+		Status:         artifacttrust.VerificationStatusLegacy,
+		Error:          "artifact registered without cryptographic verification",
+		SignatureType:  signatureType,
+		SignatureKeyID: signatureKeyID,
+	}
+	if globalPolicy.VerificationMode == artifacttrust.VerificationModeRequire {
+		if signatureKeyID == "" {
+			return result, fmt.Errorf("signatureKeyId required when signature is provided")
+		}
+		return result, fmt.Errorf("cryptographic verification requires configured object storage")
+	}
+	return result, nil
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hardwareops/control-plane/internal/artifactingest"
+	"github.com/hardwareops/control-plane/internal/artifacttrust"
 	"github.com/hardwareops/control-plane/internal/auth"
 	"github.com/hardwareops/control-plane/internal/backup"
 	"github.com/hardwareops/control-plane/internal/certs"
@@ -113,6 +114,31 @@ func main() {
 	if cfg.MetricsEnabled {
 		metricsCollector = metrics.New()
 	}
+	seededTrustPolicy, seededTrustKeys, err := artifacttrust.SeedBootstrapState(context.Background(), store, artifacttrust.BootstrapConfig{
+		StaticFile:  cfg.TrustedSigningKeysFile,
+		StaticJSON:  cfg.TrustedSigningKeysJSON,
+		AWSSecretID: cfg.TrustedSigningKeysAWSSecretID,
+		AWSRegion:   cfg.TrustedSigningKeysAWSRegion,
+		DefaultPolicy: artifacttrust.DefaultPolicyConfig{
+			HardenedProfile:         cfg.HardenedProfile,
+			VerificationMode:        cfg.ArtifactTrustVerificationMode,
+			AllowedSigningKeyIDs:    cfg.ArtifactTrustAllowedSigningKeyIDs,
+			AllowedSignatureTypes:   cfg.ArtifactTrustAllowedSignatureTypes,
+			RequireSignatureDefault: cfg.ArtifactSignatureRequireDefault,
+			EnforceIngest:           cfg.ArtifactSignatureEnforceIngest,
+			RequiredKeyID:           cfg.ArtifactSignatureKeyID,
+		},
+	})
+	if err != nil {
+		logger.Fatalf("artifact trust bootstrap: %v", err)
+	}
+	logger.Printf(
+		"artifact trust initialized mode=%s trusted_keys=%d static=%t aws_secret=%t",
+		seededTrustPolicy.VerificationMode,
+		len(seededTrustKeys),
+		strings.TrimSpace(cfg.TrustedSigningKeysFile) != "" || strings.TrimSpace(cfg.TrustedSigningKeysJSON) != "",
+		strings.TrimSpace(cfg.TrustedSigningKeysAWSSecretID) != "",
+	)
 	var licenseManager *license.Manager
 	if cfg.LicenseEnforce {
 		keyMode := strings.ToLower(strings.TrimSpace(cfg.LicenseKeyMode))
@@ -342,9 +368,13 @@ func main() {
 		ArtifactPullMaxBytes:            cfg.ArtifactPullMaxBytes,
 		ArtifactPullTimeout:             cfg.ArtifactPullTimeout,
 		ArtifactPullAllowInsecureHTTP:   cfg.ArtifactPullAllowInsecureHTTP,
+		ArtifactTrustVerificationMode:   cfg.ArtifactTrustVerificationMode,
+		ArtifactTrustAllowedKeyIDs:      cfg.ArtifactTrustAllowedSigningKeyIDs,
+		ArtifactTrustAllowedSigTypes:    cfg.ArtifactTrustAllowedSignatureTypes,
 		ArtifactSignatureRequireDefault: cfg.ArtifactSignatureRequireDefault,
 		ArtifactSignatureEnforceIngest:  cfg.ArtifactSignatureEnforceIngest,
 		ArtifactSignatureKeyID:          cfg.ArtifactSignatureKeyID,
+		HardenedProfile:                 cfg.HardenedProfile,
 		ArtifactPullCreds:               pullCredentialManager,
 		ArtifactPullCredsManager:        pullCredentialManager,
 		ReleaseAutoUpdate:               releaseAutoUpdateManager,
@@ -379,6 +409,19 @@ func main() {
 			metricsCollector.SetStorageUsage(stats.Count, stats.SizeBytes)
 		} else if err != nil {
 			logger.Printf("metrics artifact stats error: %v", err)
+		}
+		for _, status := range []string{
+			artifacttrust.VerificationStatusUnsigned,
+			artifacttrust.VerificationStatusLegacy,
+			artifacttrust.VerificationStatusVerified,
+			artifacttrust.VerificationStatusFailed,
+			artifacttrust.VerificationStatusUntrusted,
+		} {
+			if count, err := store.CountArtifactsByVerificationStatus(status); err == nil {
+				metricsCollector.SetArtifactVerificationState(status, count)
+			} else {
+				logger.Printf("metrics artifact verification status=%s error: %v", status, err)
+			}
 		}
 	}
 	updateMetricsCounts()

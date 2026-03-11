@@ -83,9 +83,13 @@ type Dependencies struct {
 	ArtifactPullMaxBytes            int64
 	ArtifactPullTimeout             time.Duration
 	ArtifactPullAllowInsecureHTTP   bool
+	ArtifactTrustVerificationMode   string
+	ArtifactTrustAllowedKeyIDs      []string
+	ArtifactTrustAllowedSigTypes    []string
 	ArtifactSignatureRequireDefault bool
 	ArtifactSignatureEnforceIngest  bool
 	ArtifactSignatureKeyID          string
+	HardenedProfile                 bool
 	ArtifactPullCreds               artifactingest.CredentialResolver
 	ArtifactPullCredsManager        *artifactingest.PullCredentialManager
 	ReleaseAutoUpdate               *releaseautoupdate.Manager
