@@ -21,7 +21,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Phase B — Operational Maturity | 🟢 Complete | Audit/metrics/events/lifecycle/CI ingest/bulk ops shipped and operational. |
 | Phase B Extension — UX + Realtime | 🟢 Complete | Bulk actions + realtime updates + auth-session UX reset shipped. |
 | Operational Hardening (between B and C) | 🟢 Complete | Pull-boundary, token exposure, startup guardrails, break-glass backend, proxy trust policy, and abuse controls are all shipped. |
-| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, and the first two local-auth recovery layers are shipped. Remaining Phase C work is break-glass/email password recovery closeout, custom RBAC, CI workload identity, provenance policy, LDAP, and broader secrets integration. |
+| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, and the first three local-auth recovery layers are shipped. Remaining Phase C work is email password recovery closeout, custom RBAC, CI workload identity, provenance policy, LDAP, and broader secrets integration. |
 | Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Live-deployment acceptance gate execution remains. |
 
 ### Active work queue (what is still to do)
@@ -29,7 +29,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 No items currently in-flight. Queue is clear.
 
 ### Prepared next tasks (agent-scoped)
-- `C-PASSWORD-RECOVERY-3/4` — break-glass local reset + optional email delivery + runbook closeout
+- `C-PASSWORD-RECOVERY-4` — optional email delivery + deployment/runbook closeout
 - `C-CUSTOM-RBAC` — per-resource policy model on top of fixed roles
 - `C-CI-WORKLOAD-IDENTITY` — OIDC-based CI publish/pull credentials without long-lived secrets
 
@@ -76,6 +76,7 @@ No items currently in-flight. Queue is clear.
 - ✅ Trusted-key deployment wiring and AWS validation (startup seeding from `TRUSTED_SIGNING_KEYS_*` / `ARTIFACT_TRUST_*`; on-prem and AWS deployment templates updated; AWS `parcel/dev` bootstrapped from Secrets Manager; `scripts/test-artifact-trust.sh` validates unsigned reject / signed accept / wrong-key reject against the live stack).
 - ✅ Trust-override UX in desired-state editors (group, device, and multi-group desired-state rows can open a component trust-override modal; operators can set verification mode, allowed signature types, and allowed key IDs with inherited/effective-policy previews; artifact pickers and version selectors enforce the effective trust policy inline).
 - ✅ Password recovery layers 1–2 (self-service recovery codes plus admin-issued one-time reset tokens with audit coverage and login-screen redemption flows).
+- ✅ Password recovery layer 3 (host-local break-glass CLI for emergency local-admin password reset and recovery-admin creation with explicit audit reason capture).
 
 ---
 
@@ -486,7 +487,7 @@ Confirm priorities with the team before mapping to agents.
   - Emergency break-glass local reset path is explicit, gated, and fully audited.
   - Optional email delivery supports account setup/password reset for connected deployments.
   - Recovery path is auditable end-to-end across UI/API/CLI.
-- **Notes:** Implement this in layers so airgapped recovery lands first and the connected/email path reuses the same token model. Recovery codes and operator-issued reset tokens are shipped. Remaining work is break-glass local reset CLI, optional email delivery, and the final runbook closeout.
+- **Notes:** Implement this in layers so airgapped recovery lands first and the connected/email path reuses the same token model. Recovery codes, operator-issued reset tokens, and host-local break-glass CLI recovery are shipped. Remaining work is optional email delivery and the final deployment/runbook closeout.
 - **Phase C design:**
   - **Layer 1 — Recovery codes:** self-service one-time codes generated per user, stored only as hashes, downloadable once, usable from the login screen.
   - **Layer 2 — Operator reset token:** local admin can generate a short-lived one-time reset token for a target user and hand it to them out of band.
@@ -495,7 +496,7 @@ Confirm priorities with the team before mapping to agents.
 - **Subtasks:**
   - **C-PASSWORD-RECOVERY-1:** ✅ Recovery codes backend + UI (`POST /api/v1/auth/recovery-codes/generate`, `POST /api/v1/auth/recovery-codes/reset`, download/copy UX, audit events).
   - **C-PASSWORD-RECOVERY-2:** ✅ Operator-issued reset token backend + admin UI (`POST /api/v1/users/{userId}/password-reset-token`, `POST /api/v1/auth/password-reset/complete`, TTL, reason, one-time use, audit events).
-  - **C-PASSWORD-RECOVERY-3:** Break-glass local CLI reset/create-admin path for total lockout recovery.
+  - **C-PASSWORD-RECOVERY-3:** ✅ Break-glass local CLI reset/create-admin path for total lockout recovery (`control-plane auth breakglass reset-password ...`, `control-plane auth breakglass create-admin ...`) with required reason and audit event.
   - **C-PASSWORD-RECOVERY-4:** Optional email delivery for account setup/reset plus deployment/runbook guidance for SMTP-capable environments.
 
 #### CI workload identity federation

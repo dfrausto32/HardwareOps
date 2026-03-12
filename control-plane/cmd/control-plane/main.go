@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -26,14 +28,21 @@ import (
 	"github.com/hardwareops/control-plane/internal/migrate"
 	"github.com/hardwareops/control-plane/internal/objectstore"
 	"github.com/hardwareops/control-plane/internal/releaseautoupdate"
+	storepkg "github.com/hardwareops/control-plane/internal/store"
 	"github.com/hardwareops/control-plane/internal/store/postgres"
 	"github.com/hardwareops/control-plane/internal/upgrade"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
-	cfg := config.FromEnv()
 	logger := log.New(os.Stdout, "", log.LstdFlags)
+	if handled, err := tryRunBreakglassCommand(logger); handled {
+		if err != nil {
+			logger.Fatal(err)
+		}
+		return
+	}
+	cfg := config.FromEnv()
 
 	cleanupPEMFiles, err := materializePEMFiles(&cfg)
 	if err != nil {
@@ -603,6 +612,178 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logger.Fatalf("server error: %v", err)
 	}
+}
+
+func tryRunBreakglassCommand(logger *log.Logger) (bool, error) {
+	if len(os.Args) < 2 || os.Args[1] != "auth" {
+		return false, nil
+	}
+	if len(os.Args) < 3 || os.Args[2] != "breakglass" {
+		return true, fmt.Errorf("unknown auth command; expected: auth breakglass <reset-password|create-admin>")
+	}
+	if len(os.Args) < 4 {
+		return true, fmt.Errorf("missing breakglass subcommand")
+	}
+	cfg := config.FromEnv()
+	if cfg.DatabaseURL == "" {
+		return true, fmt.Errorf("DATABASE_URL is required")
+	}
+	if cfg.AuthMode != "" && cfg.AuthMode != auth.ModeLocal {
+		return true, fmt.Errorf("breakglass commands require AUTH_MODE=%s", auth.ModeLocal)
+	}
+	switch os.Args[3] {
+	case "reset-password":
+		return true, runBreakglassResetPassword(logger, cfg.DatabaseURL, os.Args[4:])
+	case "create-admin":
+		return true, runBreakglassCreateAdmin(logger, cfg.DatabaseURL, os.Args[4:])
+	default:
+		return true, fmt.Errorf("unknown breakglass subcommand: %s", os.Args[3])
+	}
+}
+
+func runBreakglassResetPassword(logger *log.Logger, databaseURL string, args []string) error {
+	fs := flag.NewFlagSet("breakglass reset-password", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	email := fs.String("email", "", "target local user email")
+	password := fs.String("password", "", "temporary password to set (optional; generated if empty)")
+	reason := fs.String("reason", "", "required audit reason")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*email) == "" {
+		return fmt.Errorf("--email is required")
+	}
+	if strings.TrimSpace(*reason) == "" {
+		return fmt.Errorf("--reason is required")
+	}
+	if strings.TrimSpace(*password) == "" {
+		generated, err := auth.GenerateBreakglassPassword()
+		if err != nil {
+			return err
+		}
+		*password = generated
+	}
+	pool, st, err := openPostgresStore(databaseURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	user, err := auth.BreakglassResetPassword(st, *email, *password)
+	event := newBreakglassAuditEvent("auth.breakglass.password_reset", "user", breakglassTargetID(user, *email), *reason)
+	if err != nil {
+		event.Status = "error"
+		event.Error = err.Error()
+		_ = st.CreateAuditEvent(event)
+		return err
+	}
+	event.Status = "success"
+	event.AfterJSON = auditJSON(map[string]any{
+		"email": user.Email,
+	})
+	if auditErr := st.CreateAuditEvent(event); auditErr != nil {
+		return fmt.Errorf("password reset succeeded but audit failed: %w", auditErr)
+	}
+	logger.Printf("breakglass password reset complete user=%s email=%s", user.UserID, user.Email)
+	fmt.Printf("email: %s\n", user.Email)
+	fmt.Printf("temporary_password: %s\n", *password)
+	return nil
+}
+
+func runBreakglassCreateAdmin(logger *log.Logger, databaseURL string, args []string) error {
+	fs := flag.NewFlagSet("breakglass create-admin", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	email := fs.String("email", "", "new local admin email")
+	displayName := fs.String("display-name", "Recovery Admin", "display name")
+	password := fs.String("password", "", "temporary password to set (optional; generated if empty)")
+	reason := fs.String("reason", "", "required audit reason")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*email) == "" {
+		return fmt.Errorf("--email is required")
+	}
+	if strings.TrimSpace(*reason) == "" {
+		return fmt.Errorf("--reason is required")
+	}
+	if strings.TrimSpace(*password) == "" {
+		generated, err := auth.GenerateBreakglassPassword()
+		if err != nil {
+			return err
+		}
+		*password = generated
+	}
+	pool, st, err := openPostgresStore(databaseURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	user, err := auth.BreakglassCreateAdmin(st, *email, *displayName, *password)
+	event := newBreakglassAuditEvent("auth.breakglass.admin_create", "user", breakglassTargetID(user, *email), *reason)
+	if err != nil {
+		event.Status = "error"
+		event.Error = err.Error()
+		_ = st.CreateAuditEvent(event)
+		return err
+	}
+	event.Status = "success"
+	event.AfterJSON = auditJSON(map[string]any{
+		"email":       user.Email,
+		"displayName": user.DisplayName,
+		"roles":       []string{"admin"},
+	})
+	if auditErr := st.CreateAuditEvent(event); auditErr != nil {
+		return fmt.Errorf("admin create succeeded but audit failed: %w", auditErr)
+	}
+	logger.Printf("breakglass admin create complete user=%s email=%s", user.UserID, user.Email)
+	fmt.Printf("email: %s\n", user.Email)
+	fmt.Printf("temporary_password: %s\n", *password)
+	return nil
+}
+
+func openPostgresStore(databaseURL string) (*pgxpool.Pool, storepkg.Store, error) {
+	pool, err := pgxpool.New(context.Background(), databaseURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("db connect: %w", err)
+	}
+	return pool, postgres.New(pool), nil
+}
+
+func newBreakglassAuditEvent(action, targetType, targetID, reason string) storepkg.AuditEvent {
+	host, _ := os.Hostname()
+	metadata := map[string]any{
+		"reason":  reason,
+		"host":    host,
+		"command": action,
+	}
+	metadataJSON, _ := json.Marshal(metadata)
+	return storepkg.AuditEvent{
+		EventID:      fmt.Sprintf("breakglass-%d", time.Now().UTC().UnixNano()),
+		OccurredAt:   time.Now().UTC(),
+		ActorType:    "breakglass",
+		ActorID:      strings.TrimSpace(os.Getenv("USER")),
+		AuthMethod:   "local_cli",
+		SourceIP:     "local",
+		UserAgent:    "hardwareops-control-plane-cli",
+		Action:       action,
+		TargetType:   targetType,
+		TargetID:     targetID,
+		MetadataJSON: metadataJSON,
+	}
+}
+
+func breakglassTargetID(user storepkg.User, fallback string) string {
+	if user.UserID != "" {
+		return user.UserID
+	}
+	return strings.TrimSpace(strings.ToLower(fallback))
+}
+
+func auditJSON(v any) []byte {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
 func materializePEMFiles(cfg *config.Config) (func(), error) {
