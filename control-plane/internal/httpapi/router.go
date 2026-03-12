@@ -112,6 +112,9 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(loginLimiter.Middleware).Post("/auth/login", handlers.Login(logger, deps.Auth, deps.Store, deps.TrustProxy, deps.AuthLoginBackoff))
 		r.Post("/auth/register", handlers.Register(logger, deps.Auth, deps.Store, deps.TrustProxy))
 		r.With(loginLimiter.Middleware).Post("/auth/password-reset/complete", handlers.CompletePasswordResetToken(logger, deps.Auth, deps.Store, deps.TrustProxy))
+		if deps.WorkloadIdentity != nil {
+			r.With(loginLimiter.Middleware).Post("/auth/workload-identity/exchange", handlers.ExchangeWorkloadIdentityToken(logger, deps.Auth, deps.WorkloadIdentity, deps.Store, deps.TrustProxy))
+		}
 		if deps.OIDCProvider != nil {
 			r.Get("/auth/oidc/login", handlers.OIDCLogin(deps.OIDCProvider))
 			r.Get("/auth/oidc/callback", handlers.OIDCCallback(logger, deps.OIDCProvider, deps.Store, deps.TrustProxy))

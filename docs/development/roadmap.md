@@ -268,7 +268,7 @@ No items currently in-flight. Queue is clear.
 - **Dependencies:** Secrets management; ingest modes.
 - **Risks:** Credential leakage.
 - **Acceptance:** CI can publish artifacts without long‑lived creds.
-- **Notes:** Presigned CI push path implemented (`/artifacts/presign-upload` + `/artifacts/complete`) with scoped expiring service tokens (`artifact.publish`) and `scripts/ci-upload-artifact.sh`. Pull ingest API implemented (`/artifacts/pull`) with checksum validation + host/size/timeout guardrails plus CI helper `scripts/ci-pull-artifact.sh`. Adapter framework and backward-compatible source shape are in place (`sourceUrl` or `source.kind` + `source.uri`; current kinds=`http`,`artifactory`). Credential resolver abstraction is in place (`source.credentialRef`) with static map (`ARTIFACT_PULL_CREDENTIALS_FILE`/`ARTIFACT_PULL_CREDENTIALS_JSON`) plus AWS Secrets Manager-backed loading (`ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID`). Pull resolver operational workflow is implemented with admin status/reload endpoints (`GET/POST /api/v1/artifacts/pull-credentials*`) and helper script (`scripts/reload-pull-credentials.sh`). Artifactory adapter shipped with local docker smoke scripts (`scripts/setup-artifactory-demo.sh`, `scripts/test-artifactory-adapter.sh`) and signed artifact demo flow. Smoke coverage now validates push + pull + pull-credential reload audit path in `scripts/test-artifact-ingest.sh` (see `artifact-ingest-test-plan.md`). CI provider scaffold templates added for GitHub Actions/GitLab/Jenkins (`../../deploy/ci/README.md`). Vault resolver backend is deferred to Phase C.
+- **Notes:** Presigned CI push path implemented (`/artifacts/presign-upload` + `/artifacts/complete`) with scoped expiring service tokens (`artifact.publish`) and `scripts/ci-upload-artifact.sh`. Pull ingest API implemented (`/artifacts/pull`) with checksum validation + host/size/timeout guardrails plus CI helper `scripts/ci-pull-artifact.sh`. Adapter framework and backward-compatible source shape are in place (`sourceUrl` or `source.kind` + `source.uri`; current kinds=`http`,`artifactory`). Credential resolver abstraction is in place (`source.credentialRef`) with static map (`ARTIFACT_PULL_CREDENTIALS_FILE`/`ARTIFACT_PULL_CREDENTIALS_JSON`) plus AWS Secrets Manager-backed loading (`ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID`). Pull resolver operational workflow is implemented with admin status/reload endpoints (`GET/POST /api/v1/artifacts/pull-credentials*`) and helper script (`scripts/reload-pull-credentials.sh`). Artifactory adapter shipped with local docker smoke scripts (`scripts/setup-artifactory-demo.sh`, `scripts/test-artifactory-adapter.sh`) and signed artifact demo flow. Smoke coverage now validates push + pull + pull-credential reload audit path in `scripts/test-artifact-ingest.sh` (see `artifact-ingest-test-plan.md`). CI provider scaffold templates added for GitHub Actions/GitLab/Jenkins (`../../deploy/ci/README.md`). Phase C adds workload identity exchange for OIDC job tokens (`/api/v1/auth/workload-identity/exchange`) plus the GitHub Actions helper flow in `scripts/ci-exchange-workload-identity.sh`. Vault resolver backend is deferred to Phase C.
 
 ### Recommended Next Sequence (Pending Prioritization)
 The 2026-03-10 D-hardening batch merged. Items 1–3 below are now complete. Remaining candidates:
@@ -499,12 +499,12 @@ Confirm priorities with the team before mapping to agents.
   - **C-PASSWORD-RECOVERY-4:** Deferred to Phase D as `D-PASSWORD-RECOVERY-EMAIL`.
 
 #### CI workload identity federation
-- **Status:** ⬜ Planned
+- **Status:** 🟡 In progress
 - **Scope:** OIDC-based CI auth (GitHub/GitLab/Jenkins) for publish/pull without static secrets.
 - **Dependencies:** OIDC trust config, service-token exchange endpoint/policy.
 - **Risks:** Misconfigured trust policies.
 - **Acceptance:** CI jobs can obtain short-lived publish credentials by identity, no long-lived credential files required.
-- **Notes:** Candidate for Phase C once Phase B static-secret resolver and adapters are complete.
+- **Notes:** Generic workload identity exchange is shipped for OIDC job tokens via `POST /api/v1/auth/workload-identity/exchange`, with config-driven issuer/audience/claim matching and short-lived internal bearer tokens carrying `artifact.publish`. GitHub Actions helper flow is shipped in `scripts/ci-exchange-workload-identity.sh` plus updated push/pull templates (`id-token: write`). Remaining work is GitLab/Jenkins first-class helper templates and provider-specific runbooks.
 
 #### Supply-chain provenance policy (Cosign/Sigstore)
 - **Status:** ⬜ Planned

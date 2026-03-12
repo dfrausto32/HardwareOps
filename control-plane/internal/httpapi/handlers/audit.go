@@ -48,6 +48,9 @@ func buildAuditEvent(r *http.Request, trustProxy bool, actor AuditActor, action,
 			}
 		} else if svc, ok := auth.ServiceTokenFromContext(r.Context()); ok {
 			actor.Type = "service_token"
+			if svc.AuthMethod == "workload_identity" {
+				actor.Type = "workload_identity"
+			}
 			actor.ID = svc.TokenID
 			actor.Email = svc.Name
 			actor.Roles = svc.Scopes

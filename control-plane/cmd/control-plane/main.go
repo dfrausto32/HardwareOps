@@ -256,6 +256,7 @@ func main() {
 	var authManager *auth.Manager
 	var authLoginBackoff *auth.LoginBackoff
 	var oidcProvider *auth.OIDCProvider
+	var workloadIdentityManager *auth.WorkloadIdentityManager
 	if cfg.AuthMode != "" && cfg.AuthMode != "disabled" {
 		manager, err := auth.NewManager(cfg.AuthMode, cfg.AuthJWTSecret, cfg.AuthTokenTTL, cfg.AuthIssuer, store)
 		if err != nil {
@@ -290,6 +291,17 @@ func main() {
 		}
 		oidcProvider = p
 		logger.Printf("oidc provider initialized issuer=%s", cfg.AuthOIDCIssuer)
+	}
+	if cfg.WorkloadIdentityEnabled() {
+		if authManager == nil || !authManager.Enabled() {
+			logger.Fatal("workload identity requires AUTH_MODE to be enabled")
+		}
+		manager, err := auth.NewWorkloadIdentityManager(context.Background(), &cfg)
+		if err != nil {
+			logger.Fatalf("workload identity init: %v", err)
+		}
+		workloadIdentityManager = manager
+		logger.Printf("workload identity initialized providers=%s", strings.Join(manager.ProviderNames(), ","))
 	}
 	artifactLifecycleManager := lifecycle.NewManager(lifecycle.ManagerConfig{
 		Enabled:                 cfg.ArtifactPruneEnabled,
@@ -368,6 +380,7 @@ func main() {
 		Auth:                            authManager,
 		AuthLoginBackoff:                authLoginBackoff,
 		OIDCProvider:                    oidcProvider,
+		WorkloadIdentity:                workloadIdentityManager,
 		BootstrapToken:                  cfg.BootstrapToken,
 		License:                         licenseManager,
 		CertManager:                     certManager,

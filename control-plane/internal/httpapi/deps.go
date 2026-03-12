@@ -74,6 +74,7 @@ type Dependencies struct {
 	Auth                            *auth.Manager
 	AuthLoginBackoff                *auth.LoginBackoff
 	OIDCProvider                    *auth.OIDCProvider
+	WorkloadIdentity                auth.WorkloadIdentityExchanger
 	BootstrapToken                  string
 	License                         *license.Manager
 	CertManager                     *certs.Manager

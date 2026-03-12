@@ -155,6 +155,11 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
+		if workload, ok, err := m.workloadTokenFromToken(tokenStr); err == nil && ok {
+			ctx := context.WithValue(r.Context(), serviceKey, workload)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
 		if svc, ok, _ := m.serviceTokenFromToken(tokenStr); ok {
 			ctx := context.WithValue(r.Context(), serviceKey, svc)
 			next.ServeHTTP(w, r.WithContext(ctx))

@@ -125,6 +125,8 @@ type Config struct {
 	AuthOIDCGroupClaim                   string
 	AuthOIDCRoleMap                      string
 	AuthOIDCDefaultRole                  string
+	CIWorkloadIdentityProvidersJSON      string
+	CIWorkloadIdentityProvidersFile      string
 	BootstrapToken                       string
 	LicensePath                          string
 	LicensePublicKey                     string
@@ -272,6 +274,8 @@ func FromEnv() Config {
 		AuthOIDCGroupClaim:                   getenvDefault("AUTH_OIDC_GROUP_CLAIM", "groups"),
 		AuthOIDCRoleMap:                      os.Getenv("AUTH_OIDC_ROLE_MAP"),
 		AuthOIDCDefaultRole:                  getenvDefault("AUTH_OIDC_DEFAULT_ROLE", "viewer"),
+		CIWorkloadIdentityProvidersJSON:      os.Getenv("CI_WORKLOAD_IDENTITY_PROVIDERS_JSON"),
+		CIWorkloadIdentityProvidersFile:      os.Getenv("CI_WORKLOAD_IDENTITY_PROVIDERS_FILE"),
 		BootstrapToken:                       os.Getenv("BOOTSTRAP_TOKEN"),
 		LicensePath:                          os.Getenv("LICENSE_PATH"),
 		LicensePublicKey:                     os.Getenv("LICENSE_PUBLIC_KEY"),
@@ -379,4 +383,10 @@ func parseBoolEnvDefault(key string, def bool) bool {
 // OIDCEnabled returns true when OIDC SSO is configured.
 func (c *Config) OIDCEnabled() bool {
 	return strings.TrimSpace(c.AuthOIDCIssuer) != ""
+}
+
+// WorkloadIdentityEnabled returns true when CI workload identity providers are configured.
+func (c *Config) WorkloadIdentityEnabled() bool {
+	return strings.TrimSpace(c.CIWorkloadIdentityProvidersJSON) != "" ||
+		strings.TrimSpace(c.CIWorkloadIdentityProvidersFile) != ""
 }

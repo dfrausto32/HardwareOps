@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+BASE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 BASE_URL=${BASE_URL:-https://localhost:8080}
 CA_CERT_PATH=${CA_CERT_PATH:-}
 INSECURE=${INSECURE:-0}
@@ -44,8 +45,11 @@ fi
 if [ -z "$AUTH_TOKEN" ] && [ -n "$CI_SERVICE_TOKEN" ]; then
   AUTH_TOKEN="$CI_SERVICE_TOKEN"
 fi
+if [ -z "$AUTH_TOKEN" ] && [ -z "$CI_SERVICE_TOKEN" ]; then
+  AUTH_TOKEN=$("$BASE_DIR/scripts/ci-exchange-workload-identity.sh")
+fi
 if [ -z "$AUTH_TOKEN" ]; then
-  echo "AUTH_TOKEN or CI_SERVICE_TOKEN is required." >&2
+  echo "AUTH_TOKEN, CI_SERVICE_TOKEN, or workload identity exchange is required." >&2
   exit 1
 fi
 

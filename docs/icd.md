@@ -57,6 +57,7 @@ Auth modes:
 - `AUTH_MODE=disabled`: role gates are bypassed
 - local/JWT auth: use `Authorization: Bearer <token>`
 - service tokens: scoped machine tokens for automation
+- workload identity exchange: external CI OIDC token exchanged for short-lived HardwareOps bearer token
 
 Current scope gate:
 - `artifact.publish` allows pull/presign/complete ingest flows without user JWT
@@ -82,6 +83,7 @@ All paths below are full paths.
 | POST | `/api/v1/auth/vouchers` | admin | create registration voucher |
 | POST | `/api/v1/auth/service-tokens` | admin | create service token |
 | GET | `/api/v1/auth/service-tokens` | admin | list service tokens |
+| POST | `/api/v1/auth/workload-identity/exchange` | anonymous CI workload | exchange external OIDC token for short-lived publish token |
 | POST | `/api/v1/auth/service-tokens/{tokenId}/revoke` | operator | break-glass revoke; JSON body requires `reason` |
 | POST | `/api/v1/auth/service-tokens/{tokenId}/rotate` | operator | break-glass rotate; JSON body requires `reason`, optional `ttlHours` |
 | POST | `/api/v1/users` | admin | create local user |
