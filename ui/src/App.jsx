@@ -90,9 +90,11 @@ import EnrollmentProfileEditModal from './components/modals/EnrollmentProfileEdi
 import SecurityPage from './features/security/SecurityPage'
 import SettingsPage from './features/settings/SettingsPage'
 import DeviceDrawer from './features/devices/DeviceDrawer'
+import DevicesSection from './features/devices/DevicesSection'
 import GroupMultiDesiredModal from './features/groups/GroupMultiDesiredModal'
 import GroupDesiredModal from './features/groups/GroupDesiredModal'
 import BulkGroupManagementModal from './features/groups/BulkGroupManagementModal'
+import GroupsSection from './features/groups/GroupsSection'
 
 import {
   nav,
@@ -4187,339 +4189,71 @@ export default function App() {
 
             </section>
 
-            <section id="devices" className="card">
-              <div className="section-header">
-                <h2>Devices</h2>
-                <div className="inline-row">
-                  <select
-                    value={deviceStatusFilter}
-                    onChange={(e) => setDeviceStatusFilter(e.target.value)}
-                  >
-                    <option value="all">All</option>
-                    <option value="active">Active</option>
-                    <option value="degraded">Degraded</option>
-                    <option value="stale">Stale</option>
-                    <option value="offline">Offline</option>
-                  </select>
-                  <button onClick={loadDevices} className="button">Refresh</button>
-                </div>
-              </div>
-              {devicesError && <div className="error">{devicesError}</div>}
-              {selectedDeviceIds.length > 1 && (
-                <div className="group-selection-toolbar">
-                  <div className="group-selection-count">{selectedDeviceIds.length} selected</div>
-                  <div className="inline-row">
-                    {canDecommissionDevices && (
-                      <button
-                        className="button"
-                        onClick={handleBulkDecommissionSelectedDevices}
-                        disabled={selectedDeviceIds.length === 0}
-                      >
-                        Decommission Selected
-                      </button>
-                    )}
-                    <button className="button ghost" onClick={clearDeviceSelection} disabled={selectedDeviceIds.length === 0}>
-                      Clear
-                    </button>
-                  </div>
-                </div>
-              )}
-              {devicesLoading ? (
-                <div className="placeholder">Loading devices...</div>
-              ) : (
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>
-                          <input
-                            type="checkbox"
-                            checked={allDevicesSelected}
-                            ref={(el) => {
-                              if (el) {
-                                el.indeterminate = someDevicesSelected
-                              }
-                            }}
-                            onChange={(e) => handleSelectAllDevices(e.target.checked)}
-                          />
-                        </th>
-                        <th>Device ID</th>
-                        <th>Status</th>
-                        <th>Last Seen</th>
-                        <th>Labels</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredDevices.map((d, index) => (
-                        <tr
-                          key={d.deviceId}
-                          className={selectedDeviceId === d.deviceId ? 'selected' : ''}
-                          onClick={() => {
-                            setSelectedDeviceId(d.deviceId)
-                            setDeviceDrawerOpen(true)
-                            setDeviceFormDirty(false)
-                          }}
-                        >
-                          <td>
-                            <input
-                              type="checkbox"
-                              checked={selectedDeviceSet.has(d.deviceId)}
-                              onClick={(e) => e.stopPropagation()}
-                              onChange={(e) => handleDeviceRowSelect(index, e.target.checked, Boolean(e.nativeEvent?.shiftKey))}
-                            />
-                          </td>
-                          <td>{d.deviceId}</td>
-                          <td>
-                            <span className={`pill status ${(d.status || 'unknown').toLowerCase()}`}>
-                              {d.status || 'unknown'}
-                            </span>
-                            {deviceSourceFor(d) === 'manual' && (
-                              <span className="pill source manual">manual</span>
-                            )}
-                            {deviceSourceFor(d) === 'group' && (
-                              <span className="pill source group">group</span>
-                            )}
-                            {deviceSourceFor(d) === 'agent' && (
-                              <span className="pill source agent">agent</span>
-                            )}
-                          </td>
-                          <td>{d.lastSeen || '—'}</td>
-                          <td><code>{d.labels ? JSON.stringify(d.labels) : '—'}</code></td>
-                        </tr>
-                      ))}
-                      {filteredDevices.length === 0 && (
-                        <tr>
-                          <td colSpan={5}>No devices match this filter.</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </section>
+            <DevicesSection
+              {...{
+                allDevicesSelected,
+                canDecommissionDevices,
+                clearDeviceSelection,
+                deviceSourceFor,
+                deviceStatusFilter,
+                devicesError,
+                devicesLoading,
+                filteredDevices,
+                handleBulkDecommissionSelectedDevices,
+                handleDeviceRowSelect,
+                handleSelectAllDevices,
+                loadDevices,
+                selectedDeviceId,
+                selectedDeviceIds,
+                selectedDeviceSet,
+                setDeviceDrawerOpen,
+                setDeviceFormDirty,
+                setDeviceStatusFilter,
+                setSelectedDeviceId,
+                someDevicesSelected,
+              }}
+            />
 
-            <section id="groups" className="card">
-              <div className="section-header">
-                <h2>Groups</h2>
-                <div className="inline-row">
-                  {canManageGroups && (
-                    <button
-                      onClick={() => {
-                        setGroupForm({ groupId: '', name: '', region: '', role: '', site: '', custom: [] })
-                        setGroupModalOpen(true)
-                      }}
-                      className="button"
-                    >
-                      Add Group
-                    </button>
-                  )}
-                  {canManageGroups && (
-                    <button
-                      onClick={() => {
-                        setGroupBulkOpen(true)
-                        setGroupBulkError('')
-                        setGroupBulkStatus('')
-                      }}
-                      className="button ghost"
-                    >
-                      Advanced CSV
-                    </button>
-                  )}
-                  <button onClick={loadGroups} className="button ghost">Refresh</button>
-                </div>
-              </div>
-              {groupsError && <div className="error">{groupsError}</div>}
-              {groupBatchError && <div className="error">{groupBatchError}</div>}
-
-              {selectedGroupIds.length > 1 && (
-                <div className="group-selection-toolbar">
-                  <div className="group-selection-count">{selectedGroupIds.length} selected</div>
-                  <div className="inline-row">
-                    {canManageGroups && (
-                      <button className="button ghost" onClick={openGroupMultiEdit} disabled={selectedGroupIds.length === 0}>
-                        Edit Selected
-                      </button>
-                    )}
-                    {canManageDesiredState && (
-                      <button className="button ghost" onClick={openGroupMultiDesired} disabled={selectedGroupIds.length === 0}>
-                        Set Desired Selected
-                      </button>
-                    )}
-                    {canManageGroups && (
-                      <button className="button" onClick={() => handleBulkDeleteSelectedGroups(false)} disabled={selectedGroupIds.length === 0}>
-                        Delete Selected
-                      </button>
-                    )}
-                    {canManageGroups && canDecommissionDevices && (
-                      <button className="button ghost" onClick={() => handleBulkDeleteSelectedGroups(true)} disabled={selectedGroupIds.length === 0}>
-                        Delete + Devices
-                      </button>
-                    )}
-                    <button className="button ghost" onClick={clearGroupSelection} disabled={selectedGroupIds.length === 0}>
-                      Clear
-                    </button>
-                  </div>
-                  {groupBatchStatus && <div className="status">{groupBatchStatus}</div>}
-                </div>
-              )}
-
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>
-                        <input
-                          type="checkbox"
-                          checked={allGroupsSelected}
-                          ref={(el) => {
-                            if (el) {
-                              el.indeterminate = someGroupsSelected
-                            }
-                          }}
-                          onChange={(e) => handleSelectAllGroups(e.target.checked)}
-                        />
-                      </th>
-                      <th>Name</th>
-                      <th>Selector</th>
-                      <th>Devices</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {groups.map((group, index) => (
-                      <tr key={group.groupId} className={selectedGroupId === group.groupId ? 'selected' : ''}>
-                        <td>
-                          <input
-                            type="checkbox"
-                            checked={selectedGroupSet.has(group.groupId)}
-                            onChange={(e) => handleGroupRowSelect(index, e.target.checked, Boolean(e.nativeEvent?.shiftKey))}
-                          />
-                        </td>
-                        <td>{group.name || group.groupId}</td>
-                        <td><code>{formatSelector(group.selector || {})}</code></td>
-                        <td>{groupCounts[group.groupId] ?? 0}</td>
-                        <td>
-                          {canManageGroups && (
-                            <button
-                              className="button ghost"
-                              onClick={() => {
-                                const parsed = selectorToForm(normalizeObject(group.selector))
-                                setGroupForm({
-                                  groupId: group.groupId,
-                                  name: group.name || '',
-                                  region: parsed.region,
-                                  role: parsed.role,
-                                  site: parsed.site,
-                                  custom: parsed.custom,
-                                })
-                                setGroupModalOpen(true)
-                              }}
-                            >
-                              Edit
-                            </button>
-                          )}
-                          <button
-                            className="button ghost"
-                            onClick={() => setSelectedGroupId(group.groupId)}
-                          >
-                            {canEditDeviceLabels ? 'Manage Devices' : 'View Devices'}
-                          </button>
-                          {canManageDesiredState && (
-                            <button
-                              className="button ghost"
-                              onClick={() => {
-                                setSelectedGroupId(group.groupId)
-                                setGroupDesiredOpen(true)
-                              }}
-                            >
-                              Set Desired
-                            </button>
-                          )}
-                          {canManageGroups && (
-                            <button
-                              className="button ghost"
-                              onClick={() => handleDeleteGroup(group.groupId, false)}
-                            >
-                              Delete
-                            </button>
-                          )}
-                          {canManageGroups && canDecommissionDevices && (
-                            <button
-                              className="button ghost"
-                              onClick={() => handleDeleteGroup(group.groupId, true)}
-                            >
-                              Delete + Devices
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                    {groups.length === 0 && (
-                      <tr>
-                        <td colSpan={5}>No groups yet.</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              {selectedGroup && (
-                <div className="group-devices">
-                  <div className="section-header">
-                    <h3>Group Devices · {selectedGroup.name || selectedGroup.groupId}</h3>
-                    <button className="button ghost" onClick={() => setSelectedGroupId('')}>
-                      Close
-                    </button>
-                  </div>
-                  <div className="table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Device</th>
-                          <th>Status</th>
-                          <th>Labels</th>
-                          <th>Membership</th>
-                          <th>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {groupDeviceList.map((item) => (
-                          <tr key={item.device.deviceId}>
-                            <td>{item.device.deviceId}</td>
-                            <td>{item.device.status}</td>
-                            <td><code>{JSON.stringify(item.device.labels || {})}</code></td>
-                            <td>{item.inGroup ? 'in group' : '—'}</td>
-                            <td>
-                              {canEditDeviceLabels ? (
-                                <button
-                                  className="button ghost"
-                                  onClick={() => handleGroupDeviceToggle(selectedGroup, item.device, !item.inGroup)}
-                                  disabled={Object.keys(selectedGroupSelector).length === 0}
-                                >
-                                  {item.inGroup ? 'Remove' : 'Add'}
-                                </button>
-                              ) : '—'}
-                            </td>
-                          </tr>
-                        ))}
-                        {groupDeviceList.length === 0 && (
-                          <tr>
-                            <td colSpan={5}>No devices available.</td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                  {Object.keys(selectedGroupSelector).length === 0 && (
-                    <div className="hint">
-                      {canEditDeviceLabels
-                        ? 'Empty selector matches all devices. Add keys to enable membership control.'
-                        : 'Empty selector matches all devices.'}
-                    </div>
-                  )}
-                </div>
-              )}
-            </section>
+            <GroupsSection
+              {...{
+                allGroupsSelected,
+                canDecommissionDevices,
+                canEditDeviceLabels,
+                canManageDesiredState,
+                canManageGroups,
+                clearGroupSelection,
+                formatSelector,
+                groupBatchError,
+                groupBatchStatus,
+                groupCounts,
+                groupDeviceList,
+                groups,
+                groupsError,
+                handleBulkDeleteSelectedGroups,
+                handleDeleteGroup,
+                handleGroupDeviceToggle,
+                handleGroupRowSelect,
+                handleSelectAllGroups,
+                loadGroups,
+                normalizeObject,
+                openGroupMultiDesired,
+                openGroupMultiEdit,
+                selectedGroup,
+                selectedGroupId,
+                selectedGroupIds,
+                selectedGroupSelector,
+                selectedGroupSet,
+                selectorToForm,
+                setGroupBulkError,
+                setGroupBulkOpen,
+                setGroupBulkStatus,
+                setGroupDesiredOpen,
+                setGroupForm,
+                setGroupModalOpen,
+                setSelectedGroupId,
+                someGroupsSelected,
+              }}
+            />
 
             <section id="artifacts" className="card">
               <div className="section-header">
