@@ -111,6 +111,7 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.Get("/auth/status", handlers.AuthStatus(deps.Auth, oidcLoginURL))
 		r.With(loginLimiter.Middleware).Post("/auth/login", handlers.Login(logger, deps.Auth, deps.Store, deps.TrustProxy, deps.AuthLoginBackoff))
 		r.Post("/auth/register", handlers.Register(logger, deps.Auth, deps.Store, deps.TrustProxy))
+		r.With(loginLimiter.Middleware).Post("/auth/password-reset/complete", handlers.CompletePasswordResetToken(logger, deps.Auth, deps.Store, deps.TrustProxy))
 		if deps.OIDCProvider != nil {
 			r.Get("/auth/oidc/login", handlers.OIDCLogin(deps.OIDCProvider))
 			r.Get("/auth/oidc/callback", handlers.OIDCCallback(logger, deps.OIDCProvider, deps.Store, deps.TrustProxy))
@@ -126,6 +127,7 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(admin).Post("/users", handlers.CreateUser(logger, deps.Store, deps.TrustProxy))
 		r.With(admin).Get("/users", handlers.ListUsers(logger, deps.Store, deps.TrustProxy))
 		r.With(admin).Patch("/users/{userId}", handlers.UpdateUser(logger, deps.Store, deps.TrustProxy))
+		r.With(admin).Post("/users/{userId}/password-reset-token", handlers.CreatePasswordResetToken(logger, deps.Auth, deps.Store, deps.TrustProxy))
 
 		r.With(viewer).Get("/groups", handlers.ListGroups(logger, deps.Store, deps.TrustProxy))
 		r.With(operator).Post("/groups/batch", handlers.BatchGroups(logger, deps.Store, deps.TrustProxy))

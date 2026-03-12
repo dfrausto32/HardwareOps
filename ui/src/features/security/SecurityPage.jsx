@@ -29,6 +29,7 @@ export default function SecurityPage({
   doGenerateRecoveryCodes,
   doLogin,
   doLogout,
+  handleIssuePasswordResetToken,
   enrollmentProfiles,
   enrollmentProfilesError,
   enrollmentProfilesLoading,
@@ -80,6 +81,11 @@ export default function SecurityPage({
   pendingEnrollmentsFilter,
   pendingEnrollmentsLoading,
   pendingEnrollmentsStatus,
+  passwordResetIssueForm,
+  passwordResetTokenError,
+  passwordResetTokenStatus,
+  passwordResetTokenTarget,
+  passwordResetTokenValue,
   preflightOk,
   recoveryCodes,
   recoveryCodesError,
@@ -97,6 +103,7 @@ export default function SecurityPage({
   setArtifactLifecyclePolicyInput,
   setArtifactTrustPolicyState,
   setLoginForm,
+  setPasswordResetIssueForm,
   setPendingEnrollmentsFilter,
   setReleaseAutoUpdate,
   setSelectedBackupId,
@@ -289,6 +296,45 @@ export default function SecurityPage({
                     </div>
                     {usersError && <div className="error">{usersError}</div>}
                     {usersStatus && <div className="status">{usersStatus}</div>}
+                    <div className="form compact">
+                      <div className="field">
+                        <label>Reset Token TTL (minutes)</label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="1440"
+                          value={passwordResetIssueForm.ttlMinutes}
+                          onChange={(e) => setPasswordResetIssueForm((prev) => ({ ...prev, ttlMinutes: e.target.value }))}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Reason (optional)</label>
+                        <input
+                          value={passwordResetIssueForm.reason}
+                          onChange={(e) => setPasswordResetIssueForm((prev) => ({ ...prev, reason: e.target.value }))}
+                          placeholder="helpdesk reset"
+                        />
+                      </div>
+                    </div>
+                    {passwordResetTokenError && <div className="error">{passwordResetTokenError}</div>}
+                    {passwordResetTokenStatus && <div className="status">{passwordResetTokenStatus}</div>}
+                    {passwordResetTokenValue && passwordResetTokenTarget && (
+                      <div className="form compact">
+                        <div className="field">
+                          <label>Password Reset Token</label>
+                          <input readOnly value={passwordResetTokenValue} />
+                        </div>
+                        <div className="field">
+                          <label>Issued For</label>
+                          <div className="detail-value">
+                            {passwordResetTokenTarget.email}
+                            {passwordResetTokenTarget.expiresAt
+                              ? ` · expires ${formatTime(passwordResetTokenTarget.expiresAt)}`
+                              : ''}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                     <div className="table-wrap">
                       <table>
                         <thead>
@@ -298,6 +344,7 @@ export default function SecurityPage({
                             <th>Roles</th>
                             <th>Disabled</th>
                             <th>Created</th>
+                            <th>Actions</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -308,11 +355,16 @@ export default function SecurityPage({
                               <td>{(user.roles || []).join(', ') || '—'}</td>
                               <td>{user.disabled ? 'yes' : 'no'}</td>
                               <td>{user.createdAt ? new Date(user.createdAt).toLocaleString() : '—'}</td>
+                              <td>
+                                <button className="button ghost" onClick={() => handleIssuePasswordResetToken(user)}>
+                                  Issue reset token
+                                </button>
+                              </td>
                             </tr>
                           ))}
                           {users.length === 0 && (
                             <tr>
-                              <td colSpan={5}>No users found.</td>
+                              <td colSpan={6}>No users found.</td>
                             </tr>
                           )}
                         </tbody>

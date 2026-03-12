@@ -310,6 +310,18 @@ type ServiceToken struct {
 	RevokedBy  string
 }
 
+type PasswordResetToken struct {
+	TokenID        string
+	UserID         string
+	TokenHash      string
+	DeliveryMode   string
+	Reason         string
+	ExpiresAt      time.Time
+	CreatedAt      time.Time
+	IssuedByUserID string
+	UsedAt         time.Time
+}
+
 type DesiredStateGroup struct {
 	GroupID          string
 	ArtifactID       string
@@ -429,6 +441,8 @@ type Store interface {
 	SetUserLastLogin(userID string, at time.Time) error
 	SetUserRecoveryCodes(userID string, recoveryCodesJSON []byte, generatedAt time.Time) error
 	ConsumeUserRecoveryCode(email, recoveryCodeHash, passwordHash string, at time.Time) (User, bool, error)
+	CreatePasswordResetToken(token PasswordResetToken) error
+	ConsumePasswordResetToken(email, tokenHash, passwordHash string, at time.Time) (User, bool, error)
 	CreateAuthVoucher(voucher AuthVoucher) error
 	GetAuthVoucherByTokenHash(tokenHash string) (AuthVoucher, bool, error)
 	MarkAuthVoucherUsed(voucherID, usedBy string, at time.Time) (bool, error)

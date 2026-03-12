@@ -2866,6 +2866,80 @@ func (s *Store) ConsumeUserRecoveryCode(email, recoveryCodeHash, passwordHash st
 	return user, true, nil
 }
 
+func (s *Store) CreatePasswordResetToken(token store.PasswordResetToken) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO password_reset_tokens (
+			token_id, user_id, token_hash, delivery_mode, reason, expires_at, created_at, issued_by_user_id, used_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`, token.TokenID, token.UserID, token.TokenHash, nullIfEmpty(token.DeliveryMode), nullIfEmpty(token.Reason),
+		token.ExpiresAt, token.CreatedAt, nullIfEmpty(token.IssuedByUserID), nullIfZeroTime(token.UsedAt))
+	return err
+}
+
+func (s *Store) ConsumePasswordResetToken(email, tokenHash, passwordHash string, at time.Time) (store.User, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if email == "" || tokenHash == "" || passwordHash == "" {
+		return store.User{}, false, errors.New("email, token_hash, and password_hash required")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return store.User{}, false, err
+	}
+	defer tx.Rollback(ctx)
+
+	var tokenID string
+	var user store.User
+	err = tx.QueryRow(ctx, `
+		SELECT prt.token_id::text, u.user_id, u.email, COALESCE(u.display_name, ''), u.password_hash,
+		       COALESCE(u.roles, '[]'::jsonb), COALESCE(u.recovery_codes, '[]'::jsonb), u.disabled,
+		       COALESCE(u.auth_provider, 'local'), COALESCE(u.external_id, ''), u.created_at, u.updated_at,
+		       COALESCE(u.last_login_at, '0001-01-01'::timestamptz), COALESCE(u.recovery_codes_generated_at, '0001-01-01'::timestamptz)
+		FROM password_reset_tokens prt
+		JOIN users u ON u.user_id = prt.user_id
+		WHERE prt.token_hash = $1
+		  AND prt.used_at IS NULL
+		  AND prt.expires_at > $2
+		  AND u.email = $3
+		FOR UPDATE OF prt, u
+	`, tokenHash, at, email).Scan(&tokenID, &user.UserID, &user.Email, &user.DisplayName, &user.PasswordHash, &user.RolesJSON,
+		&user.RecoveryCodesJSON, &user.Disabled, &user.AuthProvider, &user.ExternalID, &user.CreatedAt, &user.UpdatedAt,
+		&user.LastLoginAt, &user.RecoveryCodesGeneratedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.User{}, false, nil
+	}
+	if err != nil {
+		return store.User{}, false, err
+	}
+	if user.Disabled {
+		return store.User{}, false, nil
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE password_reset_tokens
+		SET used_at = $2
+		WHERE token_id = $1
+	`, tokenID, at); err != nil {
+		return store.User{}, false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE users
+		SET password_hash = $2,
+		    updated_at = $3
+		WHERE user_id = $1
+	`, user.UserID, passwordHash, at); err != nil {
+		return store.User{}, false, err
+	}
+	user.PasswordHash = passwordHash
+	user.UpdatedAt = at
+	if err := tx.Commit(ctx); err != nil {
+		return store.User{}, false, err
+	}
+	return user, true, nil
+}
+
 func (s *Store) CreateAuthVoucher(voucher store.AuthVoucher) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

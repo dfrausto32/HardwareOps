@@ -59,6 +59,8 @@ import {
   login as apiLogin,
   generateRecoveryCodes as apiGenerateRecoveryCodes,
   resetPasswordWithRecoveryCode as apiResetPasswordWithRecoveryCode,
+  createPasswordResetToken as apiCreatePasswordResetToken,
+  completePasswordResetToken as apiCompletePasswordResetToken,
   getMe,
   getAuthStatus,
   getBootstrapStatus,
@@ -217,6 +219,12 @@ export default function App() {
     newPassword: '',
   })
   const [recoveryStatus, setRecoveryStatus] = useState('')
+  const [resetTokenForm, setResetTokenForm] = useState({
+    email: '',
+    resetToken: '',
+    newPassword: '',
+  })
+  const [resetTokenStatus, setResetTokenStatus] = useState('')
   const [recoveryCodes, setRecoveryCodes] = useState([])
   const [recoveryCodesGeneratedAt, setRecoveryCodesGeneratedAt] = useState('')
   const [recoveryCodesStatus, setRecoveryCodesStatus] = useState('')
@@ -230,6 +238,14 @@ export default function App() {
     displayName: '',
     roles: ['viewer'],
   })
+  const [passwordResetIssueForm, setPasswordResetIssueForm] = useState({
+    ttlMinutes: '15',
+    reason: '',
+  })
+  const [passwordResetTokenValue, setPasswordResetTokenValue] = useState('')
+  const [passwordResetTokenTarget, setPasswordResetTokenTarget] = useState(null)
+  const [passwordResetTokenStatus, setPasswordResetTokenStatus] = useState('')
+  const [passwordResetTokenError, setPasswordResetTokenError] = useState('')
   const [voucherForm, setVoucherForm] = useState({
     email: '',
     ttlHours: '24',
@@ -1452,6 +1468,47 @@ export default function App() {
     }
   }
 
+  async function doResetWithPasswordResetToken() {
+    setResetTokenStatus('Resetting password...')
+    setAuthError('')
+    try {
+      await apiCompletePasswordResetToken(
+        resetTokenForm.email,
+        resetTokenForm.resetToken,
+        resetTokenForm.newPassword,
+      )
+      setResetTokenStatus('Password reset. Sign in with your new password.')
+      setLoginForm((prev) => ({ ...prev, email: resetTokenForm.email, password: '' }))
+      setResetTokenForm({ email: resetTokenForm.email, resetToken: '', newPassword: '' })
+      setAuthView('login')
+    } catch (err) {
+      setResetTokenStatus('')
+      setAuthError(err.message || String(err))
+    }
+  }
+
+  async function handleIssuePasswordResetToken(user) {
+    setPasswordResetTokenStatus(`Issuing reset token for ${user.email}...`)
+    setPasswordResetTokenError('')
+    try {
+      const ttlMinutes = Number.parseInt(passwordResetIssueForm.ttlMinutes, 10)
+      const res = await apiCreatePasswordResetToken(user.userId, {
+        ttlMinutes: Number.isFinite(ttlMinutes) ? ttlMinutes : 15,
+        reason: passwordResetIssueForm.reason,
+      })
+      setPasswordResetTokenValue(res?.token || '')
+      setPasswordResetTokenTarget({
+        userId: user.userId,
+        email: user.email,
+        expiresAt: res?.expiresAt || '',
+      })
+      setPasswordResetTokenStatus(`Reset token issued for ${user.email}. Store it now; it is only shown once.`)
+    } catch (err) {
+      setPasswordResetTokenStatus('')
+      setPasswordResetTokenError(err.message || String(err))
+    }
+  }
+
   async function doDownloadBootstrapCA() {
     setBootstrapStatusMessage('Downloading CA certificate...')
     try {
@@ -1479,6 +1536,10 @@ export default function App() {
     setRecoveryCodesGeneratedAt('')
     setRecoveryCodesStatus('')
     setRecoveryCodesError('')
+    setPasswordResetTokenValue('')
+    setPasswordResetTokenTarget(null)
+    setPasswordResetTokenStatus('')
+    setPasswordResetTokenError('')
   }
 
   async function loadUsers() {
@@ -4059,6 +4120,14 @@ export default function App() {
                 Recovery code
               </button>
             )}
+            {authStatus.mode === 'local' && (
+              <button
+                className={`tab ${authView === 'reset-token' ? 'active' : ''}`}
+                onClick={() => setAuthView('reset-token')}
+              >
+                Reset token
+              </button>
+            )}
             <button
               className={`tab ${authView === 'register' ? 'active' : ''}`}
               onClick={() => setAuthView('register')}
@@ -4113,6 +4182,30 @@ export default function App() {
                 Reset password
               </button>
             </div>
+          ) : authView === 'reset-token' ? (
+            <div className="form">
+              <label>Email</label>
+              <input
+                value={resetTokenForm.email}
+                onChange={(e) => setResetTokenForm((prev) => ({ ...prev, email: e.target.value }))}
+                placeholder="user@example.com"
+              />
+              <label>Reset token</label>
+              <input
+                value={resetTokenForm.resetToken}
+                onChange={(e) => setResetTokenForm((prev) => ({ ...prev, resetToken: e.target.value }))}
+                placeholder="paste reset token"
+              />
+              <label>New password</label>
+              <input
+                type="password"
+                value={resetTokenForm.newPassword}
+                onChange={(e) => setResetTokenForm((prev) => ({ ...prev, newPassword: e.target.value }))}
+              />
+              <button className="button" onClick={doResetWithPasswordResetToken}>
+                Reset password
+              </button>
+            </div>
           ) : (
             <div className="form">
               <label>Voucher token</label>
@@ -4147,6 +4240,7 @@ export default function App() {
           {loginStatus && <div className="status">{loginStatus}</div>}
           {registerStatus && <div className="status">{registerStatus}</div>}
           {recoveryStatus && <div className="status">{recoveryStatus}</div>}
+          {resetTokenStatus && <div className="status">{resetTokenStatus}</div>}
           <div className="status hint">
             Auth mode: {authStatus.mode}
           </div>
@@ -5122,6 +5216,7 @@ export default function App() {
             doLogout,
             doDownloadRecoveryCodes,
             doGenerateRecoveryCodes,
+            handleIssuePasswordResetToken,
             enrollmentProfiles,
             enrollmentProfilesError,
             enrollmentProfilesLoading,
@@ -5182,6 +5277,11 @@ export default function App() {
             recoveryCodesError,
             recoveryCodesGeneratedAt,
             recoveryCodesStatus,
+            passwordResetIssueForm,
+            passwordResetTokenError,
+            passwordResetTokenStatus,
+            passwordResetTokenTarget,
+            passwordResetTokenValue,
             rotationError,
             rotationLoading,
             rotationMessage,
@@ -5190,6 +5290,7 @@ export default function App() {
             setArtifactLifecyclePolicyInput,
             setArtifactTrustPolicyState,
             setLoginForm,
+            setPasswordResetIssueForm,
             setPendingEnrollmentsFilter,
             setReleaseAutoUpdate,
             setSelectedBackupId,

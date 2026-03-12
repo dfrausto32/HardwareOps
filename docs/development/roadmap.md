@@ -21,7 +21,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Phase B — Operational Maturity | 🟢 Complete | Audit/metrics/events/lifecycle/CI ingest/bulk ops shipped and operational. |
 | Phase B Extension — UX + Realtime | 🟢 Complete | Bulk actions + realtime updates + auth-session UX reset shipped. |
 | Operational Hardening (between B and C) | 🟢 Complete | Pull-boundary, token exposure, startup guardrails, break-glass backend, proxy trust policy, and abuse controls are all shipped. |
-| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, and trust-override UX are shipped. Remaining Phase C work is password recovery/admin reset, custom RBAC, CI workload identity, provenance policy, LDAP, and broader secrets integration. |
+| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, and the first two local-auth recovery layers are shipped. Remaining Phase C work is break-glass/email password recovery closeout, custom RBAC, CI workload identity, provenance policy, LDAP, and broader secrets integration. |
 | Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Live-deployment acceptance gate execution remains. |
 
 ### Active work queue (what is still to do)
@@ -29,7 +29,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 No items currently in-flight. Queue is clear.
 
 ### Prepared next tasks (agent-scoped)
-- `C-PASSWORD-RECOVERY` — local-auth recovery/reset workflow + runbook + audit expectations
+- `C-PASSWORD-RECOVERY-3/4` — break-glass local reset + optional email delivery + runbook closeout
 - `C-CUSTOM-RBAC` — per-resource policy model on top of fixed roles
 - `C-CI-WORKLOAD-IDENTITY` — OIDC-based CI publish/pull credentials without long-lived secrets
 
@@ -75,6 +75,7 @@ No items currently in-flight. Queue is clear.
 - ✅ Trusted-key artifact verification core (trusted signing key registry; global verification policy; control-plane cryptographic verification for create/upload/pull/complete; agent trust bundle distribution and apply-time re-verification; Security-page trust controls; artifact verification state/metrics/tests).
 - ✅ Trusted-key deployment wiring and AWS validation (startup seeding from `TRUSTED_SIGNING_KEYS_*` / `ARTIFACT_TRUST_*`; on-prem and AWS deployment templates updated; AWS `parcel/dev` bootstrapped from Secrets Manager; `scripts/test-artifact-trust.sh` validates unsigned reject / signed accept / wrong-key reject against the live stack).
 - ✅ Trust-override UX in desired-state editors (group, device, and multi-group desired-state rows can open a component trust-override modal; operators can set verification mode, allowed signature types, and allowed key IDs with inherited/effective-policy previews; artifact pickers and version selectors enforce the effective trust policy inline).
+- ✅ Password recovery layers 1–2 (self-service recovery codes plus admin-issued one-time reset tokens with audit coverage and login-screen redemption flows).
 
 ---
 
@@ -475,7 +476,7 @@ Confirm priorities with the team before mapping to agents.
 - **Notes:** `go-oidc/v3` + `golang.org/x/oauth2` for IdP discovery and token exchange. `GET /api/v1/auth/oidc/login` → IdP redirect; `GET /api/v1/auth/oidc/callback` → code exchange → internal JWT issued. Group-to-role mapping via `AUTH_OIDC_ROLE_MAP` JSON; unmapped users get `AUTH_OIDC_DEFAULT_ROLE` (default `viewer`). State cookie (`hwops_oidc_state`, HttpOnly, 600s TTL). Users upserted on `auth_provider`+`external_id` (DB columns already existed). `auth.oidc.login` and `auth.oidc.login.failed` audit events. UI renders SSO button when `authStatus.oidcEnabled`. Hardened profile rejects `AUTH_OIDC_DEFAULT_ROLE=admin` and empty role map. Per-IdP docs for Okta, Azure AD (Entra), and Google Workspace in `auth-secrets-v1.md`.
 
 #### Password recovery / admin reset
-- **Status:** ⬜ Planned
+- **Status:** 🟡 In progress
 - **Scope:** Local-auth password recovery path for locked-out operators, including airgapped-safe recovery, optional email delivery, operator-assisted reset, emergency break-glass reset, and audit coverage.
 - **Dependencies:** Local auth mode, user management APIs, break-glass/admin recovery policy, deployment docs.
 - **Risks:** Weak recovery flow becoming an account-takeover path; undocumented operator steps causing outage during lockout.
@@ -485,15 +486,15 @@ Confirm priorities with the team before mapping to agents.
   - Emergency break-glass local reset path is explicit, gated, and fully audited.
   - Optional email delivery supports account setup/password reset for connected deployments.
   - Recovery path is auditable end-to-end across UI/API/CLI.
-- **Notes:** Implement this in layers so airgapped recovery lands first and the connected/email path reuses the same token model. Recommended order: recovery codes → operator-issued reset token → break-glass local reset CLI → optional email delivery.
+- **Notes:** Implement this in layers so airgapped recovery lands first and the connected/email path reuses the same token model. Recovery codes and operator-issued reset tokens are shipped. Remaining work is break-glass local reset CLI, optional email delivery, and the final runbook closeout.
 - **Phase C design:**
   - **Layer 1 — Recovery codes:** self-service one-time codes generated per user, stored only as hashes, downloadable once, usable from the login screen.
   - **Layer 2 — Operator reset token:** local admin can generate a short-lived one-time reset token for a target user and hand it to them out of band.
   - **Layer 3 — Break-glass local reset:** host-local CLI can reset an admin password or create a recovery admin when normal auth paths are unavailable.
   - **Layer 4 — Email delivery:** optional SMTP/provider-backed reset link/code for connected deployments; reuses the same backend token semantics as operator-issued reset.
 - **Subtasks:**
-  - **C-PASSWORD-RECOVERY-1:** Recovery codes backend + UI (`POST /api/v1/auth/recovery-codes/generate`, `POST /api/v1/auth/recovery-codes/reset`, download/copy UX, audit events).
-  - **C-PASSWORD-RECOVERY-2:** Operator-issued reset token backend + admin UI (`POST /api/v1/users/{userId}/password-reset-token`, TTL, reason, one-time use, audit events).
+  - **C-PASSWORD-RECOVERY-1:** ✅ Recovery codes backend + UI (`POST /api/v1/auth/recovery-codes/generate`, `POST /api/v1/auth/recovery-codes/reset`, download/copy UX, audit events).
+  - **C-PASSWORD-RECOVERY-2:** ✅ Operator-issued reset token backend + admin UI (`POST /api/v1/users/{userId}/password-reset-token`, `POST /api/v1/auth/password-reset/complete`, TTL, reason, one-time use, audit events).
   - **C-PASSWORD-RECOVERY-3:** Break-glass local CLI reset/create-admin path for total lockout recovery.
   - **C-PASSWORD-RECOVERY-4:** Optional email delivery for account setup/reset plus deployment/runbook guidance for SMTP-capable environments.
 

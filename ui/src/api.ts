@@ -543,6 +543,20 @@ export async function resetPasswordWithRecoveryCode(email: string, recoveryCode:
   })
 }
 
+export async function createPasswordResetToken(userId: string, payload: Record<string, unknown>) {
+  return requestJson(`/api/v1/users/${userId}/password-reset-token`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function completePasswordResetToken(email: string, resetToken: string, newPassword: string) {
+  return requestJson('/api/v1/auth/password-reset/complete', {
+    method: 'POST',
+    body: JSON.stringify({ email, resetToken, newPassword }),
+  })
+}
+
 export async function getMe() {
   return requestJson('/api/v1/auth/me')
 }

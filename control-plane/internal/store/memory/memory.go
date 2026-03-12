@@ -11,63 +11,67 @@ import (
 )
 
 type Store struct {
-	mu                   sync.Mutex
-	devices              map[string]store.Device
-	states               map[string]store.DeviceState
-	tokens               map[string]store.EnrollmentToken
-	enrollmentProfiles   map[string]store.EnrollmentProfile
-	enrollmentProfileIdx map[string]string
-	pendingEnrollments   map[string]store.PendingEnrollment
-	groups               map[string]store.Group
-	desiredGroups        map[string]store.DesiredStateGroup
-	desiredDevices       map[string]store.DesiredStateDevice
-	artifacts            map[string]store.Artifact
-	artifactPolicy       store.ArtifactLifecyclePolicy
-	artifactTrustPolicy  *store.ArtifactTrustPolicy
-	trustedSigningKeys   map[string]store.TrustedSigningKey
-	releaseAuto          store.ReleaseAutoUpdateSettings
-	applyResults         map[string]store.ApplyResult
-	runtimeEvents        []store.RuntimeEvent
-	runtimeRetention     store.RuntimeEventRetention
-	auditEvents          []store.AuditEvent
-	auditRetention       store.AuditRetention
-	certRotation         *store.CertRotationState
-	users                map[string]store.User
-	userEmailIndex       map[string]string
-	vouchers             map[string]store.AuthVoucher
-	voucherTokenIdx      map[string]string
-	serviceTokens        map[string]store.ServiceToken
-	serviceTokenIdx      map[string]string
+	mu                    sync.Mutex
+	devices               map[string]store.Device
+	states                map[string]store.DeviceState
+	tokens                map[string]store.EnrollmentToken
+	enrollmentProfiles    map[string]store.EnrollmentProfile
+	enrollmentProfileIdx  map[string]string
+	pendingEnrollments    map[string]store.PendingEnrollment
+	groups                map[string]store.Group
+	desiredGroups         map[string]store.DesiredStateGroup
+	desiredDevices        map[string]store.DesiredStateDevice
+	artifacts             map[string]store.Artifact
+	artifactPolicy        store.ArtifactLifecyclePolicy
+	artifactTrustPolicy   *store.ArtifactTrustPolicy
+	trustedSigningKeys    map[string]store.TrustedSigningKey
+	releaseAuto           store.ReleaseAutoUpdateSettings
+	applyResults          map[string]store.ApplyResult
+	runtimeEvents         []store.RuntimeEvent
+	runtimeRetention      store.RuntimeEventRetention
+	auditEvents           []store.AuditEvent
+	auditRetention        store.AuditRetention
+	certRotation          *store.CertRotationState
+	users                 map[string]store.User
+	userEmailIndex        map[string]string
+	vouchers              map[string]store.AuthVoucher
+	voucherTokenIdx       map[string]string
+	serviceTokens         map[string]store.ServiceToken
+	serviceTokenIdx       map[string]string
+	passwordResetTokens   map[string]store.PasswordResetToken
+	passwordResetTokenIdx map[string]string
 }
 
 func New() *Store {
 	return &Store{
-		devices:              map[string]store.Device{},
-		states:               map[string]store.DeviceState{},
-		tokens:               map[string]store.EnrollmentToken{},
-		enrollmentProfiles:   map[string]store.EnrollmentProfile{},
-		enrollmentProfileIdx: map[string]string{},
-		pendingEnrollments:   map[string]store.PendingEnrollment{},
-		groups:               map[string]store.Group{},
-		desiredGroups:        map[string]store.DesiredStateGroup{},
-		desiredDevices:       map[string]store.DesiredStateDevice{},
-		artifacts:            map[string]store.Artifact{},
-		artifactPolicy:       store.ArtifactLifecyclePolicy{DeprecatedDeleteAfterDays: 30, UpdatedAt: time.Now().UTC()},
-		artifactTrustPolicy:  nil,
-		trustedSigningKeys:   map[string]store.TrustedSigningKey{},
-		releaseAuto:          store.ReleaseAutoUpdateSettings{Enabled: false, AllowUnsigned: false, UpdatedAt: time.Now().UTC()},
-		applyResults:         map[string]store.ApplyResult{},
-		runtimeEvents:        []store.RuntimeEvent{},
-		runtimeRetention:     store.RuntimeEventRetention{Days: 30, UpdatedAt: time.Now().UTC()},
-		auditEvents:          []store.AuditEvent{},
-		auditRetention:       store.AuditRetention{Days: 90, UpdatedAt: time.Now().UTC()},
-		certRotation:         nil,
-		users:                map[string]store.User{},
-		userEmailIndex:       map[string]string{},
-		vouchers:             map[string]store.AuthVoucher{},
-		voucherTokenIdx:      map[string]string{},
-		serviceTokens:        map[string]store.ServiceToken{},
-		serviceTokenIdx:      map[string]string{},
+		devices:               map[string]store.Device{},
+		states:                map[string]store.DeviceState{},
+		tokens:                map[string]store.EnrollmentToken{},
+		enrollmentProfiles:    map[string]store.EnrollmentProfile{},
+		enrollmentProfileIdx:  map[string]string{},
+		pendingEnrollments:    map[string]store.PendingEnrollment{},
+		groups:                map[string]store.Group{},
+		desiredGroups:         map[string]store.DesiredStateGroup{},
+		desiredDevices:        map[string]store.DesiredStateDevice{},
+		artifacts:             map[string]store.Artifact{},
+		artifactPolicy:        store.ArtifactLifecyclePolicy{DeprecatedDeleteAfterDays: 30, UpdatedAt: time.Now().UTC()},
+		artifactTrustPolicy:   nil,
+		trustedSigningKeys:    map[string]store.TrustedSigningKey{},
+		releaseAuto:           store.ReleaseAutoUpdateSettings{Enabled: false, AllowUnsigned: false, UpdatedAt: time.Now().UTC()},
+		applyResults:          map[string]store.ApplyResult{},
+		runtimeEvents:         []store.RuntimeEvent{},
+		runtimeRetention:      store.RuntimeEventRetention{Days: 30, UpdatedAt: time.Now().UTC()},
+		auditEvents:           []store.AuditEvent{},
+		auditRetention:        store.AuditRetention{Days: 90, UpdatedAt: time.Now().UTC()},
+		certRotation:          nil,
+		users:                 map[string]store.User{},
+		userEmailIndex:        map[string]string{},
+		vouchers:              map[string]store.AuthVoucher{},
+		voucherTokenIdx:       map[string]string{},
+		serviceTokens:         map[string]store.ServiceToken{},
+		serviceTokenIdx:       map[string]string{},
+		passwordResetTokens:   map[string]store.PasswordResetToken{},
+		passwordResetTokenIdx: map[string]string{},
 	}
 }
 
@@ -1599,6 +1603,57 @@ func (s *Store) ConsumeUserRecoveryCode(email, recoveryCodeHash, passwordHash st
 		return store.User{}, false, err
 	}
 	user.RecoveryCodesJSON = nextJSON
+	user.PasswordHash = passwordHash
+	user.UpdatedAt = at
+	s.users[user.UserID] = user
+	return user, true, nil
+}
+
+func (s *Store) CreatePasswordResetToken(token store.PasswordResetToken) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if token.TokenID == "" {
+		return errors.New("token_id required")
+	}
+	if token.UserID == "" {
+		return errors.New("user_id required")
+	}
+	if token.TokenHash == "" {
+		return errors.New("token_hash required")
+	}
+	if _, ok := s.users[token.UserID]; !ok {
+		return errors.New("user not found")
+	}
+	if existingID, ok := s.passwordResetTokenIdx[token.TokenHash]; ok {
+		if existing, ok := s.passwordResetTokens[existingID]; ok && existing.UsedAt.IsZero() {
+			return errors.New("password reset token already exists")
+		}
+	}
+	s.passwordResetTokens[token.TokenID] = token
+	s.passwordResetTokenIdx[token.TokenHash] = token.TokenID
+	return nil
+}
+
+func (s *Store) ConsumePasswordResetToken(email, tokenHash, passwordHash string, at time.Time) (store.User, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tokenID, ok := s.passwordResetTokenIdx[tokenHash]
+	if !ok {
+		return store.User{}, false, nil
+	}
+	token, ok := s.passwordResetTokens[tokenID]
+	if !ok {
+		return store.User{}, false, nil
+	}
+	if !token.UsedAt.IsZero() || (!token.ExpiresAt.IsZero() && at.After(token.ExpiresAt)) {
+		return store.User{}, false, nil
+	}
+	user, ok := s.users[token.UserID]
+	if !ok || user.Disabled || user.Email != email {
+		return store.User{}, false, nil
+	}
+	token.UsedAt = at
+	s.passwordResetTokens[token.TokenID] = token
 	user.PasswordHash = passwordHash
 	user.UpdatedAt = at
 	s.users[user.UserID] = user

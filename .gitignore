@@ -8,12 +8,14 @@
 node_modules/
 dist/
 .cache/
+coverage/
 
 # Env
 .env
 .env.*
 !.env.example
 !.env.onprem.example
+/control-plane.env
 
 # IDE
 .idea/
@@ -40,6 +42,7 @@ logs/
 # Local tooling
 _npx/
 updates/
+/.tmp/
 
 # Terraform
 .terraform/
@@ -57,3 +60,4 @@ backend.hcl
 
 # Generated per-customer AWS deployment inputs
 .aws-customers/
+.claude/
