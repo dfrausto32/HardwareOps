@@ -10,7 +10,7 @@ The roadmap is organized by **maturity phases**, not deadlines. Phases are seque
 ---
 
 ## Program Snapshot (Parallel Session Staging)
-_Updated: 2026-03-11 (post trusted-key AWS validation)_
+_Updated: 2026-03-12 (post CI workload identity AWS + GitHub validation)_
 
 Use this section as the single source of truth for "what is done" vs "what is left."
 
@@ -21,7 +21,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Phase B — Operational Maturity | 🟢 Complete | Audit/metrics/events/lifecycle/CI ingest/bulk ops shipped and operational. |
 | Phase B Extension — UX + Realtime | 🟢 Complete | Bulk actions + realtime updates + auth-session UX reset shipped. |
 | Operational Hardening (between B and C) | 🟢 Complete | Pull-boundary, token exposure, startup guardrails, break-glass backend, proxy trust policy, and abuse controls are all shipped. |
-| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, and the local-auth recovery stack (recovery codes, reset tokens, break-glass CLI) are shipped. Remaining Phase C work is custom RBAC, CI workload identity, provenance policy, LDAP, and broader secrets integration. |
+| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, the local-auth recovery stack (recovery codes, reset tokens, break-glass CLI), and CI workload identity federation are shipped. Remaining Phase C work is custom RBAC, provenance policy, LDAP, and broader secrets integration. |
 | Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Live-deployment acceptance gate execution and connected email delivery for auth recovery/setup remain. |
 
 ### Active work queue (what is still to do)
@@ -31,7 +31,6 @@ No items currently in-flight. Queue is clear.
 ### Prepared next tasks (agent-scoped)
 - `D-PASSWORD-RECOVERY-EMAIL` — connected email delivery for account setup/reset plus deployment/runbook closeout
 - `C-CUSTOM-RBAC` — per-resource policy model on top of fixed roles
-- `C-CI-WORKLOAD-IDENTITY` — OIDC-based CI publish/pull credentials without long-lived secrets
 
 ---
 
@@ -77,6 +76,7 @@ No items currently in-flight. Queue is clear.
 - ✅ Trust-override UX in desired-state editors (group, device, and multi-group desired-state rows can open a component trust-override modal; operators can set verification mode, allowed signature types, and allowed key IDs with inherited/effective-policy previews; artifact pickers and version selectors enforce the effective trust policy inline).
 - ✅ Password recovery layers 1–2 (self-service recovery codes plus admin-issued one-time reset tokens with audit coverage and login-screen redemption flows).
 - ✅ Password recovery layer 3 (host-local break-glass CLI for emergency local-admin password reset and recovery-admin creation with explicit audit reason capture).
+- ✅ CI workload identity federation (GitHub/GitLab/Jenkins helper flows, AWS/on-prem provider config wiring, live AWS provider bootstrap, and end-to-end GitHub Actions OIDC exchange plus signed artifact upload validation against the strict trusted-key policy).
 
 ---
 
@@ -277,8 +277,9 @@ The 2026-03-10 D-hardening batch merged. Items 1–3 below are now complete. Rem
 3. ~~**CloudWatch alarm Terraform resources**~~ — ✅ Done (#17)
 4. ~~**OIDC SSO**~~ — ✅ Done (#23)
 5. **Custom RBAC policies:** Per-resource permission engine and admin UI.
-6. **Trusted-key management deployment wiring:** On-prem/AWS bootstrap, seed path, and runbook/test coverage.
-7. **Trust override UI:** Group/device/component trust override editor and inheritance UX.
+6. ~~**Trusted-key management deployment wiring**~~ — ✅ Done
+7. ~~**Trust override UI**~~ — ✅ Done
+8. ~~**CI workload identity federation**~~ — ✅ Done
 
 Confirm priorities with the team before mapping to agents.
 
@@ -499,12 +500,12 @@ Confirm priorities with the team before mapping to agents.
   - **C-PASSWORD-RECOVERY-4:** Deferred to Phase D as `D-PASSWORD-RECOVERY-EMAIL`.
 
 #### CI workload identity federation
-- **Status:** 🟡 In progress
+- **Status:** 🟢 Complete
 - **Scope:** OIDC-based CI auth (GitHub/GitLab/Jenkins) for publish/pull without static secrets.
 - **Dependencies:** OIDC trust config, service-token exchange endpoint/policy.
 - **Risks:** Misconfigured trust policies.
 - **Acceptance:** CI jobs can obtain short-lived publish credentials by identity, no long-lived credential files required.
-- **Notes:** Generic workload identity exchange is shipped for OIDC job tokens via `POST /api/v1/auth/workload-identity/exchange`, with config-driven issuer/audience/claim matching and short-lived internal bearer tokens carrying `artifact.publish`. First-class helper flows are now shipped for GitHub Actions (`scripts/ci-exchange-workload-identity.sh`), GitLab (`scripts/ci-exchange-gitlab-workload-identity.sh`), and Jenkins (`scripts/ci-exchange-jenkins-workload-identity.sh`) with updated scaffold templates. Deployment wiring now supports file/JSON or AWS Secrets Manager-backed provider config plus admin status visibility (`GET /api/v1/auth/workload-identity/status`) and smoke validation (`scripts/test-workload-identity.sh`). Remaining work is live provider acceptance in real CI environments.
+- **Notes:** Generic workload identity exchange is shipped for OIDC job tokens via `POST /api/v1/auth/workload-identity/exchange`, with config-driven issuer/audience/claim matching and short-lived internal bearer tokens carrying `artifact.publish`. First-class helper flows are shipped for GitHub Actions (`scripts/ci-exchange-workload-identity.sh`), GitLab (`scripts/ci-exchange-gitlab-workload-identity.sh`), and Jenkins (`scripts/ci-exchange-jenkins-workload-identity.sh`) with updated scaffold templates. Deployment wiring supports file/JSON or AWS Secrets Manager-backed provider config plus admin status visibility (`GET /api/v1/auth/workload-identity/status`) and smoke validation (`scripts/test-workload-identity.sh`). Live acceptance is now validated on AWS `parcel/dev` with a real GitHub Actions OIDC token exchange and signed artifact upload under strict trusted-key policy.
 
 #### Supply-chain provenance policy (Cosign/Sigstore)
 - **Status:** ⬜ Planned
