@@ -11,9 +11,8 @@ pipeline {
 
   environment {
     HWOPS_BASE_URL = credentials('hwops-base-url')
-    HWOPS_CI_SERVICE_TOKEN = credentials('hwops-ci-service-token')
-    // Optional: base64-encoded CA cert.
-    HWOPS_CA_CERT_B64 = credentials('hwops-ca-cert-b64')
+    // Optional workload identity settings. JENKINS_OIDC_TOKEN may be injected by an OIDC-capable plugin or wrapper.
+    CI_WORKLOAD_IDENTITY_AUDIENCE = 'hardwareops-ci'
   }
 
   stages {
@@ -31,8 +30,17 @@ pipeline {
             echo "$HWOPS_CA_CERT_B64" | base64 -d > /tmp/hwops-ca.crt
           fi
 
+          if [ -n "${HWOPS_CI_SERVICE_TOKEN:-}" ]; then
+            AUTH_TOKEN="$HWOPS_CI_SERVICE_TOKEN"
+          elif [ -n "${JENKINS_OIDC_TOKEN:-}" ] || [ -n "${HWOPS_JENKINS_ID_TOKEN:-}" ]; then
+            AUTH_TOKEN="$(BASE_URL="$HWOPS_BASE_URL" CA_CERT_PATH=/tmp/hwops-ca.crt ./scripts/ci-exchange-jenkins-workload-identity.sh)"
+          else
+            echo "Either HWOPS_CI_SERVICE_TOKEN or JENKINS_OIDC_TOKEN/HWOPS_JENKINS_ID_TOKEN is required." >&2
+            exit 1
+          fi
+
           BASE_URL="$HWOPS_BASE_URL" \
-          CI_SERVICE_TOKEN="$HWOPS_CI_SERVICE_TOKEN" \
+          AUTH_TOKEN="$AUTH_TOKEN" \
           CA_CERT_PATH=/tmp/hwops-ca.crt \
           ARTIFACT_NAME="$ARTIFACT_NAME" \
           ARTIFACT_VERSION="$ARTIFACT_VERSION" \

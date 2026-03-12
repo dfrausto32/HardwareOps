@@ -32,6 +32,8 @@ The control-plane can exchange an external OIDC job token for a short-lived Hard
 
 Current shipped path:
 - GitHub Actions helper built into `scripts/ci-exchange-workload-identity.sh`
+- GitLab helper built into `scripts/ci-exchange-gitlab-workload-identity.sh`
+- Jenkins helper built into `scripts/ci-exchange-jenkins-workload-identity.sh`
 - generic OIDC provider config on control-plane
 - exchanged token carries short-lived `artifact.publish` scope only
 
@@ -64,7 +66,40 @@ GitHub Actions usage:
 - set `CI_WORKLOAD_IDENTITY_AUDIENCE` to the configured audience
 - do not pass a static CI token unless you want fallback behavior
 
-Other CI systems can call the same exchange endpoint by passing an OIDC token in `CI_WORKLOAD_IDENTITY_TOKEN`.
+Example GitLab provider:
+
+```json
+[
+  {
+    "name": "gitlab-ci",
+    "issuer": "https://gitlab.com",
+    "audience": "hardwareops-ci",
+    "allowedScopes": ["artifact.publish"],
+    "defaultScopes": ["artifact.publish"],
+    "ttl": "15m",
+    "claimMatches": {
+      "project_path": ["my-group/my-project"],
+      "ref": ["main"],
+      "ref_type": ["branch"]
+    }
+  }
+]
+```
+
+GitLab usage:
+- use job `id_tokens` to mint an OIDC token into `HWOPS_GITLAB_ID_TOKEN`
+- set `HWOPS_WORKLOAD_IDENTITY_AUDIENCE` to the configured audience
+- the template falls back to `HWOPS_CI_SERVICE_TOKEN` only if you still provide one
+
+Jenkins usage:
+- Jenkins has no single built-in OIDC token shape across installations
+- the template/helper expect an external JWT in either:
+  - `JENKINS_OIDC_TOKEN`, or
+  - `HWOPS_JENKINS_ID_TOKEN`
+- this token can come from an OIDC-capable Jenkins plugin or a wrapper stage that requests an upstream identity token
+- define a matching provider in `CI_WORKLOAD_IDENTITY_PROVIDERS_JSON/FILE` for that issuer and its claims
+
+Other CI systems can call the same exchange endpoint directly by passing an OIDC token in `CI_WORKLOAD_IDENTITY_TOKEN`.
 
 ## Push workflow inputs
 
@@ -78,6 +113,10 @@ Other CI systems can call the same exchange endpoint by passing an OIDC token in
 
 Implementation helper:
 - `scripts/ci-upload-artifact.sh`
+- Optional exchange helpers:
+  - `scripts/ci-exchange-workload-identity.sh`
+  - `scripts/ci-exchange-gitlab-workload-identity.sh`
+  - `scripts/ci-exchange-jenkins-workload-identity.sh`
 
 ## Pull workflow inputs
 
@@ -99,6 +138,8 @@ Implementation helper:
 
 - Service tokens should be short-lived and rotated when used.
 - Workload identity tokens are exchanged on demand and do not require long-lived secret files in CI.
+- GitHub/GitLab templates prefer workload identity and only use static CI tokens as fallback.
+- Jenkins templates support workload identity if your Jenkins environment injects an OIDC token; otherwise they can still use a static service token.
 - For pull with `credentialRef`, configure resolver sources in control-plane:
   - `ARTIFACT_PULL_CREDENTIALS_FILE` / `ARTIFACT_PULL_CREDENTIALS_JSON`
   - or AWS Secrets Manager (`ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID`)

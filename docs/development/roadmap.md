@@ -504,7 +504,7 @@ Confirm priorities with the team before mapping to agents.
 - **Dependencies:** OIDC trust config, service-token exchange endpoint/policy.
 - **Risks:** Misconfigured trust policies.
 - **Acceptance:** CI jobs can obtain short-lived publish credentials by identity, no long-lived credential files required.
-- **Notes:** Generic workload identity exchange is shipped for OIDC job tokens via `POST /api/v1/auth/workload-identity/exchange`, with config-driven issuer/audience/claim matching and short-lived internal bearer tokens carrying `artifact.publish`. GitHub Actions helper flow is shipped in `scripts/ci-exchange-workload-identity.sh` plus updated push/pull templates (`id-token: write`). Remaining work is GitLab/Jenkins first-class helper templates and provider-specific runbooks.
+- **Notes:** Generic workload identity exchange is shipped for OIDC job tokens via `POST /api/v1/auth/workload-identity/exchange`, with config-driven issuer/audience/claim matching and short-lived internal bearer tokens carrying `artifact.publish`. First-class helper flows are now shipped for GitHub Actions (`scripts/ci-exchange-workload-identity.sh`), GitLab (`scripts/ci-exchange-gitlab-workload-identity.sh`), and Jenkins (`scripts/ci-exchange-jenkins-workload-identity.sh`) with updated scaffold templates. Remaining work is provider-specific deployment/runbook validation and cloud environment smoke coverage.
 
 #### Supply-chain provenance policy (Cosign/Sigstore)
 - **Status:** ⬜ Planned

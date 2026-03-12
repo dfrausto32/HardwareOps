@@ -95,6 +95,10 @@ CA_CERT_PATH=./ca.crt \
 ```
 
 CI provider scaffold templates (GitHub Actions, GitLab CI, Jenkins): `../../deploy/ci/README.md`
+- Workload identity helper scripts:
+  - `scripts/ci-exchange-workload-identity.sh`
+  - `scripts/ci-exchange-gitlab-workload-identity.sh`
+  - `scripts/ci-exchange-jenkins-workload-identity.sh`
 
 ---
 

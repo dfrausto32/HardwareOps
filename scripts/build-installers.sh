@@ -22,6 +22,11 @@ fi
 
 mkdir -p "$DIST_DIR"
 
+copy_customer_docs() {
+  local stage=$1
+  "$BASE_DIR/scripts/assemble-customer-docs.sh" "$stage/customer-docs"
+}
+
 copy_common_agent_files() {
   local stage=$1
   mkdir -p "$stage/scripts" "$stage/deploy/systemd"
@@ -112,6 +117,7 @@ Notes:
 - If running behind a TLS gateway, do not set TLS_CERT_PATH/TLS_KEY_PATH.
 - For TLS directly in the control-plane, set TLS_CERT_PATH/TLS_KEY_PATH.
 - Migrations are in ./migrations.
+- Customer-facing documentation is included under ./customer-docs.
 CONTROL_PLANE
 
   printf "\nPlatform: %s/%s\n" "$goos" "$goarch" >> "$filename"
@@ -212,6 +218,7 @@ build_control_plane() {
   cp -a "$BASE_DIR/scripts/issue-server-cert.sh" "$stage/scripts/"
   cp -a "$BASE_DIR/scripts/setup-control-plane.sh" "$stage/scripts/"
   cp -a "$BASE_DIR/scripts/reload-pull-credentials.sh" "$stage/scripts/"
+  copy_customer_docs "$stage"
   write_control_plane_readme "$stage" "$goos" "$goarch"
 
   local out
@@ -261,6 +268,7 @@ Upgrade:
 Notes:
 - This bundle is architecture-specific.
 - Images are loaded locally; no build on the target machine.
+- Customer-facing documentation is included under ./customer-docs.
 STACK
 
   printf "\nPlatform: linux/%s\n" "$arch" >> "$filename"
@@ -314,6 +322,7 @@ build_stack_bundle() {
   cp -a "$BASE_DIR/scripts/run-coredns.sh" "$stage/scripts/"
   cp -a "$BASE_DIR/scripts/set-dns.sh" "$stage/scripts/"
   cp -a "$BASE_DIR/scripts/install-docker-ubuntu.sh" "$stage/scripts/"
+  copy_customer_docs "$stage"
 
   cat > "$stage/docker-compose.onprem.bundle.yml" <<EOF
 version: "3.9"

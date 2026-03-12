@@ -52,6 +52,7 @@ docker save -o "$DIST_DIR/images/gateway.tar" "$gw_tag"
 
 cp -a "$BASE_DIR/scripts/apply-upgrade.sh" "$DIST_DIR/scripts/"
 cp -a "$BASE_DIR/deploy/compose/.env.onprem.example" "$DIST_DIR/.env.onprem.example"
+"$BASE_DIR/scripts/assemble-customer-docs.sh" "$DIST_DIR/customer-docs"
 if [ -n "$ENV_FILE" ] && [ -f "$ENV_FILE" ]; then
   cp -a "$ENV_FILE" "$DIST_DIR/.env.onprem"
 fi
@@ -248,6 +249,7 @@ Contents:
 - docker-compose.onprem.bundle.yml
 - .env.onprem.example
 - scripts/apply-upgrade.sh
+- customer-docs/
 
 Usage:
 1) Copy this folder to the stack host (same box as the running stack).

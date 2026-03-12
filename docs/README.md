@@ -12,6 +12,7 @@ Start here. Use the canonical docs first; go to deep dives only for topic-specif
 | `operations.md` | Day-2 operations: backup/restore, upgrades, cert rotation, metrics |
 | `local-dev-wsl.md` | Local WSL dev workflow + pre-apply demo walkthrough |
 | `icd.md` | Living Integration Control Document: API contract + headless workflows |
+| `customer/` | Customer-facing documentation bundle source used in installer outputs |
 | `development/roadmap.md` | Implementation roadmap and phase status |
 
 ---
@@ -82,6 +83,7 @@ Associated scripts: `../scripts/testing/`
 | `../scripts/testing/prod-lab-first-contact.sh` | End-to-end first-contact approval flow validation |
 | `../scripts/testing/prod-lab-down.sh` | Stop/wipe production-like Docker lab |
 | `../scripts/test-artifact-ingest.sh` | Push/pull ingest smoke test |
+| `../scripts/build-customer-docs-bundle.sh` | Assemble a zip-ready customer docs bundle |
 | `../scripts/reload-pull-credentials.sh` | Reload pull credential resolver without restarting control-plane |
 | `../scripts/setup-artifactory-demo.sh` | Local Artifactory setup for pull adapter tests |
 | `../scripts/test-artifactory-adapter.sh` | End-to-end Artifactory pull adapter test |
