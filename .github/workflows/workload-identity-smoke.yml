@@ -20,6 +20,8 @@ jobs:
       CI_WORKLOAD_IDENTITY_AUDIENCE: ${{ vars.HWOPS_WORKLOAD_IDENTITY_AUDIENCE || 'hardwareops-ci' }}
       WORKLOAD_IDENTITY_PROVIDER: ${{ vars.HWOPS_WORKLOAD_IDENTITY_PROVIDER || 'github-actions' }}
       SIGNING_KEY_ID: ${{ vars.HWOPS_SIGNING_KEY_ID }}
+      HWOPS_CA_CERT_B64: ${{ secrets.HWOPS_CA_CERT_B64 }}
+      HWOPS_SIGNING_KEY_B64: ${{ secrets.HWOPS_SIGNING_KEY_B64 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,7 +39,7 @@ jobs:
           }
 
       - name: Write optional CA certificate
-        if: ${{ secrets.HWOPS_CA_CERT_B64 != '' }}
+        if: ${{ env.HWOPS_CA_CERT_B64 != '' }}
         run: echo "${{ secrets.HWOPS_CA_CERT_B64 }}" | base64 -d > /tmp/hwops-ca.crt
 
       - name: Exchange GitHub Actions OIDC token
@@ -67,13 +69,21 @@ jobs:
           python3 -c 'import json,sys; data=json.load(sys.stdin); print("artifactId={} objectKey={}".format(data["artifactId"], data["objectKey"]))' <<<"$response"
 
       - name: Write signing key
-        if: ${{ inputs.publish_smoke && secrets.HWOPS_SIGNING_KEY_B64 != '' && vars.HWOPS_SIGNING_KEY_ID != '' }}
+        if: ${{ inputs.publish_smoke }}
         run: |
+          test -n "$HWOPS_SIGNING_KEY_B64" || {
+            echo "Set repository secret HWOPS_SIGNING_KEY_B64 before running publish_smoke=true." >&2
+            exit 1
+          }
+          test -n "$SIGNING_KEY_ID" || {
+            echo "Set repository variable HWOPS_SIGNING_KEY_ID before running publish_smoke=true." >&2
+            exit 1
+          }
           echo "${{ secrets.HWOPS_SIGNING_KEY_B64 }}" | base64 -d > /tmp/hwops-signing.key
           chmod 600 /tmp/hwops-signing.key
 
       - name: Upload signed smoke artifact
-        if: ${{ inputs.publish_smoke && secrets.HWOPS_SIGNING_KEY_B64 != '' && vars.HWOPS_SIGNING_KEY_ID != '' }}
+        if: ${{ inputs.publish_smoke }}
         env:
           BASE_URL: ${{ env.HWOPS_BASE_URL }}
           AUTH_TOKEN: ${{ steps.exchange.outputs.auth_token }}
@@ -96,9 +106,3 @@ jobs:
           sha=${{ github.sha }}
           EOF
           ./scripts/ci-upload-artifact.sh
-
-      - name: Skip signed upload
-        if: ${{ inputs.publish_smoke && (secrets.HWOPS_SIGNING_KEY_B64 == '' || vars.HWOPS_SIGNING_KEY_ID == '') }}
-        run: |
-          echo "publish_smoke was requested but HWOPS_SIGNING_KEY_B64/HWOPS_SIGNING_KEY_ID are not configured." >&2
-          exit 1
