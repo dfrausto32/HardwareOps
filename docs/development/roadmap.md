@@ -21,8 +21,8 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Phase B — Operational Maturity | 🟢 Complete | Audit/metrics/events/lifecycle/CI ingest/bulk ops shipped and operational. |
 | Phase B Extension — UX + Realtime | 🟢 Complete | Bulk actions + realtime updates + auth-session UX reset shipped. |
 | Operational Hardening (between B and C) | 🟢 Complete | Pull-boundary, token exposure, startup guardrails, break-glass backend, proxy trust policy, and abuse controls are all shipped. |
-| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, the local-auth recovery stack (recovery codes, reset tokens, break-glass CLI), and CI workload identity federation are shipped. Remaining Phase C work is custom RBAC, provenance policy, LDAP, and broader secrets integration. |
-| Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Live-deployment acceptance gate execution and connected email delivery for auth recovery/setup remain. |
+| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, the local-auth recovery stack (recovery codes, reset tokens, break-glass CLI), and CI workload identity federation are shipped. Remaining Phase C work is provenance policy, LDAP, and broader secrets integration. |
+| Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Remaining Phase D work is live-deployment acceptance gate execution, connected email delivery for auth recovery/setup, and custom RBAC policy delegation. |
 
 ### Active work queue (what is still to do)
 
@@ -30,7 +30,7 @@ No items currently in-flight. Queue is clear.
 
 ### Prepared next tasks (agent-scoped)
 - `D-PASSWORD-RECOVERY-EMAIL` — connected email delivery for account setup/reset plus deployment/runbook closeout
-- `C-CUSTOM-RBAC` — per-resource policy model on top of fixed roles
+- `D-CUSTOM-RBAC` — per-resource policy model on top of fixed roles
 
 ---
 
@@ -276,7 +276,7 @@ The 2026-03-10 D-hardening batch merged. Items 1–3 below are now complete. Rem
 2. ~~**ECS exec guardrails**~~ — ✅ Done (#19)
 3. ~~**CloudWatch alarm Terraform resources**~~ — ✅ Done (#17)
 4. ~~**OIDC SSO**~~ — ✅ Done (#23)
-5. **Custom RBAC policies:** Per-resource permission engine and admin UI.
+5. **Custom RBAC policies (Phase D):** Per-resource permission engine and admin UI.
 6. ~~**Trusted-key management deployment wiring**~~ — ✅ Done
 7. ~~**Trust override UI**~~ — ✅ Done
 8. ~~**CI workload identity federation**~~ — ✅ Done
@@ -418,14 +418,6 @@ Confirm priorities with the team before mapping to agents.
 - **Risks:** Inconsistent UI behavior.
 - **Acceptance:** UI hides actions for non‑authorized roles.
 - **Notes:** Browser parity shipped. Centralized `buildPermissionState` drives `visibleNav`, `visibleLogsTabs`, and mutating action gating across all views. `firstAllowedKey` fallback ensures unauthorized roles land on a permitted view. Regression coverage added in `rbac.test.js`.
-
-#### Custom RBAC policies
-- **Status:** ⬜ Planned
-- **Scope:** Per‑resource permissions.
-- **Dependencies:** Policy engine; admin UI.
-- **Risks:** Complexity / misconfig.
-- **Acceptance:** Custom policies enforce least privilege.
-- **Notes:** 
 
 #### Trusted-key artifact verification
 - **Status:** 🟢 Complete
@@ -626,6 +618,18 @@ Confirm priorities with the team before mapping to agents.
   - Delivery failures and successful sends are auditable.
   - On-prem/airgapped deployments remain fully functional with email disabled.
 - **Notes:** Deferred from Phase C. First implementation should use SMTP relay config; provider-native adapters (SES/SendGrid/etc.) can follow only if needed. This should close out the final password-recovery runbook for cloud/connected environments.
+
+#### Custom RBAC policies
+- **Status:** ⬜ Planned
+- **Scope:** Per-resource permissions and delegated policy control on top of fixed roles.
+- **Dependencies:** Policy engine, policy storage model, admin UI, endpoint enforcement sweep, and audit coverage.
+- **Risks:** Misconfiguration can over-grant access or create support burden; policy debugging becomes harder than fixed roles.
+- **Acceptance:**
+  - Admins can define and assign resource-scoped policies without bypassing the fixed-role baseline.
+  - API and UI honor policy decisions consistently.
+  - Effective permissions are inspectable enough for support/debugging.
+  - Policy changes are fully audited.
+- **Notes:** Explicitly moved from Phase C to Phase D. The platform already has fixed-role RBAC and UI parity; custom policies are now treated as an advanced deployment/delegation feature rather than a Phase C blocker.
 
 #### Multi-tenant controls (optional)
 - **Status:** ⬜ Backlog
