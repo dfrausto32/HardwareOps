@@ -21,15 +21,15 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Phase B — Operational Maturity | 🟢 Complete | Audit/metrics/events/lifecycle/CI ingest/bulk ops shipped and operational. |
 | Phase B Extension — UX + Realtime | 🟢 Complete | Bulk actions + realtime updates + auth-session UX reset shipped. |
 | Operational Hardening (between B and C) | 🟢 Complete | Pull-boundary, token exposure, startup guardrails, break-glass backend, proxy trust policy, and abuse controls are all shipped. |
-| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, and the first three local-auth recovery layers are shipped. Remaining Phase C work is email password recovery closeout, custom RBAC, CI workload identity, provenance policy, LDAP, and broader secrets integration. |
-| Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Live-deployment acceptance gate execution remains. |
+| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, and the local-auth recovery stack (recovery codes, reset tokens, break-glass CLI) are shipped. Remaining Phase C work is custom RBAC, CI workload identity, provenance policy, LDAP, and broader secrets integration. |
+| Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Live-deployment acceptance gate execution and connected email delivery for auth recovery/setup remain. |
 
 ### Active work queue (what is still to do)
 
 No items currently in-flight. Queue is clear.
 
 ### Prepared next tasks (agent-scoped)
-- `C-PASSWORD-RECOVERY-4` — optional email delivery + deployment/runbook closeout
+- `D-PASSWORD-RECOVERY-EMAIL` — connected email delivery for account setup/reset plus deployment/runbook closeout
 - `C-CUSTOM-RBAC` — per-resource policy model on top of fixed roles
 - `C-CI-WORKLOAD-IDENTITY` — OIDC-based CI publish/pull credentials without long-lived secrets
 
@@ -477,27 +477,26 @@ Confirm priorities with the team before mapping to agents.
 - **Notes:** `go-oidc/v3` + `golang.org/x/oauth2` for IdP discovery and token exchange. `GET /api/v1/auth/oidc/login` → IdP redirect; `GET /api/v1/auth/oidc/callback` → code exchange → internal JWT issued. Group-to-role mapping via `AUTH_OIDC_ROLE_MAP` JSON; unmapped users get `AUTH_OIDC_DEFAULT_ROLE` (default `viewer`). State cookie (`hwops_oidc_state`, HttpOnly, 600s TTL). Users upserted on `auth_provider`+`external_id` (DB columns already existed). `auth.oidc.login` and `auth.oidc.login.failed` audit events. UI renders SSO button when `authStatus.oidcEnabled`. Hardened profile rejects `AUTH_OIDC_DEFAULT_ROLE=admin` and empty role map. Per-IdP docs for Okta, Azure AD (Entra), and Google Workspace in `auth-secrets-v1.md`.
 
 #### Password recovery / admin reset
-- **Status:** 🟡 In progress
-- **Scope:** Local-auth password recovery path for locked-out operators, including airgapped-safe recovery, optional email delivery, operator-assisted reset, emergency break-glass reset, and audit coverage.
+- **Status:** 🟢 Complete (local / airgapped)
+- **Scope:** Local-auth password recovery path for locked-out operators in dev, on-prem, and airgapped deployments, including recovery codes, operator-assisted reset, emergency break-glass reset, and audit coverage.
 - **Dependencies:** Local auth mode, user management APIs, break-glass/admin recovery policy, deployment docs.
 - **Risks:** Weak recovery flow becoming an account-takeover path; undocumented operator steps causing outage during lockout.
 - **Acceptance:** 
   - Recovery codes work without SMTP/email and do not require direct DB edits.
   - Operators can issue a one-time reset token for a local user in airgapped/on-prem deployments.
   - Emergency break-glass local reset path is explicit, gated, and fully audited.
-  - Optional email delivery supports account setup/password reset for connected deployments.
   - Recovery path is auditable end-to-end across UI/API/CLI.
-- **Notes:** Implement this in layers so airgapped recovery lands first and the connected/email path reuses the same token model. Recovery codes, operator-issued reset tokens, and host-local break-glass CLI recovery are shipped. Remaining work is optional email delivery and the final deployment/runbook closeout.
+- **Notes:** Implemented for local/airgapped deployments first. Recovery codes, operator-issued reset tokens, and host-local break-glass CLI recovery are shipped. Connected email delivery is explicitly deferred to Phase D so it does not block enterprise identity and policy work.
 - **Phase C design:**
   - **Layer 1 — Recovery codes:** self-service one-time codes generated per user, stored only as hashes, downloadable once, usable from the login screen.
   - **Layer 2 — Operator reset token:** local admin can generate a short-lived one-time reset token for a target user and hand it to them out of band.
   - **Layer 3 — Break-glass local reset:** host-local CLI can reset an admin password or create a recovery admin when normal auth paths are unavailable.
-  - **Layer 4 — Email delivery:** optional SMTP/provider-backed reset link/code for connected deployments; reuses the same backend token semantics as operator-issued reset.
+  - **Layer 4 — Email delivery:** deferred to Phase D for connected deployments; will reuse the same backend token semantics as operator-issued reset.
 - **Subtasks:**
   - **C-PASSWORD-RECOVERY-1:** ✅ Recovery codes backend + UI (`POST /api/v1/auth/recovery-codes/generate`, `POST /api/v1/auth/recovery-codes/reset`, download/copy UX, audit events).
   - **C-PASSWORD-RECOVERY-2:** ✅ Operator-issued reset token backend + admin UI (`POST /api/v1/users/{userId}/password-reset-token`, `POST /api/v1/auth/password-reset/complete`, TTL, reason, one-time use, audit events).
   - **C-PASSWORD-RECOVERY-3:** ✅ Break-glass local CLI reset/create-admin path for total lockout recovery (`control-plane auth breakglass reset-password ...`, `control-plane auth breakglass create-admin ...`) with required reason and audit event.
-  - **C-PASSWORD-RECOVERY-4:** Optional email delivery for account setup/reset plus deployment/runbook guidance for SMTP-capable environments.
+  - **C-PASSWORD-RECOVERY-4:** Deferred to Phase D as `D-PASSWORD-RECOVERY-EMAIL`.
 
 #### CI workload identity federation
 - **Status:** ⬜ Planned
@@ -614,6 +613,18 @@ Confirm priorities with the team before mapping to agents.
   - ECS exec disabled by default for production.
   - Security alarms routed to on-call channel.
 - **Notes:** IAM roles, WAFv2, ingress CIDR split, acceptance gate, and operator runbook shipped in the March 2026 IAM/WAF batch. Plaintext `DATABASE_URL` eliminated (#18); `enable_execute_command` default enforced to `false` (#19); CloudWatch alarm resources added to Terraform (#17). Remaining residual: live-deployment acceptance gate execution against a real AWS environment.
+
+#### Connected email delivery for auth recovery/setup
+- **Status:** ⬜ Planned
+- **Scope:** Optional SMTP/provider-backed delivery for password reset and account setup in connected deployments.
+- **Dependencies:** Password reset token model, deployment-specific mail configuration, public app URL, audit coverage.
+- **Risks:** User-existence leakage, mail delivery drift across environments, and secret handling for SMTP/provider credentials.
+- **Acceptance:**
+  - Connected deployments can send password-reset/account-setup emails without changing the core reset-token model.
+  - Email request flow does not reveal whether a user exists.
+  - Delivery failures and successful sends are auditable.
+  - On-prem/airgapped deployments remain fully functional with email disabled.
+- **Notes:** Deferred from Phase C. First implementation should use SMTP relay config; provider-native adapters (SES/SendGrid/etc.) can follow only if needed. This should close out the final password-recovery runbook for cloud/connected environments.
 
 #### Multi-tenant controls (optional)
 - **Status:** ⬜ Backlog
