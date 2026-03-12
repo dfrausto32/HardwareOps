@@ -1,0 +1,104 @@
+name: hwops-workload-identity-smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_smoke:
+        description: "Upload a small signed artifact after token exchange"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      HWOPS_BASE_URL: ${{ vars.HWOPS_BASE_URL }}
+      CI_WORKLOAD_IDENTITY_AUDIENCE: ${{ vars.HWOPS_WORKLOAD_IDENTITY_AUDIENCE || 'hardwareops-ci' }}
+      WORKLOAD_IDENTITY_PROVIDER: ${{ vars.HWOPS_WORKLOAD_IDENTITY_PROVIDER || 'github-actions' }}
+      SIGNING_KEY_ID: ${{ vars.HWOPS_SIGNING_KEY_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Validate workflow configuration
+        run: |
+          test -n "$HWOPS_BASE_URL" || {
+            echo "Set repository variable HWOPS_BASE_URL before running this workflow." >&2
+            exit 1
+          }
+
+      - name: Write optional CA certificate
+        if: ${{ secrets.HWOPS_CA_CERT_B64 != '' }}
+        run: echo "${{ secrets.HWOPS_CA_CERT_B64 }}" | base64 -d > /tmp/hwops-ca.crt
+
+      - name: Exchange GitHub Actions OIDC token
+        id: exchange
+        env:
+          BASE_URL: ${{ env.HWOPS_BASE_URL }}
+          CA_CERT_PATH: /tmp/hwops-ca.crt
+          WORKLOAD_IDENTITY_PROVIDER: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          CI_WORKLOAD_IDENTITY_AUDIENCE: ${{ env.CI_WORKLOAD_IDENTITY_AUDIENCE }}
+        run: |
+          AUTH_TOKEN="$(./scripts/ci-exchange-workload-identity.sh)"
+          test -n "$AUTH_TOKEN"
+          echo "auth_token=$AUTH_TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Verify publish scope via presign-upload
+        env:
+          BASE_URL: ${{ env.HWOPS_BASE_URL }}
+          AUTH_TOKEN: ${{ steps.exchange.outputs.auth_token }}
+          CA_CERT_PATH: /tmp/hwops-ca.crt
+        run: |
+          payload='{"filename":"gha-workload-identity-smoke.tar.gz","contentType":"application/gzip","expiresSeconds":60}'
+          response="$(curl -fsS ${CA_CERT_PATH:+--cacert "$CA_CERT_PATH"} \
+            -H "Authorization: Bearer $AUTH_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "$BASE_URL/api/v1/artifacts/presign-upload")"
+          python3 -c 'import json,sys; data=json.load(sys.stdin); print("artifactId={} objectKey={}".format(data["artifactId"], data["objectKey"]))' <<<"$response"
+
+      - name: Write signing key
+        if: ${{ inputs.publish_smoke && secrets.HWOPS_SIGNING_KEY_B64 != '' && vars.HWOPS_SIGNING_KEY_ID != '' }}
+        run: |
+          echo "${{ secrets.HWOPS_SIGNING_KEY_B64 }}" | base64 -d > /tmp/hwops-signing.key
+          chmod 600 /tmp/hwops-signing.key
+
+      - name: Upload signed smoke artifact
+        if: ${{ inputs.publish_smoke && secrets.HWOPS_SIGNING_KEY_B64 != '' && vars.HWOPS_SIGNING_KEY_ID != '' }}
+        env:
+          BASE_URL: ${{ env.HWOPS_BASE_URL }}
+          AUTH_TOKEN: ${{ steps.exchange.outputs.auth_token }}
+          CA_CERT_PATH: /tmp/hwops-ca.crt
+          ARTIFACT_NAME: gha-workload-identity-smoke
+          ARTIFACT_VERSION: 0.0.${{ github.run_number }}
+          ARTIFACT_TYPE: app_bundle
+          INPUT_DIR: /tmp/hwops-smoke-artifact
+          SIGNING_KEY: /tmp/hwops-signing.key
+          SIGNING_KEY_ID: ${{ env.SIGNING_KEY_ID }}
+          METADATA_JSON: >-
+            {"workflow":"${{ github.workflow }}","runId":"${{ github.run_id }}","sha":"${{ github.sha }}"}
+        run: |
+          mkdir -p "$INPUT_DIR"
+          cat > "$INPUT_DIR/README.txt" <<EOF
+          GitHub Actions workload identity smoke artifact
+          repository=${{ github.repository }}
+          workflow=${{ github.workflow }}
+          run_id=${{ github.run_id }}
+          sha=${{ github.sha }}
+          EOF
+          ./scripts/ci-upload-artifact.sh
+
+      - name: Skip signed upload
+        if: ${{ inputs.publish_smoke && (secrets.HWOPS_SIGNING_KEY_B64 == '' || vars.HWOPS_SIGNING_KEY_ID == '') }}
+        run: |
+          echo "publish_smoke was requested but HWOPS_SIGNING_KEY_B64/HWOPS_SIGNING_KEY_ID are not configured." >&2
+          exit 1

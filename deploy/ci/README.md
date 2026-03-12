@@ -15,6 +15,7 @@ They are scaffolds, not final production pipelines. Adjust build/sign stages, br
 - `templates/gitlab-ci-pull.yml`
 - `templates/Jenkinsfile.push`
 - `templates/Jenkinsfile.pull`
+- `.github/workflows/workload-identity-smoke.yml`
 
 ## Shared required inputs
 
@@ -66,6 +67,13 @@ GitHub Actions usage:
 - grant workflow permission: `id-token: write`
 - set `CI_WORKLOAD_IDENTITY_AUDIENCE` to the configured audience
 - do not pass a static CI token unless you want fallback behavior
+- this repo includes a minimal manual smoke workflow:
+  - `.github/workflows/workload-identity-smoke.yml`
+  - requires repository variable `HWOPS_BASE_URL`
+  - optional repository variable `HWOPS_WORKLOAD_IDENTITY_PROVIDER` (defaults to `github-actions`)
+  - optional repository variable `HWOPS_WORKLOAD_IDENTITY_AUDIENCE` (defaults to `hardwareops-ci`)
+  - optional repository secret `HWOPS_CA_CERT_B64` when the target uses a private CA
+  - optional repository secret `HWOPS_SIGNING_KEY_B64` plus repository variable `HWOPS_SIGNING_KEY_ID` when `publish_smoke=true` should upload a signed artifact
 
 Example GitLab provider:
 

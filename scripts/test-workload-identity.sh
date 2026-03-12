@@ -50,25 +50,22 @@ PY
 )
   api_call -H 'Content-Type: application/json' \
     -d "$payload" \
-    "$BASE_URL/api/v1/auth/login" | python3 - <<'PY'
-import json, sys
-print(json.load(sys.stdin)["token"])
-PY
+    "$BASE_URL/api/v1/auth/login" | python3 -c 'import json, sys; print(json.load(sys.stdin)["token"])'
 }
 
 token=$(login)
 
 echo "Checking workload identity status..."
 status_json=$(api_call -H "Authorization: Bearer $token" "$BASE_URL/api/v1/auth/workload-identity/status")
-printf '%s\n' "$status_json" | python3 - <<'PY' "$EXPECT_PROVIDER"
+printf '%s\n' "$status_json" | python3 -c '
 import json, sys
 expected = sys.argv[1].strip()
 data = json.load(sys.stdin)
-providers = [p.get("name","") for p in data.get("providers", [])]
-print(f"enabled={data.get('enabled', False)} providers={providers}")
+providers = [p.get("name", "") for p in data.get("providers", [])]
+print("enabled={} providers={}".format(data.get("enabled", False), providers))
 if expected and expected not in providers:
     raise SystemExit(f"expected provider {expected!r}, got {providers!r}")
-PY
+' "$EXPECT_PROVIDER"
 
 if [ -z "$CI_WORKLOAD_IDENTITY_TOKEN" ] || [ -z "$CI_WORKLOAD_IDENTITY_PROVIDER" ]; then
   echo "Skipping exchange test; set CI_WORKLOAD_IDENTITY_PROVIDER and CI_WORKLOAD_IDENTITY_TOKEN to exercise token exchange."
@@ -89,17 +86,12 @@ PY
 exchange_json=$(api_call -H 'Content-Type: application/json' \
   -d "$exchange_payload" \
   "$BASE_URL/api/v1/auth/workload-identity/exchange")
-workload_token=$(printf '%s\n' "$exchange_json" | python3 - <<'PY'
+workload_token=$(printf '%s\n' "$exchange_json" | python3 -c 'import json, sys; data = json.load(sys.stdin); print(data["token"])')
+printf '%s\n' "$exchange_json" | python3 -c '
 import json, sys
 data = json.load(sys.stdin)
-print(data["token"])
-PY
-)
-printf '%s\n' "$exchange_json" | python3 - <<'PY'
-import json, sys
-data = json.load(sys.stdin)
-print(f"provider={data.get('provider')} subject={data.get('subject')} expiresAt={data.get('expiresAt')}")
-PY
+print("provider={} subject={} expiresAt={}".format(data.get("provider"), data.get("subject"), data.get("expiresAt")))
+'
 
 if [ "$TEST_PUBLISH_SCOPE" != "1" ]; then
   exit 0
@@ -110,10 +102,10 @@ presign_payload='{"filename":"workload-identity-smoke.tar.gz","contentType":"app
 api_call -H "Authorization: Bearer $workload_token" \
   -H 'Content-Type: application/json' \
   -d "$presign_payload" \
-  "$BASE_URL/api/v1/artifacts/presign-upload" | python3 - <<'PY'
+  "$BASE_URL/api/v1/artifacts/presign-upload" | python3 -c '
 import json, sys
 data = json.load(sys.stdin)
-print(f"artifactId={data.get('artifactId')} objectKey={data.get('objectKey')}")
-PY
+print("artifactId={} objectKey={}".format(data.get("artifactId"), data.get("objectKey")))
+'
 
 echo "Workload identity smoke passed."
