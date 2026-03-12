@@ -60,8 +60,12 @@ jobs:
           AUTH_TOKEN: ${{ steps.exchange.outputs.auth_token }}
           CA_CERT_PATH: /tmp/hwops-ca.crt
         run: |
+          curl_ca_args=()
+          if [ -f "$CA_CERT_PATH" ]; then
+            curl_ca_args+=(--cacert "$CA_CERT_PATH")
+          fi
           payload='{"filename":"gha-workload-identity-smoke.tar.gz","contentType":"application/gzip","expiresSeconds":60}'
-          response="$(curl -fsS ${CA_CERT_PATH:+--cacert "$CA_CERT_PATH"} \
+          response="$(curl -fsS "${curl_ca_args[@]}" \
             -H "Authorization: Bearer $AUTH_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$payload" \
