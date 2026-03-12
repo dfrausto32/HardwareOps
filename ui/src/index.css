@@ -1210,6 +1210,17 @@ tr.artifact-group-start td {
   font-size: 12px;
 }
 
+.trust-override-modal {
+  max-width: 760px;
+}
+
+.trust-option-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px 12px;
+  align-items: start;
+}
+
 .artifact-lifecycle-toolbar {
   margin-bottom: 12px;
   padding: 10px;

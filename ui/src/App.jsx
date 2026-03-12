@@ -80,759 +80,78 @@ import {
   subscribeAuthExpired,
 } from './api'
 import { buildPermissionState, firstAllowedKey } from './rbac'
-
-const nav = [
-  { id: 'dashboard', label: 'Dashboard', icon: 'icon-dashboard' },
-  { id: 'metrics', label: 'Metrics', icon: 'icon-metrics' },
-  { id: 'logs', label: 'Logs', icon: 'icon-logs' },
-  { id: 'security', label: 'Security', icon: 'icon-security' },
-  { id: 'settings', label: 'Settings', icon: 'icon-settings' },
-]
-
-const logsNav = [
-  { id: 'events', label: 'Live Events' },
-  { id: 'device', label: 'Device Logs' },
-  { id: 'audit', label: 'Audit Log' },
-]
-
-const componentTypes = [
-  { id: 'app_bundle', label: 'App Bundle' },
-  { id: 'config_bundle', label: 'Config Bundle' },
-  { id: 'data_bundle', label: 'Data Bundle' },
-  { id: 'firmware', label: 'Firmware' },
-  { id: 'container_image', label: 'Container Image' },
-  { id: 'agent_bundle', label: 'Agent Bundle' },
-]
-
-const rangeOptions = [
-  { id: '15m', label: '15m', ms: 15 * 60 * 1000 },
-  { id: '1h', label: '1h', ms: 60 * 60 * 1000 },
-  { id: '6h', label: '6h', ms: 6 * 60 * 60 * 1000 },
-  { id: '24h', label: '24h', ms: 24 * 60 * 60 * 1000 },
-]
-
-const rangeMsById = rangeOptions.reduce((acc, item) => {
-  acc[item.id] = item.ms
-  return acc
-}, {})
-
-const chartColors = {
-  total: '#8aa5ff',
-  active: '#3bd487',
-  degraded: '#f1c76f',
-  stale: '#9aa3ad',
-  offline: '#f27272',
-  success: '#3bd487',
-  error: '#f27272',
-  warning: '#f1c76f',
-  info: '#8aa5ff',
-}
-
-const autoTrackModes = [
-  { id: 'inherit', label: 'Inherit' },
-  { id: 'enabled', label: 'Enabled' },
-  { id: 'disabled', label: 'Disabled' },
-]
-
-const signatureTypeOptions = [
-  { id: 'ed25519', label: 'Ed25519' },
-  { id: 'cosign', label: 'Cosign (key-based)' },
-]
-
-function parsePolicyObject(raw) {
-  if (!raw) return {}
-  if (typeof raw === 'object') return { ...raw }
-  if (typeof raw === 'string') {
-    try {
-      const parsed = JSON.parse(raw)
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return parsed
-      }
-    } catch {
-      return {}
-    }
-  }
-  return {}
-}
-
-function getAutoTrackModeFromPolicy(raw) {
-  const policy = parsePolicyObject(raw)
-  const mode = policy?.hwops?.autoVersion?.mode
-  if (mode === 'enabled' || mode === 'disabled') return mode
-  return 'inherit'
-}
-
-function mergeAutoTrackModeIntoPolicy(raw, mode) {
-  const policy = parsePolicyObject(raw)
-  const hwops = policy.hwops && typeof policy.hwops === 'object' ? { ...policy.hwops } : {}
-  const autoVersion = hwops.autoVersion && typeof hwops.autoVersion === 'object' ? { ...hwops.autoVersion } : {}
-  if (mode === 'enabled' || mode === 'disabled') {
-    autoVersion.mode = mode
-    hwops.autoVersion = autoVersion
-    policy.hwops = hwops
-    return policy
-  }
-  if (hwops.autoVersion) {
-    delete hwops.autoVersion
-  }
-  if (Object.keys(hwops).length > 0) {
-    policy.hwops = hwops
-  } else {
-    delete policy.hwops
-  }
-  return policy
-}
-
-function formatChartValue(value, integerOnly) {
-  if (value === null || value === undefined || Number.isNaN(value)) return '—'
-  if (integerOnly) return Math.round(value).toLocaleString()
-  return Number(value).toLocaleString()
-}
-
-function TimeSeriesChart({ series = [], rangeMs = rangeMsById['1h'], height = 180, integerOnly = false }) {
-  const now = Date.now()
-  const startTs = now - rangeMs
-  const width = 1000
-  const padding = 10
-
-  const normalizedSeries = series.map((entry) => ({
-    ...entry,
-    points: (entry.points || []).filter((point) => point.ts >= startTs),
-  }))
-  const allPoints = normalizedSeries.flatMap((entry) => entry.points || [])
-  if (allPoints.length === 0) {
-    return <div className="placeholder">No data yet.</div>
-  }
-  const values = allPoints.map((point) => Number(point.value || 0))
-  let minY = Math.min(...values)
-  let maxY = Math.max(...values)
-  if (!Number.isFinite(minY) || !Number.isFinite(maxY)) {
-    minY = 0
-    maxY = 1
-  }
-  minY = Math.min(0, minY)
-  if (integerOnly) {
-    minY = Math.floor(minY)
-    maxY = Math.ceil(maxY)
-  }
-  if (minY === maxY) {
-    maxY = minY + 1
-  }
-  const tickCount = 4
-  let tickStep = (maxY - minY) / tickCount
-  if (integerOnly) {
-    tickStep = Math.max(1, Math.ceil(tickStep))
-    maxY = minY + tickStep * tickCount
-  }
-  const ticks = Array.from({ length: tickCount + 1 }, (_, idx) => maxY - idx * tickStep)
-
-  const xFor = (ts) => {
-    const ratio = Math.min(Math.max((ts - startTs) / rangeMs, 0), 1)
-    return padding + ratio * (width - padding * 2)
-  }
-  const yFor = (value) => {
-    const ratio = (Number(value || 0) - minY) / (maxY - minY)
-    return height - padding - ratio * (height - padding * 2)
-  }
-
-  return (
-    <div className="chart">
-      <div className="chart-body">
-        <div className="chart-y" style={{ gridTemplateRows: `repeat(${ticks.length}, 1fr)` }}>
-          {ticks.map((tick) => (
-            <span key={tick}>{formatChartValue(tick, integerOnly)}</span>
-          ))}
-        </div>
-        <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
-          <rect className="chart-bg" x="0" y="0" width={width} height={height} />
-          {ticks.map((tick) => {
-            const y = yFor(tick)
-            return (
-              <line
-                key={`grid-${tick}`}
-                className="chart-grid"
-                x1={padding}
-                x2={width - padding}
-                y1={y}
-                y2={y}
-              />
-            )
-          })}
-          {normalizedSeries.map((entry) => (
-            <g key={entry.id}>
-              <polyline
-                className="chart-line"
-                stroke={entry.color || '#999'}
-                points={(entry.points || [])
-                  .map((point) => `${xFor(point.ts)},${yFor(point.value)}`)
-                  .join(' ')}
-              />
-              {entry.points && entry.points.length > 0 && (() => {
-                const lastPoint = entry.points[entry.points.length - 1]
-                const x = xFor(lastPoint.ts)
-                const y = yFor(lastPoint.value)
-                const labelText = formatChartValue(lastPoint.value, integerOnly)
-                const anchor = x > width - 80 ? 'end' : 'start'
-                const xLabel = anchor === 'end' ? x - 6 : x + 6
-                return (
-                  <text
-                    className="chart-last-label"
-                    x={xLabel}
-                    y={y}
-                    textAnchor={anchor}
-                    alignmentBaseline="middle"
-                    fill={entry.color || '#fff'}
-                  >
-                    {labelText}
-                  </text>
-                )
-              })()}
-            </g>
-          ))}
-        </svg>
-      </div>
-      <div className="chart-footer">
-        <span>{new Date(startTs).toLocaleTimeString()}</span>
-        <span>Now</span>
-      </div>
-    </div>
-  )
-}
-
-function ChartLegend({ series }) {
-  if (!series || series.length === 0) return null
-  return (
-    <div className="chart-legend">
-      {series.map((entry) => (
-        <div key={entry.id} className="legend-item">
-          <span className="legend-dot" style={{ background: entry.color }} />
-          {entry.label}
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function newComponentRow(overrides = {}) {
-  return {
-    id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `cmp-${Date.now()}-${Math.random()}`,
-    key: '',
-    artifactType: '',
-    artifactId: '',
-    desiredVersion: '',
-    desiredConfigRev: '',
-    policy: {},
-    autoTrackMode: 'inherit',
-    locked: false,
-    ...overrides,
-  }
-}
-
-function normalizeArtifactType(val) {
-  if (!val) return ''
-  return String(val).trim().toLowerCase()
-}
-
-function normalizeArtifactStatus(val) {
-  const normalized = String(val || '').trim().toLowerCase()
-  if (!normalized) return 'active'
-  return normalized
-}
-
-function normalizeVerificationStatus(val, artifact) {
-  const normalized = String(val || '').trim().toLowerCase()
-  if (normalized) return normalized
-  if (artifact?.signature) return 'legacy'
-  return 'unsigned'
-}
-
-function verificationPillLabel(artifact) {
-  const status = normalizeVerificationStatus(artifact?.verificationStatus, artifact)
-  switch (status) {
-    case 'verified':
-      return 'verified'
-    case 'legacy':
-      return 'legacy'
-    case 'failed':
-      return 'failed'
-    case 'untrusted':
-      return 'untrusted'
-    default:
-      return 'unsigned'
-  }
-}
-
-function artifactSignerSummary(artifact) {
-  const parts = []
-  if (artifact?.signatureType) parts.push(String(artifact.signatureType))
-  if (artifact?.signatureKeyId) parts.push(String(artifact.signatureKeyId))
-  return parts.join(' · ') || '—'
-}
-
-function artifactAllowedByTrustPolicy(artifact, policy) {
-  const mode = String(policy?.verificationMode || 'warn_unsigned')
-  if (mode !== 'require_verified') return true
-  const status = normalizeVerificationStatus(artifact?.verificationStatus, artifact)
-  if (status !== 'verified') return false
-  const allowedKeyIds = Array.isArray(policy?.allowedSigningKeyIds) ? policy.allowedSigningKeyIds.filter(Boolean) : []
-  if (allowedKeyIds.length > 0 && !allowedKeyIds.includes(String(artifact?.signatureKeyId || ''))) {
-    return false
-  }
-  const allowedSignatureTypes = Array.isArray(policy?.allowedSignatureTypes)
-    ? policy.allowedSignatureTypes.filter(Boolean)
-    : []
-  if (allowedSignatureTypes.length > 0 && !allowedSignatureTypes.includes(String(artifact?.signatureType || ''))) {
-    return false
-  }
-  return true
-}
-
-function filterArtifactGroupsByType(groups, type) {
-  const target = normalizeArtifactType(type)
-  if (!target) return groups
-  return groups
-    .map((group) => ({
-      ...group,
-      versions: group.versions.filter((artifact) => normalizeArtifactType(artifact.type) === target),
-    }))
-    .filter((group) => group.versions.length > 0)
-}
-
-function filterArtifactGroupsByTrustPolicy(groups, policy) {
-  return (groups || [])
-    .map((group) => ({
-      ...group,
-      versions: (group.versions || []).filter((artifact) => artifactAllowedByTrustPolicy(artifact, policy)),
-    }))
-    .filter((group) => group.versions.length > 0)
-}
-
-function fallbackComponentType(key, artifactType) {
-  const normalized = normalizeArtifactType(artifactType)
-  if (normalized) return normalized
-  if (key === 'agent_bundle') return 'agent_bundle'
-  if (key === 'app_bundle') return 'app_bundle'
-  return ''
-}
-
-function parseCSVLine(line) {
-  const out = []
-  let cur = ''
-  let inQuotes = false
-
-  for (let i = 0; i < line.length; i += 1) {
-    const ch = line[i]
-    if (inQuotes) {
-      if (ch === '"') {
-        if (line[i + 1] === '"') {
-          cur += '"'
-          i += 1
-        } else {
-          inQuotes = false
-        }
-      } else {
-        cur += ch
-      }
-    } else if (ch === '"') {
-      inQuotes = true
-    } else if (ch === ',') {
-      out.push(cur)
-      cur = ''
-    } else {
-      cur += ch
-    }
-  }
-  out.push(cur)
-  return out
-}
-
-function parseCSV(text) {
-  const trimmed = text.trim()
-  if (!trimmed) return { header: [], rows: [] }
-  const lines = trimmed.split(/\r?\n/)
-  const header = parseCSVLine(lines[0])
-  const rows = lines.slice(1).map(parseCSVLine)
-  return { header, rows }
-}
-
-function normalizeObject(value) {
-  if (!value) return {}
-  if (typeof value === 'object') return value
-  if (typeof value === 'string') {
-    try {
-      const parsed = JSON.parse(value)
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return parsed
-      }
-    } catch {
-      return {}
-    }
-  }
-  return {}
-}
-
-function selectorMatches(labels, selector) {
-  if (!selector || Object.keys(selector).length === 0) return true
-  if (!labels) return false
-  return Object.entries(selector).every(([key, val]) => labels[key] === val)
-}
-
-function selectorToForm(selector) {
-  const region = selector.region ?? ''
-  const role = selector.role ?? ''
-  const site = selector.site ?? ''
-  const custom = Object.entries(selector)
-    .filter(([key]) => !['region', 'role', 'site'].includes(key))
-    .map(([key, value]) => ({ key, value: String(value ?? '') }))
-  return { region, role, site, custom }
-}
-
-function objectToKeyValueRows(obj) {
-  const normalized = normalizeObject(obj)
-  const entries = Object.entries(normalized)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, value]) => ({ key: String(key), value: String(value ?? '') }))
-  return entries.length > 0 ? entries : [{ key: '', value: '' }]
-}
-
-function keyValueRowsToObject(rows) {
-  const out = {}
-  const seen = new Set()
-  for (const row of rows || []) {
-    const key = String(row?.key || '').trim()
-    if (!key) continue
-    if (seen.has(key)) {
-      return { value: null, error: `Duplicate label key: ${key}` }
-    }
-    seen.add(key)
-    out[key] = String(row?.value ?? '').trim()
-  }
-  return { value: out, error: '' }
-}
-
-function formatSelector(selector) {
-  const entries = Object.entries(selector || {})
-  if (entries.length === 0) return '—'
-  return entries.map(([key, value]) => `${key}=${value}`).join(', ')
-}
-
-function normalizeSelector(selector) {
-  const normalized = {}
-  const obj = normalizeObject(selector)
-  Object.entries(obj).forEach(([key, value]) => {
-    const k = String(key || '').trim()
-    if (!k) return
-    normalized[k] = String(value ?? '')
-  })
-  return normalized
-}
-
-function stableSelectorString(selector) {
-  const sorted = Object.entries(selector || {}).sort(([a], [b]) => a.localeCompare(b))
-  return JSON.stringify(Object.fromEntries(sorted))
-}
-
-function isUUID(value) {
-  const input = String(value || '').trim()
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input)
-}
-
-function csvEscape(value) {
-  const input = String(value ?? '')
-  if (!/[",\n]/.test(input)) return input
-  return `"${input.replace(/"/g, '""')}"`
-}
-
-function buildBulkGroupsRollbackCsv(rows) {
-  const header = ['action', 'groupId', 'name', 'selector_json']
-  const lines = [header.join(',')]
-  rows.forEach((row) => {
-    const selectorJson = row.action === 'upsert' ? JSON.stringify(row.selector || {}) : ''
-    lines.push([
-      csvEscape(row.action || ''),
-      csvEscape(row.groupId || ''),
-      csvEscape(row.name || ''),
-      csvEscape(selectorJson),
-    ].join(','))
-  })
-  return `${lines.join('\n')}\n`
-}
-
-function parseBulkGroupsCsv(csvText, existingGroups) {
-  const parsed = parseCSV(csvText || '')
-  const headers = (parsed.header || []).map((h) => String(h || '').trim())
-  const headersLower = headers.map((h) => h.toLowerCase())
-  const getIdx = (candidates) => {
-    for (const candidate of candidates) {
-      const idx = headersLower.indexOf(candidate)
-      if (idx >= 0) return idx
-    }
-    return -1
-  }
-  const actionIdx = getIdx(['action'])
-  const groupIDIdx = getIdx(['groupid', 'group_id', 'id'])
-  const nameIdx = getIdx(['name'])
-  const regionIdx = getIdx(['region'])
-  const roleIdx = getIdx(['role'])
-  const siteIdx = getIdx(['site'])
-  const selectorIdx = getIdx(['selector', 'selector_json'])
-  const dynamicSelectorColumns = headers
-    .map((header, idx) => ({ header, idx, lower: headersLower[idx] }))
-    .filter((entry) => entry.lower.startsWith('selector.'))
-  const existingByID = new Map(
-    (existingGroups || []).map((group) => [
-      group.groupId,
-      { name: group.name || '', selector: normalizeSelector(group.selector) },
-    ]),
-  )
-
-  const errors = []
-  const rows = []
-  let rowCounter = 0
-
-  ;(parsed.rows || []).forEach((lineRow, lineIdx) => {
-    const line = lineIdx + 2
-    const cells = lineRow.map((cell) => String(cell || ''))
-    const cellAt = (idx) => (idx >= 0 && idx < cells.length ? cells[idx].trim() : '')
-    const hasAny = cells.some((cell) => String(cell || '').trim() !== '')
-    if (!hasAny) return
-
-    const action = (cellAt(actionIdx) || 'upsert').toLowerCase()
-    const baseGroupID = cellAt(groupIDIdx)
-    const name = cellAt(nameIdx)
-    let groupId = baseGroupID
-    const selector = {}
-    let rowError = ''
-
-    if (action !== 'upsert' && action !== 'delete') {
-      rowError = `line ${line}: action must be upsert or delete`
-    }
-
-    if (action === 'delete') {
-      if (!groupId) {
-        rowError = `line ${line}: groupId is required for delete`
-      }
-    } else if (!groupId) {
-      groupId = crypto.randomUUID()
-    }
-
-    if (!rowError && groupId && !isUUID(groupId)) {
-      rowError = `line ${line}: groupId must be a UUID`
-    }
-
-    if (!rowError && action === 'upsert') {
-      const selectorJson = cellAt(selectorIdx)
-      if (selectorJson) {
-        try {
-          const parsedSelector = JSON.parse(selectorJson)
-          if (!parsedSelector || typeof parsedSelector !== 'object' || Array.isArray(parsedSelector)) {
-            rowError = `line ${line}: selector_json must be a JSON object`
-          } else {
-            Object.entries(parsedSelector).forEach(([key, value]) => {
-              selector[String(key)] = String(value ?? '')
-            })
-          }
-        } catch {
-          rowError = `line ${line}: selector_json is invalid JSON`
-        }
-      }
-      if (!rowError) {
-        const region = cellAt(regionIdx)
-        const role = cellAt(roleIdx)
-        const site = cellAt(siteIdx)
-        if (region) selector.region = region
-        if (role) selector.role = role
-        if (site) selector.site = site
-        dynamicSelectorColumns.forEach(({ header, idx }) => {
-          const value = cellAt(idx)
-          if (!value) return
-          const key = header.slice(header.indexOf('.') + 1).trim()
-          if (!key) return
-          selector[key] = value
-        })
-      }
-    }
-
-    const existing = existingByID.get(groupId)
-    let outcome = 'error'
-    if (!rowError) {
-      if (action === 'delete') {
-        outcome = existing ? 'delete' : 'skip-not-found'
-      } else if (!existing) {
-        outcome = 'create'
-      } else {
-        const beforeName = existing.name || ''
-        const beforeSelector = stableSelectorString(existing.selector || {})
-        const afterSelector = stableSelectorString(selector)
-        outcome = beforeName === name && beforeSelector === afterSelector ? 'no-change' : 'update'
-      }
-    } else {
-      errors.push(rowError)
-    }
-
-    rowCounter += 1
-    rows.push({
-      rowId: `bulk-group-row-${rowCounter}`,
-      line,
-      action,
-      groupId,
-      name,
-      selector,
-      outcome,
-      error: rowError,
-      applyStatus: '',
-      applyError: '',
-    })
-  })
-
-  const summary = {
-    totalRows: rows.length,
-    errorRows: rows.filter((row) => row.error).length,
-    createRows: rows.filter((row) => row.outcome === 'create').length,
-    updateRows: rows.filter((row) => row.outcome === 'update').length,
-    deleteRows: rows.filter((row) => row.outcome === 'delete').length,
-    noChangeRows: rows.filter((row) => row.outcome === 'no-change').length,
-    skipNotFoundRows: rows.filter((row) => row.outcome === 'skip-not-found').length,
-  }
-  summary.applyRows = summary.createRows + summary.updateRows + summary.deleteRows
-  summary.validRows = rows.length - summary.errorRows
-
-  return { rows, errors, summary, headers }
-}
-
-function toIsoIfValid(value) {
-  if (!value) return ''
-  const dt = new Date(value)
-  if (Number.isNaN(dt.getTime())) return ''
-  return dt.toISOString()
-}
-
-function formatTime(value) {
-  if (!value) return '—'
-  const dt = new Date(value)
-  if (Number.isNaN(dt.getTime())) return String(value)
-  return dt.toLocaleString()
-}
-
-function formatNumber(value) {
-  if (value === null || value === undefined || Number.isNaN(value)) return '—'
-  return Number(value).toLocaleString()
-}
-
-function formatBytes(value) {
-  if (value === null || value === undefined || Number.isNaN(value)) return '—'
-  const size = Number(value)
-  if (size < 1024) return `${size} B`
-  const units = ['KB', 'MB', 'GB', 'TB']
-  let idx = -1
-  let current = size
-  while (current >= 1024 && idx < units.length - 1) {
-    current /= 1024
-    idx += 1
-  }
-  return `${current.toFixed(current >= 10 ? 0 : 1)} ${units[idx]}`
-}
-
-function formatDurationSeconds(seconds) {
-  if (!seconds || seconds <= 0) return '—'
-  let remaining = Math.floor(seconds)
-  const days = Math.floor(remaining / 86400)
-  remaining -= days * 86400
-  const hours = Math.floor(remaining / 3600)
-  remaining -= hours * 3600
-  const minutes = Math.floor(remaining / 60)
-  remaining -= minutes * 60
-  const parts = []
-  if (days) parts.push(`${days}d`)
-  if (hours) parts.push(`${hours}h`)
-  if (!days && minutes) parts.push(`${minutes}m`)
-  if (!days && !hours && !minutes && remaining) parts.push(`${remaining}s`)
-  return parts.join(' ') || '—'
-}
-
-async function copyText(text) {
-  if (!text) return false
-  if (navigator?.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text)
-    return true
-  }
-  const input = document.createElement('textarea')
-  input.value = text
-  input.setAttribute('readonly', '')
-  input.style.position = 'absolute'
-  input.style.left = '-9999px'
-  document.body.appendChild(input)
-  input.select()
-  const ok = document.execCommand('copy')
-  document.body.removeChild(input)
-  return ok
-}
-
-function downloadTextFile(filename, text) {
-  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  URL.revokeObjectURL(url)
-}
-
-function formatObjectSummary(value) {
-  const obj = normalizeObject(value)
-  const entries = Object.entries(obj)
-  if (entries.length === 0) return '—'
-  return entries.map(([key, val]) => `${key}=${String(val)}`).join(', ')
-}
-
-function parsePrometheusMetrics(text) {
-  const values = {}
-  const labeled = {}
-  if (!text) return { values, labeled }
-  const lines = text.split(/\r?\n/)
-  for (const line of lines) {
-    if (!line || line.startsWith('#')) continue
-    const match = line.match(/^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{[^}]*\})?\s+([-+eE0-9.]+)$/)
-    if (!match) continue
-    const name = match[1]
-    const labelSet = match[2]
-    const value = Number(match[3])
-    if (Number.isNaN(value)) continue
-    if (!labelSet) {
-      values[name] = value
-      continue
-    }
-    const labels = {}
-    const body = labelSet.slice(1, -1)
-    const labelRe = /([a-zA-Z_][a-zA-Z0-9_]*)="([^"]*)"/g
-    let labelMatch
-    while ((labelMatch = labelRe.exec(body))) {
-      labels[labelMatch[1]] = labelMatch[2]
-    }
-    if (!labeled[name]) labeled[name] = []
-    labeled[name].push({ labels, value })
-  }
-  return { values, labeled }
-}
-
-function sumLabeled(metrics, name) {
-  const items = metrics.labeled?.[name] || []
-  return items.reduce((acc, item) => acc + Number(item.value || 0), 0)
-}
-
-function groupLabeledMetrics(metrics, name, labelKey, mapLabel) {
-  const items = metrics.labeled?.[name] || []
-  const out = {}
-  items.forEach((item) => {
-    const raw = item.labels?.[labelKey] || 'unknown'
-    const key = mapLabel ? mapLabel(raw) : raw
-    out[key] = (out[key] || 0) + Number(item.value || 0)
-  })
-  return out
-}
-
+import ArtifactPickerModal from './components/modals/ArtifactPickerModal'
+import ArtifactUploadModal from './components/modals/ArtifactUploadModal'
+import TrustOverrideModal from './components/modals/TrustOverrideModal'
+import GroupModal from './components/modals/GroupModal'
+import TrustedSigningKeyModal from './components/modals/TrustedSigningKeyModal'
+import EnrollmentProfileCreateModal from './components/modals/EnrollmentProfileCreateModal'
+import EnrollmentProfileEditModal from './components/modals/EnrollmentProfileEditModal'
+import SecurityPage from './features/security/SecurityPage'
+import SettingsPage from './features/settings/SettingsPage'
+import DeviceDrawer from './features/devices/DeviceDrawer'
+import GroupMultiDesiredModal from './features/groups/GroupMultiDesiredModal'
+import GroupDesiredModal from './features/groups/GroupDesiredModal'
+import BulkGroupManagementModal from './features/groups/BulkGroupManagementModal'
+
+import {
+  nav,
+  logsNav,
+  componentTypes,
+  rangeOptions,
+  rangeMsById,
+  chartColors,
+  autoTrackModes,
+  trustOverrideModes,
+  signatureTypeOptions,
+  parsePolicyObject,
+  getAutoTrackModeFromPolicy,
+  mergeAutoTrackModeIntoPolicy,
+  verificationModeLabel,
+  trustPolicyStrictness,
+  normalizeTrustOverride,
+  mergeTrustOverrideIntoPolicy,
+  resolveEffectiveTrustPolicy,
+  hasTrustOverride,
+  trustPolicySummary,
+  formatChartValue,
+  TimeSeriesChart,
+  ChartLegend,
+  newComponentRow,
+  normalizeArtifactType,
+  normalizeArtifactStatus,
+  normalizeVerificationStatus,
+  verificationPillLabel,
+  artifactSignerSummary,
+  artifactAllowedByTrustPolicy,
+  filterArtifactGroupsByType,
+  filterArtifactGroupsByTrustPolicy,
+  fallbackComponentType,
+  parseCSVLine,
+  parseCSV,
+  normalizeObject,
+  selectorMatches,
+  selectorToForm,
+  objectToKeyValueRows,
+  keyValueRowsToObject,
+  formatSelector,
+  normalizeSelector,
+  stableSelectorString,
+  isUUID,
+  csvEscape,
+  buildBulkGroupsRollbackCsv,
+  parseBulkGroupsCsv,
+  toIsoIfValid,
+  formatTime,
+  formatNumber,
+  formatBytes,
+  formatDurationSeconds,
+  downloadTextFile,
+  formatObjectSummary,
+  parsePrometheusMetrics,
+  sumLabeled,
+  groupLabeledMetrics,
+} from './lib/appShared'
 export default function App() {
   const apiBaseUrl = useMemo(() => {
     if (import.meta.env.VITE_API_BASE_URL) return import.meta.env.VITE_API_BASE_URL
@@ -1139,6 +458,13 @@ export default function App() {
     publicKeyPem: '',
     notes: '',
   })
+  const [trustOverrideEditor, setTrustOverrideEditor] = useState(null)
+  const [trustOverrideForm, setTrustOverrideForm] = useState({
+    verificationMode: 'inherit',
+    allowedSigningKeyIds: [],
+    allowedSignatureTypes: [],
+  })
+  const [trustOverrideError, setTrustOverrideError] = useState('')
   const [artifactLifecyclePolicy, setArtifactLifecyclePolicy] = useState({
     deprecatedDeleteAfterDays: 30,
     updatedAt: '',
@@ -1502,6 +828,54 @@ export default function App() {
     }))
   }
 
+  function getTrustEditorRow(target = trustOverrideEditor) {
+    if (!target) return null
+    const { scope, index } = target
+    if (scope === 'group') return groupDesiredForm.components?.[index] || null
+    if (scope === 'groupBulk') return groupMultiDesiredForm.components?.[index] || null
+    if (scope === 'device') return deviceForm.components?.[index] || null
+    return null
+  }
+
+  function openTrustOverrideEditor(scope, index) {
+    if (!canManageDesiredState) return
+    const target = { scope, index }
+    const row = getTrustEditorRow(target)
+    if (!row) return
+    setTrustOverrideForm(normalizeTrustOverride(row.policy))
+    setTrustOverrideError('')
+    setTrustOverrideEditor(target)
+  }
+
+  function closeTrustOverrideEditor() {
+    setTrustOverrideEditor(null)
+    setTrustOverrideError('')
+  }
+
+  function saveTrustOverrideEditor() {
+    if (!trustOverrideEditor) return
+    const globalMode = String(artifactTrustPolicy?.verificationMode || 'warn_unsigned')
+    const requestedMode = String(trustOverrideForm.verificationMode || 'inherit')
+    if (
+      requestedMode !== 'inherit' &&
+      trustPolicyStrictness(requestedMode) < trustPolicyStrictness(globalMode)
+    ) {
+      setTrustOverrideError(`Override cannot be weaker than the global policy (${verificationModeLabel(globalMode)}).`)
+      return
+    }
+    const row = getTrustEditorRow()
+    if (!row) return
+    const nextPolicy = mergeTrustOverrideIntoPolicy(row.policy, trustOverrideForm)
+    if (trustOverrideEditor.scope === 'group') {
+      updateGroupComponent(trustOverrideEditor.index, { policy: nextPolicy })
+    } else if (trustOverrideEditor.scope === 'groupBulk') {
+      updateGroupMultiDesiredComponent(trustOverrideEditor.index, { policy: nextPolicy })
+    } else if (trustOverrideEditor.scope === 'device') {
+      updateDeviceComponent(trustOverrideEditor.index, { policy: nextPolicy })
+    }
+    closeTrustOverrideEditor()
+  }
+
   function openArtifactPicker(scope, index) {
     if (!canManageDesiredState) return
     setArtifactPickerTarget({ scope, index })
@@ -1697,6 +1071,7 @@ export default function App() {
     if (canManageDesiredState) return
     setGroupDesiredOpen(false)
     setGroupMultiDesiredOpen(false)
+    setTrustOverrideEditor(null)
   }, [canManageDesiredState])
 
   useEffect(() => {
@@ -4356,9 +3731,20 @@ export default function App() {
         ? groupMultiDesiredForm.components?.[index]
         : deviceForm.components?.[index]
     const type = normalizeArtifactType(row?.artifactType)
-    if (!type) return activeArtifactGroups
-    return filterArtifactGroupsByType(activeArtifactGroups, type)
-  }, [activeArtifactGroups, artifactPickerTarget, deviceForm.components, groupDesiredForm.components, groupMultiDesiredForm.components])
+    const effectivePolicy = resolveEffectiveTrustPolicy(row?.policy, artifactTrustPolicy)
+    const byType = type ? filterArtifactGroupsByType(activeArtifactGroups, type) : activeArtifactGroups
+    return filterArtifactGroupsByTrustPolicy(byType, effectivePolicy)
+  }, [activeArtifactGroups, artifactPickerTarget, artifactTrustPolicy, deviceForm.components, groupDesiredForm.components, groupMultiDesiredForm.components])
+  const artifactPickerPolicy = useMemo(() => {
+    if (!artifactPickerTarget) return artifactTrustPolicy
+    const { scope, index } = artifactPickerTarget
+    const row = scope === 'group'
+      ? groupDesiredForm.components?.[index]
+      : scope === 'groupBulk'
+        ? groupMultiDesiredForm.components?.[index]
+        : deviceForm.components?.[index]
+    return resolveEffectiveTrustPolicy(row?.policy, artifactTrustPolicy)
+  }, [artifactPickerTarget, artifactTrustPolicy, deviceForm.components, groupDesiredForm.components, groupMultiDesiredForm.components])
   const selectedGroup = groups.find((g) => g.groupId === selectedGroupId)
   const selectedGroupSelector = selectedGroup ? normalizeObject(selectedGroup.selector) : {}
   const groupDeviceList = useMemo(() => {
@@ -4398,6 +3784,15 @@ export default function App() {
   const activeTrustedSigningKeys = useMemo(
     () => trustedSigningKeys.filter((key) => String(key.state || '').toLowerCase() !== 'retired'),
     [trustedSigningKeys],
+  )
+  const trustOverrideEditorRow = useMemo(() => getTrustEditorRow(), [trustOverrideEditor, deviceForm.components, groupDesiredForm.components, groupMultiDesiredForm.components])
+  const trustOverrideEffectivePolicy = useMemo(() => {
+    const previewPolicy = mergeTrustOverrideIntoPolicy(trustOverrideEditorRow?.policy, trustOverrideForm)
+    return resolveEffectiveTrustPolicy(previewPolicy, artifactTrustPolicy)
+  }, [trustOverrideEditorRow, trustOverrideForm, artifactTrustPolicy])
+  const trustOverrideSelectedArtifact = useMemo(
+    () => artifacts.find((artifact) => artifact.artifactId === trustOverrideEditorRow?.artifactId) || null,
+    [artifacts, trustOverrideEditorRow],
   )
 
   const groupSelectorById = useMemo(() => {
@@ -5855,1990 +5250,334 @@ export default function App() {
           </section>
         )}
 
-        {view === 'security' && (
-          <section id="security" className="card settings-card">
-            <div className="section-header settings-header">
-              <h2>Security</h2>
-              <div className="settings-toolbar">
-                <button className="button ghost" onClick={loadRotationStatus}>Refresh rotation</button>
-                {canManagePendingEnrollments && (
-                  <button className="button ghost" onClick={loadPendingEnrollments}>Refresh pending enrollments</button>
-                )}
-                {authStatus.enabled && authToken && canManageUsers && (
-                  <button className="button ghost" onClick={loadUsers}>Refresh users</button>
-                )}
-              </div>
-            </div>
+        <SecurityPage
+          {...{
+            activeTrustedSigningKeys,
+            artifactLifecyclePolicy,
+            artifactLifecyclePolicyInput,
+            artifactLifecycleStatus,
+            artifactTrustError,
+            artifactTrustPolicy,
+            artifactTrustStatus,
+            authError,
+            authStatus,
+            authToken,
+            authUser,
+            backupError,
+            backupMessage,
+            backupStatus,
+            backups,
+            canApplyUpgrade,
+            canManageArtifactLifecycle,
+            canManageArtifactTrust,
+            canManageBackups,
+            canManageMaintenance,
+            canManagePendingEnrollments,
+            canManageReleaseAutoUpdate,
+            canManageUsers,
+            canRotate,
+            canViewArtifactTrust,
+            canViewBackups,
+            doLogin,
+            doLogout,
+            enrollmentProfiles,
+            enrollmentProfilesError,
+            enrollmentProfilesLoading,
+            enrollmentProfilesStatus,
+            formatDurationSeconds,
+            formatObjectSummary,
+            formatTime,
+            handleApprovePendingEnrollment,
+            handleCleanupRotation,
+            handleCopyEnrollmentProfileToken,
+            handleDenyPendingEnrollment,
+            handleDownloadEnrollmentProfileToken,
+            handleOpenCreateEnrollmentProfile,
+            handleOpenCreateTrustedSigningKey,
+            handleReloadRotation,
+            handleResetPendingEnrollment,
+            handleRestore,
+            handleRetireTrustedSigningKey,
+            handleRotateEnrollmentProfile,
+            handleRotateRotation,
+            handleRunReleaseAutoUpdate,
+            handleSaveArtifactLifecyclePolicy,
+            handleSaveArtifactTrustPolicy,
+            handleSaveReleaseAutoUpdateSettings,
+            handleSetEnrollmentProfileDisabled,
+            handleStartBackup,
+            handleStartEditEnrollmentProfile,
+            handleStartEditTrustedSigningKey,
+            latestEnrollmentProfileToken,
+            loadArtifactLifecyclePolicy,
+            loadArtifactLifecycleStatus,
+            loadArtifactTrustPolicy,
+            loadBackups,
+            loadEnrollmentProfiles,
+            loadMaintenance,
+            loadPendingEnrollments,
+            loadReleaseAutoUpdate,
+            loadRotationStatus,
+            loadTrustedSigningKeys,
+            loadUpgrade,
+            loadUpgradeAvailable,
+            loadUpgradePreflight,
+            loadUsers,
+            loginForm,
+            loginStatus,
+            maintenance,
+            pendingEnrollments,
+            pendingEnrollmentsError,
+            pendingEnrollmentsFilter,
+            pendingEnrollmentsLoading,
+            pendingEnrollmentsStatus,
+            preflightOk,
+            releaseAutoUpdate,
+            releaseAutoUpdateSaving,
+            releaseAutoUpdateStatus,
+            restoreStatus,
+            rotationError,
+            rotationLoading,
+            rotationMessage,
+            rotationStatus,
+            selectedBackupId,
+            setArtifactLifecyclePolicyInput,
+            setArtifactTrustPolicyState,
+            setLoginForm,
+            setPendingEnrollmentsFilter,
+            setReleaseAutoUpdate,
+            setSelectedBackupId,
+            setUserForm,
+            setVoucherForm,
+            signatureTypeOptions,
+            startUpgrade,
+            submitUser,
+            submitVoucher,
+            toggleMaintenance,
+            toggleRole,
+            toggleVoucherRole,
+            trustedSigningKeys,
+            trustedSigningKeysLoading,
+            upgrade,
+            upgradeAvailable,
+            upgradeAvailableError,
+            upgradePreflight,
+            upgradePreflightError,
+            upgradePreflightStatus,
+            upgradeReady,
+            userForm,
+            users,
+            usersError,
+            usersStatus,
+            view,
+            voucherForm,
+            voucherStatus,
+            voucherToken,
+          }}
+        />
 
-            <div className="settings-stack">
-              <div className="settings-section">
-                <div className="settings-title">Authentication</div>
-                {!authStatus.enabled && (
-                  <div className="placeholder">Auth is disabled on the control-plane.</div>
-                )}
-                {authUser ? (
-                  <div className="detail-grid">
-                    <div>
-                      <div className="detail-label">User</div>
-                      <div className="detail-value">{authUser.email}</div>
-                    </div>
-                    <div>
-                      <div className="detail-label">Roles</div>
-                      <div className="detail-value">{(authUser.roles || []).join(', ') || '—'}</div>
-                    </div>
-                    <div className="full">
-                      <button className="button ghost" onClick={doLogout}>
-                        Sign out
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="form compact">
-                    <div className="field">
-                      <label>Email</label>
-                      <input
-                        value={loginForm.email}
-                        onChange={(e) => setLoginForm((prev) => ({ ...prev, email: e.target.value }))}
-                        placeholder="admin@example.com"
-                      />
-                    </div>
-                    <div className="field">
-                      <label>Password</label>
-                      <input
-                        type="password"
-                        value={loginForm.password}
-                        onChange={(e) => setLoginForm((prev) => ({ ...prev, password: e.target.value }))}
-                      />
-                    </div>
-                    <div className="field actions">
-                      <button className="button ghost" onClick={doLogin}>
-                        Sign in
-                      </button>
-                    </div>
-                  </div>
-                )}
-                {authError && <div className="error">{authError}</div>}
-                {loginStatus && <div className="status">{loginStatus}</div>}
-              </div>
-
-              <div className="settings-section">
-                <div className="settings-title">Local Users</div>
-                {!authStatus.enabled ? (
-                  <div className="placeholder">Enable AUTH_MODE=local to manage users.</div>
-                ) : !authToken ? (
-                  <div className="placeholder">Sign in to manage local users.</div>
-                ) : !canManageUsers ? (
-                  <div className="placeholder">Admin role required to manage users.</div>
-                ) : (
-                  <>
-                    <div className="form compact">
-                      <div className="field">
-                        <label>Email</label>
-                        <input
-                          value={userForm.email}
-                          onChange={(e) => setUserForm((prev) => ({ ...prev, email: e.target.value }))}
-                          placeholder="user@example.com"
-                        />
-                      </div>
-                      <div className="field">
-                        <label>Password</label>
-                        <input
-                          type="password"
-                          value={userForm.password}
-                          onChange={(e) => setUserForm((prev) => ({ ...prev, password: e.target.value }))}
-                        />
-                      </div>
-                      <div className="field">
-                        <label>Display Name</label>
-                        <input
-                          value={userForm.displayName}
-                          onChange={(e) => setUserForm((prev) => ({ ...prev, displayName: e.target.value }))}
-                        />
-                      </div>
-                      <div className="field">
-                        <label>Roles</label>
-                        <div className="inline-row">
-                          {['viewer', 'operator', 'admin'].map((role) => (
-                            <label key={role} className="chip">
-                              <input
-                                type="checkbox"
-                                checked={userForm.roles.includes(role)}
-                                onChange={() => toggleRole(role)}
-                              />
-                              {role}
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="field actions">
-                        <button className="button ghost" onClick={submitUser}>
-                          Create user
-                        </button>
-                      </div>
-                    </div>
-                    {usersError && <div className="error">{usersError}</div>}
-                    {usersStatus && <div className="status">{usersStatus}</div>}
-                    <div className="table-wrap">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>Email</th>
-                            <th>Display Name</th>
-                            <th>Roles</th>
-                            <th>Disabled</th>
-                            <th>Created</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {users.map((user) => (
-                            <tr key={user.userId}>
-                              <td>{user.email}</td>
-                              <td>{user.displayName || '—'}</td>
-                              <td>{(user.roles || []).join(', ') || '—'}</td>
-                              <td>{user.disabled ? 'yes' : 'no'}</td>
-                              <td>{user.createdAt ? new Date(user.createdAt).toLocaleString() : '—'}</td>
-                            </tr>
-                          ))}
-                          {users.length === 0 && (
-                            <tr>
-                              <td colSpan={5}>No users found.</td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    <div className="form compact">
-                      <div className="field">
-                        <label>Invite Email (optional)</label>
-                        <input
-                          value={voucherForm.email}
-                          onChange={(e) => setVoucherForm((prev) => ({ ...prev, email: e.target.value }))}
-                          placeholder="user@example.com"
-                        />
-                      </div>
-                      <div className="field">
-                        <label>TTL (hours)</label>
-                        <input
-                          type="number"
-                          min="1"
-                          max="720"
-                          value={voucherForm.ttlHours}
-                          onChange={(e) => setVoucherForm((prev) => ({ ...prev, ttlHours: e.target.value }))}
-                        />
-                      </div>
-                      <div className="field">
-                        <label>Roles</label>
-                        <div className="inline-row">
-                          {['viewer', 'operator', 'admin'].map((role) => (
-                            <label key={role} className="chip">
-                              <input
-                                type="checkbox"
-                                checked={voucherForm.roles.includes(role)}
-                                onChange={() => toggleVoucherRole(role)}
-                              />
-                              {role}
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="field actions">
-                        <button className="button ghost" onClick={submitVoucher}>
-                          Create voucher
-                        </button>
-                        {voucherStatus && <div className="status">{voucherStatus}</div>}
-                      </div>
-                    </div>
-                    {voucherToken && (
-                      <div className="form compact">
-                        <div className="field">
-                          <label>Voucher Token</label>
-                          <input readOnly value={voucherToken} />
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-
-              <div className="settings-section">
-                <div className="settings-title">Artifact Trust</div>
-                {!canViewArtifactTrust ? (
-                  <div className="placeholder">Operator role required to view artifact trust settings.</div>
-                ) : (
-                  <>
-                    <div className="inline-row">
-                      <button className="button ghost" onClick={() => loadArtifactTrustPolicy()}>
-                        Refresh policy
-                      </button>
-                      <button className="button ghost" onClick={() => loadTrustedSigningKeys()}>
-                        Refresh keys
-                      </button>
-                      {canManageArtifactTrust && (
-                        <button className="button ghost" onClick={handleOpenCreateTrustedSigningKey}>
-                          New trusted key
-                        </button>
-                      )}
-                    </div>
-                    {artifactTrustError && <div className="error">{artifactTrustError}</div>}
-                    {artifactTrustStatus && <div className="status">{artifactTrustStatus}</div>}
-                    <div className="form compact">
-                      <div className="field">
-                        <label>Verification Mode</label>
-                        <select
-                          value={artifactTrustPolicy.verificationMode}
-                          disabled={!canManageArtifactTrust}
-                          onChange={(e) => setArtifactTrustPolicyState((prev) => ({ ...prev, verificationMode: e.target.value }))}
-                        >
-                          <option value="allow_unsigned">allow_unsigned</option>
-                          <option value="warn_unsigned">warn_unsigned</option>
-                          <option value="require_verified">require_verified</option>
-                        </select>
-                      </div>
-                      <div className="field">
-                        <label>Allowed Signature Types</label>
-                        <div className="inline-row">
-                          {signatureTypeOptions.map((option) => (
-                            <label key={option.id} className="chip">
-                              <input
-                                type="checkbox"
-                                disabled={!canManageArtifactTrust}
-                                checked={artifactTrustPolicy.allowedSignatureTypes.includes(option.id)}
-                                onChange={() =>
-                                  setArtifactTrustPolicyState((prev) => ({
-                                    ...prev,
-                                    allowedSignatureTypes: prev.allowedSignatureTypes.includes(option.id)
-                                      ? prev.allowedSignatureTypes.filter((item) => item !== option.id)
-                                      : [...prev.allowedSignatureTypes, option.id],
-                                  }))}
-                              />
-                              {option.label}
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="field full">
-                        <label>Allowed Signing Keys</label>
-                        <div className="inline-row">
-                          {activeTrustedSigningKeys.length === 0 && <span className="placeholder">No active trusted keys.</span>}
-                          {activeTrustedSigningKeys.map((key) => (
-                            <label key={key.keyId} className="chip">
-                              <input
-                                type="checkbox"
-                                disabled={!canManageArtifactTrust}
-                                checked={artifactTrustPolicy.allowedSigningKeyIds.includes(key.keyId)}
-                                onChange={() =>
-                                  setArtifactTrustPolicyState((prev) => ({
-                                    ...prev,
-                                    allowedSigningKeyIds: prev.allowedSigningKeyIds.includes(key.keyId)
-                                      ? prev.allowedSigningKeyIds.filter((item) => item !== key.keyId)
-                                      : [...prev.allowedSigningKeyIds, key.keyId],
-                                  }))}
-                              />
-                              {key.displayName || key.keyId}
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="field actions">
-                        <button className="button ghost" onClick={handleSaveArtifactTrustPolicy} disabled={!canManageArtifactTrust}>
-                          Save policy
-                        </button>
-                        <span className="detail-note">
-                          Updated {formatTime(artifactTrustPolicy.updatedAt)} by {artifactTrustPolicy.updatedByUserId || '—'}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="table-wrap">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>Name</th>
-                            <th>Key ID</th>
-                            <th>Algorithm</th>
-                            <th>Status</th>
-                            <th>Notes</th>
-                            <th>Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {trustedSigningKeys.map((key) => (
-                            <tr key={key.keyId}>
-                              <td>{key.displayName || '—'}</td>
-                              <td className="mono">{key.keyId}</td>
-                              <td>{key.algorithm}</td>
-                              <td>
-                                <span className={`pill ${String(key.state || '').toLowerCase() === 'retired' ? 'legacy' : 'verified'}`}>
-                                  {key.state || 'active'}
-                                </span>
-                              </td>
-                              <td>{key.notes || '—'}</td>
-                              <td>
-                                <div className="inline-row">
-                                  <button
-                                    className="button ghost"
-                                    onClick={() => handleStartEditTrustedSigningKey(key)}
-                                    disabled={!canManageArtifactTrust}
-                                  >
-                                    Edit
-                                  </button>
-                                  <button
-                                    className="button ghost"
-                                    onClick={() => handleRetireTrustedSigningKey(key)}
-                                    disabled={!canManageArtifactTrust || String(key.state || '').toLowerCase() === 'retired'}
-                                  >
-                                    Retire
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
-                          {trustedSigningKeys.length === 0 && (
-                            <tr>
-                              <td colSpan={6}>{trustedSigningKeysLoading ? 'Loading trusted signing keys...' : 'No trusted signing keys.'}</td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              <div className="settings-section">
-                <div className="settings-title">Enrollment Profiles</div>
-                {!canManagePendingEnrollments ? (
-                  <div className="placeholder">Operator role required to manage enrollment profiles.</div>
-                ) : (
-                  <>
-                    <div className="inline-row">
-                      <button className="button ghost" onClick={handleOpenCreateEnrollmentProfile}>
-                        New profile
-                      </button>
-                      <button className="button ghost" onClick={loadEnrollmentProfiles}>
-                        Refresh profiles
-                      </button>
-                    </div>
-                    {enrollmentProfilesStatus && <div className="status">{enrollmentProfilesStatus}</div>}
-                    {enrollmentProfilesError && <div className="error">{enrollmentProfilesError}</div>}
-                    {latestEnrollmentProfileToken && (
-                      <div className="form compact">
-                        <div className="field">
-                          <label>Latest Bootstrap Token</label>
-                          <input readOnly value={latestEnrollmentProfileToken} />
-                        </div>
-                        <div className="field actions">
-                          <button className="button ghost" onClick={handleCopyEnrollmentProfileToken}>
-                            Copy token
-                          </button>
-                          <button className="button ghost" onClick={handleDownloadEnrollmentProfileToken}>
-                            Download token
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                    {enrollmentProfilesLoading ? (
-                      <div className="placeholder">Loading enrollment profiles...</div>
-                    ) : (
-                      <div className="table-wrap">
-                        <table>
-                          <thead>
-                            <tr>
-                              <th>Name</th>
-                              <th>Labels</th>
-                              <th>Uses</th>
-                              <th>Approval</th>
-                              <th>Challenge</th>
-                              <th>Delay</th>
-                              <th>Unsigned HW</th>
-                              <th>Expires</th>
-                              <th>Status</th>
-                              <th>Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {enrollmentProfiles.map((profile) => (
-                              <tr key={profile.profileId}>
-                                <td>{profile.name}</td>
-                                <td className="mono">{formatObjectSummary(profile.defaultLabels)}</td>
-                                <td>{profile.maxUses > 0 ? `${profile.uses}/${profile.maxUses}` : `${profile.uses}/unlimited`}</td>
-                                <td>{profile.requireApproval ? 'required' : 'not required'}</td>
-                                <td>{profile.challengeEnabled ? profile.challengeHint || 'enabled' : 'disabled'}</td>
-                                <td>{profile.approvalDelaySec > 0 ? formatDurationSeconds(profile.approvalDelaySec) : 'none'}</td>
-                                <td>{profile.allowUnsignedHardwareIdentity ? 'allowed' : 'blocked'}</td>
-                                <td>{formatTime(profile.expiresAt)}</td>
-                                <td>{profile.disabled ? 'disabled' : 'active'}</td>
-                                <td>
-                                  <div className="inline-row">
-                                    <button
-                                      className="button ghost"
-                                      onClick={() => handleStartEditEnrollmentProfile(profile)}
-                                    >
-                                      Edit
-                                    </button>
-                                    <button
-                                      className="button ghost"
-                                      onClick={() => handleRotateEnrollmentProfile(profile.profileId, profile.name)}
-                                    >
-                                      Rotate Token
-                                    </button>
-                                    <button
-                                      className="button ghost"
-                                      onClick={() => handleSetEnrollmentProfileDisabled(profile.profileId, !profile.disabled)}
-                                    >
-                                      {profile.disabled ? 'Enable' : 'Disable'}
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            ))}
-                            {enrollmentProfiles.length === 0 && (
-                              <tr>
-                                <td colSpan={10}>No enrollment profiles.</td>
-                              </tr>
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-
-              <div className="settings-section">
-                <div className="settings-title">Pending Enrollments</div>
-                {!canManagePendingEnrollments ? (
-                  <div className="placeholder">Operator role required to review pending enrollments.</div>
-                ) : (
-                  <>
-                    <div className="inline-row">
-                      <label className="chip">
-                        <span>Filter</span>
-                        <select value={pendingEnrollmentsFilter} onChange={(e) => setPendingEnrollmentsFilter(e.target.value)}>
-                          <option value="pending">pending</option>
-                          <option value="approved">approved</option>
-                          <option value="conflict">conflict</option>
-                          <option value="denied">denied</option>
-                          <option value="expired">expired</option>
-                          <option value="issued">issued</option>
-                          <option value="all">all</option>
-                        </select>
-                      </label>
-                      <button className="button ghost" onClick={loadPendingEnrollments}>
-                        Refresh
-                      </button>
-                    </div>
-                    {pendingEnrollmentsStatus && <div className="status">{pendingEnrollmentsStatus}</div>}
-                    {pendingEnrollmentsError && <div className="error">{pendingEnrollmentsError}</div>}
-                    {pendingEnrollmentsLoading ? (
-                      <div className="placeholder">Loading pending enrollments...</div>
-                    ) : (
-                      <div className="table-wrap">
-                        <table>
-                          <thead>
-                            <tr>
-                              <th>Request ID</th>
-                              <th>Status</th>
-                              <th>Agent</th>
-                              <th>Hardware ID</th>
-                              <th>Source IP</th>
-                              <th>Reason</th>
-                              <th>Created</th>
-                              <th>Expires</th>
-                              <th>Approve After</th>
-                              <th>Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {pendingEnrollments.map((item) => {
-                              const approvalDt = item.approvalAvailableAt ? new Date(item.approvalAvailableAt) : null
-                              const approvalPending = Boolean(
-                                item.status === 'pending'
-                                  && approvalDt
-                                  && !Number.isNaN(approvalDt.getTime())
-                                  && approvalDt.getTime() > Date.now(),
-                              )
-                              const approvalDelayLabel = approvalPending
-                                ? `${formatDurationSeconds((approvalDt.getTime() - Date.now()) / 1000)} (${formatTime(item.approvalAvailableAt)})`
-                                : formatTime(item.approvalAvailableAt)
-                              return (
-                                <tr key={item.requestId}>
-                                  <td className="mono">{item.requestId}</td>
-                                  <td>{item.status || '—'}</td>
-                                  <td>{item.agentVersion || '—'}</td>
-                                  <td className="mono">{item.hardwareId || '—'}</td>
-                                  <td className="mono">{item.sourceIp || '—'}</td>
-                                  <td>{item.deniedReason || '—'}</td>
-                                  <td>{formatTime(item.createdAt)}</td>
-                                  <td>{formatTime(item.expiresAt)}</td>
-                                  <td>{approvalPending ? approvalDelayLabel : approvalDelayLabel || '—'}</td>
-                                  <td>
-                                    {item.status === 'pending' ? (
-                                      <div className="inline-row">
-                                        <button
-                                          className="button ghost"
-                                          disabled={approvalPending}
-                                          title={approvalPending ? `Approval available after ${formatTime(item.approvalAvailableAt)}` : ''}
-                                          onClick={() => handleApprovePendingEnrollment(item.requestId)}
-                                        >
-                                          {approvalPending ? 'Throttled' : 'Approve'}
-                                        </button>
-                                        <button className="button ghost" onClick={() => handleDenyPendingEnrollment(item.requestId)}>
-                                          Deny
-                                        </button>
-                                      </div>
-                                    ) : ['denied', 'conflict', 'expired'].includes(item.status) ? (
-                                      <button className="button ghost" onClick={() => handleResetPendingEnrollment(item.requestId)}>
-                                        Reset
-                                      </button>
-                                    ) : (
-                                      '—'
-                                    )}
-                                  </td>
-                                </tr>
-                              )
-                            })}
-                            {pendingEnrollments.length === 0 && (
-                              <tr>
-                                <td colSpan={10}>No enrollment requests.</td>
-                              </tr>
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-
-              <div className="settings-section">
-                <div className="settings-title">CA Rotation</div>
-                <div className="inline-row">
-                  <button className="button ghost" onClick={loadRotationStatus}>
-                    Refresh
-                  </button>
-                  {canRotate && (
-                    <>
-                      <button className="button" onClick={handleRotateRotation}>
-                        Rotate CA
-                      </button>
-                      <button className="button ghost" onClick={handleReloadRotation}>
-                        Reload CA files
-                      </button>
-                      <button
-                        className="button ghost"
-                        onClick={handleCleanupRotation}
-                        disabled={!rotationStatus?.cleanup?.eligible}
-                      >
-                        Cleanup old CA
-                      </button>
-                    </>
-                  )}
-                </div>
-                {rotationMessage && <div className="status">{rotationMessage}</div>}
-                {rotationError && <div className="error">{rotationError}</div>}
-                {rotationLoading ? (
-                  <div className="placeholder">Loading rotation status...</div>
-                ) : rotationStatus ? (
-                  <div className="rotation-grid">
-                    <div className="rotation-card">
-                      <div className="rotation-title">Active CA</div>
-                      <div className="rotation-row">
-                        <span>Path</span>
-                        <span className="mono">{rotationStatus.activeCa?.path || '—'}</span>
-                      </div>
-                      <div className="rotation-row">
-                        <span>Subject</span>
-                        <span>{rotationStatus.activeCa?.subject || '—'}</span>
-                      </div>
-                      <div className="rotation-row">
-                        <span>Fingerprint</span>
-                        <span className="mono">{rotationStatus.activeCa?.fingerprint || '—'}</span>
-                      </div>
-                      <div className="rotation-row">
-                        <span>Valid</span>
-                        <span>
-                          {rotationStatus.activeCa?.notBefore ? new Date(rotationStatus.activeCa.notBefore).toLocaleDateString() : '—'}
-                          {' → '}
-                          {rotationStatus.activeCa?.notAfter ? new Date(rotationStatus.activeCa.notAfter).toLocaleDateString() : '—'}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="rotation-card">
-                      <div className="rotation-title">Client CA Bundle</div>
-                      <div className="rotation-row">
-                        <span>Path</span>
-                        <span className="mono">{rotationStatus.clientCa?.path || '—'}</span>
-                      </div>
-                      <div className="rotation-row">
-                        <span>Certs</span>
-                        <span>{rotationStatus.clientCa?.certCount ?? '—'}</span>
-                      </div>
-                      <div className="rotation-row">
-                        <span>Contains active</span>
-                        <span>{rotationStatus.clientCa?.containsActive ? 'Yes' : 'No'}</span>
-                      </div>
-                    </div>
-
-                    <div className="rotation-card">
-                      <div className="rotation-title">Device Coverage</div>
-                      <div className="rotation-row">
-                        <span>Total</span>
-                        <span>{rotationStatus.deviceCounts?.total ?? '—'}</span>
-                      </div>
-                      <div className="rotation-row">
-                        <span>Active CA</span>
-                        <span>{rotationStatus.deviceCounts?.active ?? '—'}</span>
-                      </div>
-                      <div className="rotation-row">
-                        <span>Needs reenroll</span>
-                        <span>{rotationStatus.deviceCounts?.needsReenroll ?? '—'}</span>
-                      </div>
-                      <div className="rotation-row">
-                        <span>Unknown</span>
-                        <span>{rotationStatus.deviceCounts?.unknown ?? '—'}</span>
-                      </div>
-                      <div className="rotation-note">
-                        Re-enroll updates existing devices and does not consume additional license slots.
-                      </div>
-                    </div>
-
-                    <div className="rotation-card">
-                      <div className="rotation-title">Cleanup Status</div>
-                      <div className="rotation-row">
-                        <span>Eligible</span>
-                        <span>{rotationStatus.cleanup?.eligible ? 'Yes' : 'No'}</span>
-                      </div>
-                      <div className="rotation-row">
-                        <span>Reason</span>
-                        <span>{rotationStatus.cleanup?.reason || '—'}</span>
-                      </div>
-                      <div className="rotation-row">
-                        <span>Rotated</span>
-                        <span>
-                          {rotationStatus.cleanup?.rotatedAt
-                            ? new Date(rotationStatus.cleanup.rotatedAt).toLocaleString()
-                            : '—'}
-                        </span>
-                      </div>
-                      <div className="rotation-row">
-                        <span>Grace remaining</span>
-                        <span>{formatDurationSeconds(rotationStatus.cleanup?.graceRemainingSec || 0)}</span>
-                      </div>
-                      <div className="rotation-row">
-                        <span>Grace deadline</span>
-                        <span>
-                          {rotationStatus.cleanup?.graceDeadline
-                            ? new Date(rotationStatus.cleanup.graceDeadline).toLocaleString()
-                            : '—'}
-                        </span>
-                      </div>
-                      <div className="rotation-row">
-                        <span>Cleaned</span>
-                        <span>
-                          {rotationStatus.cleanup?.cleanedAt
-                            ? new Date(rotationStatus.cleanup.cleanedAt).toLocaleString()
-                            : '—'}
-                        </span>
-                      </div>
-                      {rotationStatus.cleanup?.previousFingerprint && (
-                        <div className="rotation-row">
-                          <span>Old CA</span>
-                          <span className="mono">{rotationStatus.cleanup.previousFingerprint}</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="placeholder">No rotation status yet.</div>
-                )}
-              </div>
-            </div>
-          </section>
-        )}
-
-        {view === 'settings' && (
-          <section id="settings" className="card settings-card">
-            <div className="section-header settings-header">
-              <h2>Settings</h2>
-              <div className="settings-toolbar">
-                <button className="button ghost" onClick={loadMaintenance}>Refresh maintenance</button>
-                <button className="button ghost" onClick={() => { loadArtifactLifecyclePolicy(); loadArtifactLifecycleStatus() }}>
-                  Refresh lifecycle
-                </button>
-                <button className="button ghost" onClick={loadReleaseAutoUpdate}>Refresh auto-update</button>
-                <button className="button ghost" onClick={loadUpgrade}>Refresh upgrade</button>
-                <button className="button ghost" onClick={loadUpgradeAvailable}>Refresh updates</button>
-              </div>
-            </div>
-
-            <div className="settings-stack">
-              <div className="settings-section">
-                <div className="settings-title">Maintenance</div>
-                <div className="detail-grid">
-                  <div>
-                    <div className="detail-label">Maintenance</div>
-                    <div className="detail-value">{maintenance.enabled ? 'enabled' : 'disabled'}</div>
-                  </div>
-                  <div>
-                    <div className="detail-label">Message</div>
-                    <div className="detail-value">{maintenance.message || '—'}</div>
-                  </div>
-                  <div>
-                    <div className="detail-label">Updated</div>
-                    <div className="detail-value">{maintenance.updatedAt ? new Date(maintenance.updatedAt).toLocaleString() : '—'}</div>
-                  </div>
-                  <div className="full">
-                    <button className="button ghost" onClick={toggleMaintenance} disabled={!canManageMaintenance}>
-                      {maintenance.enabled ? 'Disable maintenance' : 'Enable maintenance'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="settings-section">
-                <div className="settings-title">Artifact Lifecycle</div>
-                <div className="artifact-lifecycle-toolbar">
-                  <div className="inline-row">
-                    <label className="artifact-lifecycle-label">Deprecated retention (days)</label>
-                    <input
-                      type="number"
-                      min={1}
-                      step={1}
-                      value={artifactLifecyclePolicyInput}
-                      onChange={(e) => setArtifactLifecyclePolicyInput(e.target.value)}
-                      disabled={!canManageArtifactLifecycle}
-                    />
-                    <button
-                      className="button ghost"
-                      onClick={handleSaveArtifactLifecyclePolicy}
-                      disabled={!canManageArtifactLifecycle}
-                    >
-                      Save policy
-                    </button>
-                  </div>
-                  <div className="hint">
-                    Deprecated artifacts are eligible for prune after the configured retention window, if not referenced.
-                  </div>
-                  <div className="detail-note">
-                    Policy updated: {formatTime(artifactLifecyclePolicy.updatedAt)}
-                  </div>
-                  <div className="detail-note">
-                    Auto prune: {artifactLifecycleStatus.enabled ? 'enabled' : 'disabled'}
-                    {artifactLifecycleStatus.intervalSeconds > 0
-                      ? ` every ${formatDurationSeconds(artifactLifecycleStatus.intervalSeconds)}`
-                      : ''}
-                    {artifactLifecycleStatus.running ? ' (running)' : ''}
-                  </div>
-                  {artifactLifecycleStatus.lastRun && (
-                    <div className="detail-note">
-                      Last run: {formatTime(artifactLifecycleStatus.lastRun.finishedAt || artifactLifecycleStatus.lastRun.cutoffUtc)} ·
-                      deleted {artifactLifecycleStatus.lastRun.deletedNum || 0} ·
-                      skipped {artifactLifecycleStatus.lastRun.skippedNum || 0}
-                      {artifactLifecycleStatus.lastRun.error ? ` · error: ${artifactLifecycleStatus.lastRun.error}` : ''}
-                    </div>
-                  )}
-                  {artifactLifecycleStatus.alerts.length > 0 && (
-                    <div className="artifact-lifecycle-alerts">
-                      {artifactLifecycleStatus.alerts.map((alert) => (
-                        <span key={alert.code} className={`pill artifact-alert ${alert.severity || 'warning'}`}>
-                          {alert.message}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="settings-section">
-                <div className="settings-title">Release Auto-Update</div>
-                <div className="detail-grid">
-                  <div>
-                    <div className="detail-label">Enabled (default)</div>
-                    <label className="inline-toggle">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(releaseAutoUpdate.enabled)}
-                        onChange={(e) => {
-                          const enabled = e.target.checked
-                          setReleaseAutoUpdate((prev) => ({ ...prev, enabled }))
-                        }}
-                        disabled={!canManageReleaseAutoUpdate}
-                      />
-                      {releaseAutoUpdate.enabled ? 'on' : 'off'}
-                    </label>
-                  </div>
-                  <div>
-                    <div className="detail-label">Allow unsigned</div>
-                    <label className="inline-toggle">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(releaseAutoUpdate.allowUnsigned)}
-                        onChange={(e) => {
-                          const allowUnsigned = e.target.checked
-                          setReleaseAutoUpdate((prev) => ({ ...prev, allowUnsigned }))
-                        }}
-                        disabled={!canManageReleaseAutoUpdate}
-                      />
-                      {releaseAutoUpdate.allowUnsigned ? 'yes' : 'no'}
-                    </label>
-                  </div>
-                  <div>
-                    <div className="detail-label">Interval</div>
-                    <div className="detail-value">
-                      {releaseAutoUpdate.intervalSeconds > 0
-                        ? formatDurationSeconds(releaseAutoUpdate.intervalSeconds)
-                        : '—'}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="detail-label">Running</div>
-                    <div className="detail-value">{releaseAutoUpdate.running ? 'yes' : 'no'}</div>
-                  </div>
-                  <div>
-                    <div className="detail-label">Updated</div>
-                    <div className="detail-value">
-                      {releaseAutoUpdate.updatedAt
-                        ? new Date(releaseAutoUpdate.updatedAt).toLocaleString()
-                        : '—'}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="detail-label">Updated by</div>
-                    <div className="detail-value">{releaseAutoUpdate.updatedByUserId || '—'}</div>
-                  </div>
-                  <div className="full inline-row">
-                    <button
-                      className="button ghost"
-                      onClick={handleSaveReleaseAutoUpdateSettings}
-                      disabled={!canManageReleaseAutoUpdate || releaseAutoUpdateSaving}
-                    >
-                      Save auto-update settings
-                    </button>
-                    <button
-                      className="button ghost"
-                      onClick={handleRunReleaseAutoUpdate}
-                      disabled={!canManageReleaseAutoUpdate || releaseAutoUpdateSaving || releaseAutoUpdate.running}
-                    >
-                      Run now
-                    </button>
-                  </div>
-                </div>
-                {releaseAutoUpdate.lastRun && (
-                  <div className="detail-note">
-                    Last run: {formatTime(releaseAutoUpdate.lastRun.finishedAt || releaseAutoUpdate.lastRun.startedAt)} ·
-                    trigger {releaseAutoUpdate.lastRun.trigger || '—'} ·
-                    updated components {Number(releaseAutoUpdate.lastRun.componentsUpdated || 0)} ·
-                    groups {Number(releaseAutoUpdate.lastRun.groupsUpdated || 0)} ·
-                    devices {Number(releaseAutoUpdate.lastRun.devicesUpdated || 0)}
-                    {releaseAutoUpdate.lastRun.error ? ` · error: ${releaseAutoUpdate.lastRun.error}` : ''}
-                  </div>
-                )}
-                {releaseAutoUpdateStatus && <div className="status">{releaseAutoUpdateStatus}</div>}
-              </div>
-
-              <div className="settings-section">
-                <div className="settings-title">Backups</div>
-                {!canViewBackups ? (
-                  <div className="placeholder">Admin role required to view backups and restore status.</div>
-                ) : !backupStatus.enabled ? (
-                  <div className="placeholder">Backup runner not configured.</div>
-                ) : (
-                  <>
-                    <div className="detail-grid">
-                      <div>
-                        <div className="detail-label">Backup status</div>
-                        <div className="detail-value">{backupStatus.state || 'idle'}</div>
-                      </div>
-                      <div>
-                        <div className="detail-label">Restore status</div>
-                        <div className="detail-value">{restoreStatus.state || 'idle'}</div>
-                      </div>
-                      <div>
-                        <div className="detail-label">Log</div>
-                        <div className="detail-value">{backupStatus.logPath || restoreStatus.logPath || '—'}</div>
-                      </div>
-                      <div className="full actions">
-                        <button className="button ghost" onClick={loadBackups}>
-                          Refresh backups
-                        </button>
-                        <button className="button" onClick={handleStartBackup} disabled={!canManageBackups}>
-                          Create backup
-                        </button>
-                      </div>
-                    </div>
-                    <div className="form compact">
-                      <div className="field">
-                        <label>Restore backup</label>
-                        <select value={selectedBackupId} onChange={(e) => setSelectedBackupId(e.target.value)}>
-                          <option value="">Select backup</option>
-                          {backups.map((item) => (
-                            <option key={item.id} value={item.id}>
-                              {item.id}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="field actions">
-                        <button className="button ghost" onClick={handleRestore} disabled={!canManageBackups || !maintenance.enabled}>
-                          Restore + wipe
-                        </button>
-                        {!maintenance.enabled && (
-                          <div className="status">Enable maintenance before restore.</div>
-                        )}
-                      </div>
-                    </div>
-                    {backupError && <div className="error">{backupError}</div>}
-                    {backupMessage && <div className="status">{backupMessage}</div>}
-                    <div className="table-wrap">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>ID</th>
-                            <th>Created</th>
-                            <th>Size</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {backups.map((item) => (
-                            <tr key={item.id}>
-                              <td>{item.id}</td>
-                              <td>{item.createdAt ? new Date(item.createdAt).toLocaleString() : '—'}</td>
-                              <td>{item.sizeBytes ? `${(item.sizeBytes / (1024 * 1024)).toFixed(1)} MB` : '—'}</td>
-                            </tr>
-                          ))}
-                          {backups.length === 0 && (
-                            <tr>
-                              <td colSpan={3}>No backups found.</td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              <div className="settings-section">
-                <div className="settings-title">Upgrade</div>
-                {!upgrade.enabled ? (
-                  <div className="placeholder">Upgrade runner not configured.</div>
-                ) : (
-                  <>
-                    <div className="detail-grid">
-                      <div>
-                        <div className="detail-label">Maintenance</div>
-                        <div className="detail-value">{maintenance.enabled ? 'enabled' : 'disabled'}</div>
-                      </div>
-                      <div>
-                        <div className="detail-label">Updates</div>
-                        <div className="detail-value">{upgradeAvailable.available ? 'available' : 'none'}</div>
-                      </div>
-                      <div>
-                        <div className="detail-label">Preflight</div>
-                        <div className="detail-value">{preflightOk ? 'ok' : 'not run / failed'}</div>
-                      </div>
-                      <div>
-                        <div className="detail-label">Last Preflight</div>
-                        <div className="detail-value">
-                          {upgradePreflight.timestamp ? new Date(upgradePreflight.timestamp).toLocaleString() : '—'}
-                        </div>
-                      </div>
-                      <div>
-                        <div className="detail-label">State</div>
-                        <div className="detail-value">{upgrade.state || 'idle'}</div>
-                      </div>
-                      <div>
-                        <div className="detail-label">Running</div>
-                        <div className="detail-value">{upgrade.running ? 'yes' : 'no'}</div>
-                      </div>
-                      <div className="full">
-                        <div className="detail-label">Log Path</div>
-                        <div className="detail-value">{upgrade.logPath || '—'}</div>
-                      </div>
-                      {upgrade.error && (
-                        <div className="full">
-                          <div className="detail-label">Error</div>
-                          <div className="detail-value">{upgrade.error}</div>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="inline-row">
-                      <button className="button ghost" onClick={loadUpgradeAvailable}>
-                        Refresh updates
-                      </button>
-                      <button className="button ghost" onClick={loadUpgradePreflight}>
-                        Run preflight
-                      </button>
-                      {canApplyUpgrade && maintenance.enabled && upgrade.enabled && (
-                        <button
-                          className="button ghost"
-                          onClick={startUpgrade}
-                          disabled={upgrade.running || !upgradeReady}
-                        >
-                          {upgrade.running ? 'Applying update…' : 'Apply update'}
-                        </button>
-                      )}
-                    </div>
-                    {upgradeAvailableError && <div className="error">{upgradeAvailableError}</div>}
-                    {upgradePreflightStatus && <div className="status">{upgradePreflightStatus}</div>}
-                    {upgradePreflightError && <div className="error">{upgradePreflightError}</div>}
-
-                    {!upgradeAvailable.available ? (
-                      <div className="placeholder">
-                        No updates found{upgradeAvailable.updatesDir ? ` in ${upgradeAvailable.updatesDir}.` : '.'}
-                      </div>
-                    ) : (
-                      <div className="detail-grid">
-                        <div>
-                          <div className="detail-label">Latest</div>
-                          <div className="detail-value">{upgradeAvailable.latest}</div>
-                        </div>
-                        <div>
-                          <div className="detail-label">Updates Dir</div>
-                          <div className="detail-value">{upgradeAvailable.updatesDir || '—'}</div>
-                        </div>
-                        <div className="full">
-                          <div className="detail-label">Bundles</div>
-                          <div className="detail-value">{(upgradeAvailable.bundles || []).join(', ')}</div>
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="preflight-list">
-                      {(upgradePreflight.checks || []).map((check) => (
-                        <div key={check.name} className={`preflight-item ${check.status}`}>
-                          <div className="preflight-title">
-                            <span className={`preflight-badge ${check.status}`}>{check.status}</span>
-                            {check.name}
-                          </div>
-                          <div className="preflight-msg">{check.message}</div>
-                        </div>
-                      ))}
-                      {(!upgradePreflight.checks || upgradePreflight.checks.length === 0) && (
-                        <div className="placeholder">No preflight results yet.</div>
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-          </section>
-        )}
+        <SettingsPage
+          {...{
+            artifactLifecyclePolicy,
+            artifactLifecyclePolicyInput,
+            artifactLifecycleStatus,
+            backupError,
+            backupMessage,
+            backupStatus,
+            backups,
+            canApplyUpgrade,
+            canManageArtifactLifecycle,
+            canManageBackups,
+            canManageMaintenance,
+            canManageReleaseAutoUpdate,
+            canViewBackups,
+            formatDurationSeconds,
+            formatTime,
+            handleRestore,
+            handleRunReleaseAutoUpdate,
+            handleSaveArtifactLifecyclePolicy,
+            handleSaveReleaseAutoUpdateSettings,
+            handleStartBackup,
+            loadArtifactLifecyclePolicy,
+            loadArtifactLifecycleStatus,
+            loadBackups,
+            loadMaintenance,
+            loadReleaseAutoUpdate,
+            loadUpgrade,
+            loadUpgradeAvailable,
+            loadUpgradePreflight,
+            maintenance,
+            preflightOk,
+            releaseAutoUpdate,
+            releaseAutoUpdateSaving,
+            releaseAutoUpdateStatus,
+            restoreStatus,
+            selectedBackupId,
+            setArtifactLifecyclePolicyInput,
+            setReleaseAutoUpdate,
+            setSelectedBackupId,
+            startUpgrade,
+            toggleMaintenance,
+            upgrade,
+            upgradeAvailable,
+            upgradeAvailableError,
+            upgradePreflight,
+            upgradePreflightError,
+            upgradePreflightStatus,
+            upgradeReady,
+            view,
+          }}
+        />
       </main>
 
-      {deviceDrawerOpen && (
-        <div className="drawer-backdrop" onClick={() => setDeviceDrawerOpen(false)}>
-          <div
-            className="drawer"
-            style={{ width: `min(${drawerWidth}px, 90vw)` }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              className="drawer-handle"
-              onPointerDown={(event) => {
-                drawerResizingRef.current = true
-                event.preventDefault()
-              }}
-            />
-            <div className="drawer-header">
-              <div>
-                <div className="detail-label">Device</div>
-                <div className="detail-value">{selectedDeviceId || '—'}</div>
-              </div>
-              <button className="button ghost" onClick={() => setDeviceDrawerOpen(false)}>
-                Close
-              </button>
-            </div>
-            {deviceDetailError && <div className="error">{deviceDetailError}</div>}
-            {!selectedDeviceId && <div className="placeholder">Select a device to view details.</div>}
-            {selectedDeviceId && !deviceDetail && <div className="placeholder">Loading device detail...</div>}
-            {deviceDetail && (
-              <div className="drawer-content">
-                <div className="detail-grid">
-                  <div>
-                    <div className="detail-label">Status</div>
-                    <div className="detail-value">{deviceDetail.status || '—'}</div>
-                  </div>
-                  <div>
-                    <div className="detail-label">Last Seen</div>
-                    <div className="detail-value">{deviceDetail.lastSeen || '—'}</div>
-                  </div>
-                  <div>
-                    <div className="detail-label">Current Version</div>
-                    <div className="detail-value">{deviceDetail.current?.softwareVersion || '—'}</div>
-                  </div>
-                  <div>
-                    <div className="detail-label">Config Rev</div>
-                    <div className="detail-value">{deviceDetail.current?.configRev || '—'}</div>
-                  </div>
-                  <div>
-                    <div className="detail-label">Last Apply Status</div>
-                    <div className="detail-value">{deviceDetail.current?.lastApplyStatus || '—'}</div>
-                  </div>
-                  <div>
-                    <div className="detail-label">Last Apply Time</div>
-                    <div className="detail-value">{deviceDetail.current?.lastApplyAt || '—'}</div>
-                  </div>
-                  <div>
-                    <div className="detail-label">Last Applied Artifact</div>
-                    <div className="detail-value">
-                      {lastAppliedArtifact
-                        ? `${lastAppliedArtifact.name} v${lastAppliedArtifact.version}`
-                        : (deviceDetail.current?.lastApplyArtifactId || '—')}
-                    </div>
-                    {deviceDetail.current?.lastApplyArtifactId && !lastAppliedArtifact && (
-                      <div className="detail-note mono">{deviceDetail.current.lastApplyArtifactId}</div>
-                    )}
-                    {deviceDetail.current?.lastApplyError && (
-                      <div className="detail-note">{deviceDetail.current.lastApplyError}</div>
-                    )}
-                  </div>
-                  <div>
-                    <div className="detail-label">Last Pre-apply</div>
-                    <div className="detail-value">
-                      <span className={`pill preapply ${preApplyBadgeClass}`}>
-                        {deviceDetail.current?.lastPreApplyStatus || '—'}
-                      </span>
-                    </div>
-                    {deviceDetail.current?.lastPreApplyError && (
-                      <div className="detail-note">{deviceDetail.current?.lastPreApplyError}</div>
-                    )}
-                  </div>
-                </div>
+      <DeviceDrawer
+        {...{
+          activeArtifactGroups,
+          addDeviceComponent,
+          artifactAllowedByTrustPolicy,
+          artifactGroups,
+          artifactSignerSummary,
+          artifactTrustPolicy,
+          artifacts,
+          autoTrackModes,
+          buildComponentRows,
+          canDecommissionDevices,
+          canManageDesiredState,
+          desiredError,
+          deviceDetail,
+          deviceDetailError,
+          deviceDrawerOpen,
+          deviceForm,
+          downloadLogs,
+          drawerResizingRef,
+          drawerWidth,
+          filterArtifactGroupsByTrustPolicy,
+          filterArtifactGroupsByType,
+          handleClearDeviceOverride,
+          handleDeleteDevice,
+          handleDesiredDevice,
+          lastAppliedArtifact,
+          normalizeArtifactType,
+          openArtifactPicker,
+          openTrustOverrideEditor,
+          preApplyBadgeClass,
+          removeDeviceComponent,
+          resolveEffectiveTrustPolicy,
+          selectedDesired,
+          selectedDeviceId,
+          setDeviceDrawerOpen,
+          setDeviceForm,
+          setDeviceFormDirty,
+          trustPolicySummary,
+          updateDeviceComponent,
+          verificationPillLabel,
+        }}
+      />
 
-                {deviceDetail.current?.components && Object.keys(deviceDetail.current.components).some((key) => key !== 'app_bundle') && (
-                  <div className="component-table">
-                    <h4>Components</h4>
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Component</th>
-                          <th>Current</th>
-                          <th>Last Apply</th>
-                          <th>Artifact</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {Object.entries(deviceDetail.current.components)
-                          .filter(([key]) => key !== 'app_bundle')
-                          .map(([key, comp]) => (
-                          <tr key={key}>
-                            <td>{key}</td>
-                            <td>{comp.currentVersion || '—'}</td>
-                            <td>
-                              <span className={`pill ${comp.lastApplyStatus === 'error' ? 'error' : 'success'}`}>
-                                {comp.lastApplyStatus || '—'}
-                              </span>
-                              {comp.lastApplyAt && <div className="detail-note">{comp.lastApplyAt}</div>}
-                            </td>
-                            <td>{comp.lastApplyArtifactId || '—'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+      <TrustedSigningKeyModal
+        {...{
+          canManageArtifactTrust,
+          editingTrustedSigningKeyId,
+          handleSaveTrustedSigningKey,
+          setTrustedSigningKeyForm,
+          setTrustedSigningKeyModalOpen,
+          trustedSigningKeyForm,
+          trustedSigningKeyModalOpen,
+        }}
+      />
 
-                <form
-                  className="form"
-                  onSubmit={(e) => {
-                    handleDesiredDevice(e)
-                  }}
-                >
-                  <h3>Desired State</h3>
-                  {desiredError && <div className="error">{desiredError}</div>}
-                  {!canManageDesiredState && (
-                    <div className="hint">Operator role required to edit desired state.</div>
-                  )}
-                  <fieldset disabled={!canManageDesiredState} style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
-                    <label>Device ID</label>
-                    <input value={deviceForm.deviceId} readOnly />
-                    <label>Components</label>
-                    <div className="component-editor">
-                      {deviceForm.components.map((row, idx) => {
-                        const locked = Boolean(row.locked)
-                        const type = normalizeArtifactType(row.artifactType)
-                        const groupsForType = filterArtifactGroupsByType(activeArtifactGroups, type)
-                        const allowedGroupsForType = filterArtifactGroupsByTrustPolicy(groupsForType, artifactTrustPolicy)
-                        const allGroupsForType = filterArtifactGroupsByType(artifactGroups, type)
-                        const selected = artifacts.find((a) => a.artifactId === row.artifactId)
-                        const selectedGroup = selected
-                          ? (groupsForType.find((g) => g.name === selected.name) ||
-                            allGroupsForType.find((g) => g.name === selected.name))
-                          : null
-                        return (
-                          <div className="component-row" key={row.id || `${row.key}-${idx}`}>
-                            <div className="inline-row">
-                              <input
-                                value={row.key}
-                                onChange={(e) => updateDeviceComponent(idx, { key: e.target.value })}
-                                placeholder="component key (e.g. app:customer)"
-                                disabled={locked}
-                              />
-                              <input
-                                list="artifact-types"
-                                value={row.artifactType}
-                                onChange={(e) => updateDeviceComponent(idx, { artifactType: e.target.value })}
-                                placeholder="artifact type"
-                                disabled={locked}
-                              />
-                              <select
-                                value={row.autoTrackMode || 'inherit'}
-                                onChange={(e) => updateDeviceComponent(idx, { autoTrackMode: e.target.value })}
-                                disabled={locked}
-                              >
-                                {autoTrackModes.map((mode) => (
-                                  <option key={mode.id} value={mode.id}>{`Auto ${mode.label}`}</option>
-                                ))}
-                              </select>
-                              <label className="inline-toggle">
-                                <input
-                                  type="checkbox"
-                                  checked={locked}
-                                  onChange={(e) => updateDeviceComponent(idx, { locked: e.target.checked })}
-                                />
-                                Lock
-                              </label>
-                              <button
-                                className="button ghost"
-                                type="button"
-                                onClick={() => removeDeviceComponent(idx)}
-                                disabled={locked || deviceForm.components.length <= 1}
-                              >
-                                Remove
-                              </button>
-                            </div>
-                            <div className="inline-row">
-                              <select
-                                value={selected?.name || ''}
-                                onChange={(e) => {
-                                  const name = e.target.value
-                                  const group = allowedGroupsForType.find((g) => g.name === name)
-                                  if (!group) {
-                                    updateDeviceComponent(idx, { artifactId: '', desiredVersion: '' })
-                                  } else {
-                                    const pick = group.versions[group.versions.length - 1]
-                                    updateDeviceComponent(idx, {
-                                      artifactId: pick.artifactId,
-                                      desiredVersion: pick.version,
-                                      artifactType: normalizeArtifactType(pick.type),
-                                    })
-                                  }
-                                }}
-                                disabled={locked}
-                              >
-                                <option value="">Select artifact</option>
-                                {allowedGroupsForType.map((group) => (
-                                  <option key={group.name} value={group.name}>{group.name}</option>
-                                ))}
-                              </select>
-                              <button
-                                className="button ghost"
-                                type="button"
-                                onClick={() => openArtifactPicker('device', idx)}
-                                disabled={locked}
-                              >
-                                Browse
-                              </button>
-                              <select
-                                value={selected?.version || ''}
-                                onChange={(e) => {
-                                  const version = e.target.value
-                                  const pick = selectedGroup?.versions.find((v) => v.version === version)
-                                  if (pick) {
-                                    updateDeviceComponent(idx, {
-                                      artifactId: pick.artifactId,
-                                      desiredVersion: pick.version,
-                                      artifactType: normalizeArtifactType(pick.type),
-                                    })
-                                  }
-                                }}
-                                disabled={locked}
-                              >
-                                <option value="">Select version</option>
-                                {(selectedGroup?.versions || []).filter((artifact) => artifactAllowedByTrustPolicy(artifact, artifactTrustPolicy)).map((artifact) => (
-                                  <option key={artifact.artifactId} value={artifact.version}>
-                                    {artifact.version}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            <div className="inline-row">
-                              <input value={row.artifactId} readOnly placeholder="artifact uuid" />
-                              <input
-                                value={row.desiredVersion}
-                                onChange={(e) => updateDeviceComponent(idx, { desiredVersion: e.target.value })}
-                                placeholder="desired version"
-                                disabled={locked}
-                              />
-                              <input
-                                value={row.desiredConfigRev}
-                                onChange={(e) => updateDeviceComponent(idx, { desiredConfigRev: e.target.value })}
-                                placeholder="config rev"
-                                disabled={locked}
-                              />
-                            </div>
-                            {selected && (
-                              <div className="detail-note">
-                                Trust: {verificationPillLabel(selected)} ({artifactSignerSummary(selected)})
-                                {!artifactAllowedByTrustPolicy(selected, artifactTrustPolicy) && ' — blocked by current trust policy'}
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })}
-                      <button className="button ghost" type="button" onClick={addDeviceComponent}>
-                        Add component
-                      </button>
-                    </div>
-                    <label>Check-in Interval (sec)</label>
-                    <input
-                      value={deviceForm.checkinIntervalSec}
-                      onChange={(e) => {
-                        setDeviceForm({ ...deviceForm, checkinIntervalSec: e.target.value })
-                        setDeviceFormDirty(true)
-                      }}
-                      placeholder="30"
-                    />
-                    <div className="inline-row">
-                      <button className="button" type="submit">Apply</button>
-                      {selectedDesired && selectedDesired.source === 'manual' && (
-                        <button
-                          className="button ghost"
-                          type="button"
-                          onClick={handleClearDeviceOverride}
-                        >
-                          Use group desired state
-                        </button>
-                      )}
-                      <button
-                        className="button ghost"
-                        type="button"
-                        onClick={() => {
-                          setDeviceFormDirty(false)
-                          setDeviceForm({
-                            deviceId: selectedDeviceId,
-                            checkinIntervalSec: selectedDesired?.checkinIntervalSec ? String(selectedDesired.checkinIntervalSec) : '',
-                            components: buildComponentRows(
-                              selectedDesired?.components || {},
-                              {
-                                artifactId: selectedDesired?.artifactId || '',
-                                desiredVersion: selectedDesired?.desiredVersion || deviceDetail.current?.softwareVersion || '',
-                                desiredConfigRev: selectedDesired?.desiredConfigRev || deviceDetail.current?.configRev || '',
-                              },
-                              deviceDetail?.current,
-                            ),
-                          })
-                        }}
-                      >
-                        Reset
-                      </button>
-                    </div>
-                  </fieldset>
-                </form>
+      <EnrollmentProfileCreateModal
+        {...{
+          canManagePendingEnrollments,
+          enrollmentProfileCreateOpen,
+          enrollmentProfileForm,
+          handleCreateEnrollmentProfile,
+          setEnrollmentProfileCreateOpen,
+          setEnrollmentProfileForm,
+        }}
+      />
 
-                <div className="inline-row">
-                  <button className="button ghost" onClick={() => downloadLogs(selectedDeviceId)}>
-                    Download Logs
-                  </button>
-                  {canDecommissionDevices && (
-                    <button
-                      className="button ghost"
-                      onClick={() => handleDeleteDevice(selectedDeviceId)}
-                    >
-                      Decommission Device
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      <EnrollmentProfileEditModal
+        {...{
+          canManagePendingEnrollments,
+          editingEnrollmentProfileId,
+          enrollmentProfileEditForm,
+          handleCancelEditEnrollmentProfile,
+          handleUpdateEnrollmentProfile,
+          setEnrollmentProfileEditForm,
+        }}
+      />
 
-      {canManageArtifactTrust && trustedSigningKeyModalOpen && (
-        <div className="modal-backdrop" onClick={() => setTrustedSigningKeyModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="section-header">
-              <h3>{editingTrustedSigningKeyId ? 'Edit Trusted Signing Key' : 'New Trusted Signing Key'}</h3>
-              <button className="button ghost" onClick={() => setTrustedSigningKeyModalOpen(false)}>
-                Close
-              </button>
-            </div>
-            <form className="form compact" onSubmit={handleSaveTrustedSigningKey}>
-              <div className="field">
-                <label>Display Name</label>
-                <input
-                  value={trustedSigningKeyForm.displayName}
-                  onChange={(e) => setTrustedSigningKeyForm((prev) => ({ ...prev, displayName: e.target.value }))}
-                  placeholder="Release signing key"
-                />
-              </div>
-              <div className="field">
-                <label>Algorithm</label>
-                <select
-                  value={trustedSigningKeyForm.algorithm}
-                  disabled={Boolean(editingTrustedSigningKeyId)}
-                  onChange={(e) => setTrustedSigningKeyForm((prev) => ({ ...prev, algorithm: e.target.value }))}
-                >
-                  <option value="ed25519">ed25519</option>
-                  <option value="cosign">cosign</option>
-                </select>
-              </div>
-              <div className="field full">
-                <label>Public Key PEM</label>
-                <textarea
-                  rows={8}
-                  value={trustedSigningKeyForm.publicKeyPem}
-                  disabled={Boolean(editingTrustedSigningKeyId)}
-                  onChange={(e) => setTrustedSigningKeyForm((prev) => ({ ...prev, publicKeyPem: e.target.value }))}
-                  placeholder="-----BEGIN PUBLIC KEY-----"
-                />
-              </div>
-              <div className="field full">
-                <label>Notes</label>
-                <textarea
-                  rows={3}
-                  value={trustedSigningKeyForm.notes}
-                  onChange={(e) => setTrustedSigningKeyForm((prev) => ({ ...prev, notes: e.target.value }))}
-                  placeholder="Rotation window, owner, provenance notes..."
-                />
-              </div>
-              <div className="field actions">
-                <button className="button ghost" type="submit">
-                  {editingTrustedSigningKeyId ? 'Save changes' : 'Create key'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <ArtifactPickerModal
+        {...{
+          artifactAllowedByTrustPolicy,
+          artifactModalGroups,
+          artifactModalOpen,
+          artifactPickerPolicy,
+          artifactPickerTarget,
+          artifactSignerSummary,
+          canManageDesiredState,
+          normalizeArtifactType,
+          normalizeVerificationStatus,
+          setArtifactModalOpen,
+          setArtifactPickerTarget,
+          updateDeviceComponent,
+          updateGroupComponent,
+          updateGroupMultiDesiredComponent,
+          verificationPillLabel,
+        }}
+      />
 
-      {canManagePendingEnrollments && enrollmentProfileCreateOpen && (
-        <div className="modal-backdrop" onClick={() => setEnrollmentProfileCreateOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="section-header">
-              <h3>Create Enrollment Profile</h3>
-              <button className="button ghost" onClick={() => setEnrollmentProfileCreateOpen(false)}>
-                Close
-              </button>
-            </div>
-            <div className="form compact two-column">
-              <div className="field">
-                <label>Name</label>
-                <input
-                  value={enrollmentProfileForm.name}
-                  onChange={(e) => setEnrollmentProfileForm((prev) => ({ ...prev, name: e.target.value }))}
-                />
-              </div>
-              <div className="field">
-                <label>Expiration Days</label>
-                <input
-                  value={enrollmentProfileForm.expiresInDays}
-                  onChange={(e) => setEnrollmentProfileForm((prev) => ({ ...prev, expiresInDays: e.target.value }))}
-                />
-              </div>
-              <div className="field">
-                <label>Max Uses (0 = unlimited)</label>
-                <input
-                  value={enrollmentProfileForm.maxUses}
-                  onChange={(e) => setEnrollmentProfileForm((prev) => ({ ...prev, maxUses: e.target.value }))}
-                />
-              </div>
-              <div className="field">
-                <label>Challenge Secret (optional)</label>
-                <input
-                  value={enrollmentProfileForm.challengeSecret}
-                  onChange={(e) => setEnrollmentProfileForm((prev) => ({ ...prev, challengeSecret: e.target.value }))}
-                />
-              </div>
-              <div className="field">
-                <label>Challenge Hint (optional)</label>
-                <input
-                  value={enrollmentProfileForm.challengeHint}
-                  onChange={(e) => setEnrollmentProfileForm((prev) => ({ ...prev, challengeHint: e.target.value }))}
-                />
-              </div>
-              <div className="field">
-                <label>Approval Delay (sec)</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={enrollmentProfileForm.approvalDelaySec}
-                  onChange={(e) => setEnrollmentProfileForm((prev) => ({ ...prev, approvalDelaySec: e.target.value }))}
-                />
-              </div>
-              <div className="field">
-                <label>Default Labels</label>
-                <div className="key-value-list">
-                  {enrollmentProfileForm.defaultLabelRows.map((row, idx) => (
-                    <div key={`profile-create-label-${idx}`} className="key-value-row">
-                      <input
-                        value={row.key}
-                        onChange={(e) => {
-                          const next = [...enrollmentProfileForm.defaultLabelRows]
-                          next[idx] = { ...row, key: e.target.value }
-                          setEnrollmentProfileForm((prev) => ({ ...prev, defaultLabelRows: next }))
-                        }}
-                        placeholder="label key"
-                      />
-                      <input
-                        value={row.value}
-                        onChange={(e) => {
-                          const next = [...enrollmentProfileForm.defaultLabelRows]
-                          next[idx] = { ...row, value: e.target.value }
-                          setEnrollmentProfileForm((prev) => ({ ...prev, defaultLabelRows: next }))
-                        }}
-                        placeholder="label value"
-                      />
-                      <button
-                        className="button ghost"
-                        type="button"
-                        onClick={() => {
-                          const next = enrollmentProfileForm.defaultLabelRows.filter((_, ridx) => ridx !== idx)
-                          setEnrollmentProfileForm((prev) => ({ ...prev, defaultLabelRows: next.length > 0 ? next : [{ key: '', value: '' }] }))
-                        }}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-                  <button
-                    className="button ghost"
-                    type="button"
-                    onClick={() => setEnrollmentProfileForm((prev) => ({
-                      ...prev,
-                      defaultLabelRows: [...prev.defaultLabelRows, { key: '', value: '' }],
-                    }))}
-                  >
-                    Add Label
-                  </button>
-                </div>
-              </div>
-              <div className="field">
-                <label className="chip">
-                  <input
-                    type="checkbox"
-                    checked={enrollmentProfileForm.allowUnsignedHardwareIdentity}
-                    onChange={(e) => setEnrollmentProfileForm((prev) => ({ ...prev, allowUnsignedHardwareIdentity: e.target.checked }))}
-                  />
-                  Allow unsigned hardware identity
-                </label>
-              </div>
-              <div className="field actions">
-                <button className="button ghost" onClick={handleCreateEnrollmentProfile}>
-                  Create profile
-                </button>
-                <button className="button ghost" onClick={() => setEnrollmentProfileCreateOpen(false)}>
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <ArtifactUploadModal
+        {...{
+          activeTrustedSigningKeys,
+          artifactTrustError,
+          artifactTrustPolicy,
+          artifactUploadOpen,
+          canManageArtifacts,
+          handleUpload,
+          setArtifactUploadOpen,
+          signatureTypeOptions,
+          uploadStatus,
+        }}
+      />
 
-      {canManagePendingEnrollments && editingEnrollmentProfileId && (
-        <div className="modal-backdrop" onClick={handleCancelEditEnrollmentProfile}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="section-header">
-              <h3>Edit Enrollment Profile</h3>
-              <button className="button ghost" onClick={handleCancelEditEnrollmentProfile}>
-                Close
-              </button>
-            </div>
-            <div className="form compact two-column">
-              <div className="field">
-                <label>Name</label>
-                <input
-                  value={enrollmentProfileEditForm.name}
-                  onChange={(e) => setEnrollmentProfileEditForm((prev) => ({ ...prev, name: e.target.value }))}
-                />
-              </div>
-              <div className="field">
-                <label>Max Uses (0 = unlimited)</label>
-                <input
-                  value={enrollmentProfileEditForm.maxUses}
-                  onChange={(e) => setEnrollmentProfileEditForm((prev) => ({ ...prev, maxUses: e.target.value }))}
-                />
-              </div>
-              <div className="field">
-                <label>Approval Delay (sec)</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={enrollmentProfileEditForm.approvalDelaySec}
-                  onChange={(e) => setEnrollmentProfileEditForm((prev) => ({ ...prev, approvalDelaySec: e.target.value }))}
-                />
-              </div>
-              <div className="field">
-                <label className="chip">
-                  <input
-                    type="checkbox"
-                    checked={enrollmentProfileEditForm.allowUnsignedHardwareIdentity}
-                    onChange={(e) => setEnrollmentProfileEditForm((prev) => ({ ...prev, allowUnsignedHardwareIdentity: e.target.checked }))}
-                  />
-                  Allow unsigned hardware identity
-                </label>
-              </div>
-              <div className="field">
-                <label className="chip">
-                  <input
-                    type="checkbox"
-                    checked={enrollmentProfileEditForm.challengeEnabled}
-                    onChange={(e) => setEnrollmentProfileEditForm((prev) => ({ ...prev, challengeEnabled: e.target.checked }))}
-                  />
-                  Challenge enabled
-                </label>
-              </div>
-              <div className="field">
-                <label>Challenge Secret (leave blank to keep current)</label>
-                <input
-                  value={enrollmentProfileEditForm.challengeSecret}
-                  onChange={(e) => setEnrollmentProfileEditForm((prev) => ({ ...prev, challengeSecret: e.target.value }))}
-                />
-              </div>
-              <div className="field">
-                <label>Challenge Hint</label>
-                <input
-                  value={enrollmentProfileEditForm.challengeHint}
-                  onChange={(e) => setEnrollmentProfileEditForm((prev) => ({ ...prev, challengeHint: e.target.value }))}
-                />
-              </div>
-              <div className="field">
-                <label>Default Labels</label>
-                <div className="key-value-list">
-                  {enrollmentProfileEditForm.defaultLabelRows.map((row, idx) => (
-                    <div key={`profile-edit-label-${idx}`} className="key-value-row">
-                      <input
-                        value={row.key}
-                        onChange={(e) => {
-                          const next = [...enrollmentProfileEditForm.defaultLabelRows]
-                          next[idx] = { ...row, key: e.target.value }
-                          setEnrollmentProfileEditForm((prev) => ({ ...prev, defaultLabelRows: next }))
-                        }}
-                        placeholder="label key"
-                      />
-                      <input
-                        value={row.value}
-                        onChange={(e) => {
-                          const next = [...enrollmentProfileEditForm.defaultLabelRows]
-                          next[idx] = { ...row, value: e.target.value }
-                          setEnrollmentProfileEditForm((prev) => ({ ...prev, defaultLabelRows: next }))
-                        }}
-                        placeholder="label value"
-                      />
-                      <button
-                        className="button ghost"
-                        type="button"
-                        onClick={() => {
-                          const next = enrollmentProfileEditForm.defaultLabelRows.filter((_, ridx) => ridx !== idx)
-                          setEnrollmentProfileEditForm((prev) => ({ ...prev, defaultLabelRows: next.length > 0 ? next : [{ key: '', value: '' }] }))
-                        }}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-                  <button
-                    className="button ghost"
-                    type="button"
-                    onClick={() => setEnrollmentProfileEditForm((prev) => ({
-                      ...prev,
-                      defaultLabelRows: [...prev.defaultLabelRows, { key: '', value: '' }],
-                    }))}
-                  >
-                    Add Label
-                  </button>
-                </div>
-              </div>
-              <div className="field actions">
-                <button className="button ghost" onClick={handleUpdateEnrollmentProfile}>
-                  Save profile
-                </button>
-                <button className="button ghost" onClick={handleCancelEditEnrollmentProfile}>
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <TrustOverrideModal
+        {...{
+          activeTrustedSigningKeys,
+          artifactAllowedByTrustPolicy,
+          artifactSignerSummary,
+          artifactTrustPolicy,
+          canManageDesiredState,
+          closeTrustOverrideEditor,
+          saveTrustOverrideEditor,
+          setTrustOverrideError,
+          setTrustOverrideForm,
+          signatureTypeOptions,
+          trustOverrideEditor,
+          trustOverrideEditorRow,
+          trustOverrideEffectivePolicy,
+          trustOverrideError,
+          trustOverrideForm,
+          trustOverrideModes,
+          trustOverrideSelectedArtifact,
+          trustPolicyStrictness,
+          verificationModeLabel,
+          verificationPillLabel,
+        }}
+      />
 
-      {canManageDesiredState && artifactModalOpen && (
-        <div
-          className="modal-backdrop"
-          onClick={() => {
-            setArtifactModalOpen(false)
-            setArtifactPickerTarget(null)
-          }}
-        >
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="section-header">
-              <h3>Select Artifact</h3>
-              <button
-                className="button ghost"
-                onClick={() => {
-                  setArtifactModalOpen(false)
-                  setArtifactPickerTarget(null)
-                }}
-              >
-                Close
-              </button>
-            </div>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>ID</th>
-                    <th>Version</th>
-                    <th>Trust</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {artifactModalGroups.map((group) => (
-                    group.versions.map((a, idx) => {
-                      const selectable = artifactAllowedByTrustPolicy(a, artifactTrustPolicy)
-                      return (
-                      <tr key={a.artifactId} className={idx === 0 ? 'artifact-group-start' : ''}>
-                        <td>{idx === 0 ? group.name : ''}</td>
-                        <td className="mono">{a.artifactId}</td>
-                        <td>{a.version}</td>
-                        <td>
-                          <span className={`pill ${normalizeVerificationStatus(a.verificationStatus, a)}`}>
-                            {verificationPillLabel(a)}
-                          </span>
-                          <div className="detail-note">{artifactSignerSummary(a)}</div>
-                        </td>
-                        <td>
-                          <button
-                            className="button ghost"
-                            disabled={!selectable}
-                            onClick={() => {
-                              if (artifactPickerTarget?.scope === 'group') {
-                                updateGroupComponent(artifactPickerTarget.index, {
-                                  artifactId: a.artifactId,
-                                  desiredVersion: a.version,
-                                  artifactType: normalizeArtifactType(a.type),
-                                })
-                              } else if (artifactPickerTarget?.scope === 'groupBulk') {
-                                updateGroupMultiDesiredComponent(artifactPickerTarget.index, {
-                                  artifactId: a.artifactId,
-                                  desiredVersion: a.version,
-                                  artifactType: normalizeArtifactType(a.type),
-                                })
-                              } else if (artifactPickerTarget?.scope === 'device') {
-                                updateDeviceComponent(artifactPickerTarget.index, {
-                                  artifactId: a.artifactId,
-                                  desiredVersion: a.version,
-                                  artifactType: normalizeArtifactType(a.type),
-                                })
-                              }
-                              setArtifactModalOpen(false)
-                              setArtifactPickerTarget(null)
-                            }}
-                          >
-                            {selectable ? 'Select' : 'Blocked'}
-                          </button>
-                        </td>
-                      </tr>
-                    )})
-                  ))}
-                  {artifactModalGroups.length === 0 && (
-                    <tr>
-                      <td colSpan={5}>No active artifacts match this component type.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {canManageArtifacts && artifactUploadOpen && (
-        <div className="modal-backdrop" onClick={() => setArtifactUploadOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="section-header">
-              <h3>Upload Artifact</h3>
-              <button className="button ghost" onClick={() => setArtifactUploadOpen(false)}>
-                Close
-              </button>
-            </div>
-            <form className="form" onSubmit={handleUpload}>
-              <div>
-                <label>Name</label>
-                <input name="name" required placeholder="agent" />
-              </div>
-              <div>
-                <label>Version</label>
-                <input name="version" required placeholder="1.0.0" />
-              </div>
-              <div className="full">
-                <label>Bundle</label>
-                <input name="file" type="file" required />
-              </div>
-              <div className="full">
-                <label>Detached Signature (optional)</label>
-                <input name="signatureFile" type="file" accept=".sig,.txt,.b64,text/plain" />
-                <div className="hint">
-                  Upload the detached base64 signature file for this bundle. Leave blank for unsigned upload when policy allows it.
-                </div>
-              </div>
-              <div>
-                <label>Signature Type</label>
-                <select name="signatureType" defaultValue="ed25519">
-                  {signatureTypeOptions.map((option) => (
-                    <option key={option.id} value={option.id}>{option.label}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="full">
-                <label>Signing Key ID (optional)</label>
-                <input name="signatureKeyId" placeholder="sha256:..." list="trusted-signing-key-ids" />
-                <datalist id="trusted-signing-key-ids">
-                  {activeTrustedSigningKeys.map((key) => (
-                    <option key={key.keyId} value={key.keyId}>
-                      {key.displayName || key.keyId}
-                    </option>
-                  ))}
-                </datalist>
-                <div className="hint">
-                  Use the trusted public key ID that matches the detached signature. This is recorded with the artifact and used by signature policy.
-                </div>
-              </div>
-              <div className="full">
-                <div className="hint">
-                  Current trust policy: <strong>{artifactTrustPolicy.verificationMode || 'warn_unsigned'}</strong>.
-                  {artifactTrustPolicy.verificationMode === 'require_verified'
-                    ? ' Signed upload is required.'
-                    : ' Unsigned upload is allowed by policy.'}
-                </div>
-                {artifactTrustPolicy.allowedSignatureTypes?.length > 0 && (
-                  <div className="hint">
-                    Allowed signature types: {artifactTrustPolicy.allowedSignatureTypes.join(', ')}
-                  </div>
-                )}
-                {artifactTrustPolicy.allowedSigningKeyIds?.length > 0 && (
-                  <div className="hint">
-                    Allowed signing keys: {artifactTrustPolicy.allowedSigningKeyIds.join(', ')}
-                  </div>
-                )}
-                {artifactTrustError && <div className="error">{artifactTrustError}</div>}
-              </div>
-              <div className="full inline-row">
-                <button className="button" type="submit">Upload</button>
-                {uploadStatus && <span className="status">{uploadStatus}</span>}
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {canManageGroups && groupModalOpen && (
-        <div className="modal-backdrop" onClick={() => setGroupModalOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="section-header">
-              <h3>{groupForm.groupId ? 'Edit Group' : 'Create Group'}</h3>
-              <button className="button ghost" onClick={() => setGroupModalOpen(false)}>
-                Close
-              </button>
-            </div>
-            <form className="form" onSubmit={handleSaveGroup}>
-              <div>
-                <label>Name</label>
-                <input
-                  value={groupForm.name}
-                  onChange={(e) => setGroupForm({ ...groupForm, name: e.target.value })}
-                  placeholder="canary"
-                />
-              </div>
-              <div>
-                <label>Region</label>
-                <input
-                  value={groupForm.region}
-                  onChange={(e) => setGroupForm({ ...groupForm, region: e.target.value })}
-                  placeholder="west"
-                />
-              </div>
-              <div>
-                <label>Role</label>
-                <input
-                  value={groupForm.role}
-                  onChange={(e) => setGroupForm({ ...groupForm, role: e.target.value })}
-                  placeholder="edge"
-                />
-              </div>
-              <div>
-                <label>Site</label>
-                <input
-                  value={groupForm.site}
-                  onChange={(e) => setGroupForm({ ...groupForm, site: e.target.value })}
-                  placeholder="lab-1"
-                />
-              </div>
-              <div className="full">
-                <label>Custom Labels</label>
-                <div className="key-value-list">
-                  {groupForm.custom.map((row, idx) => (
-                    <div key={`custom-${idx}`} className="key-value-row">
-                      <input
-                        value={row.key}
-                        onChange={(e) => {
-                          const next = [...groupForm.custom]
-                          next[idx] = { ...row, key: e.target.value }
-                          setGroupForm({ ...groupForm, custom: next })
-                        }}
-                        placeholder="key"
-                      />
-                      <input
-                        value={row.value}
-                        onChange={(e) => {
-                          const next = [...groupForm.custom]
-                          next[idx] = { ...row, value: e.target.value }
-                          setGroupForm({ ...groupForm, custom: next })
-                        }}
-                        placeholder="value"
-                      />
-                      <button
-                        className="button ghost"
-                        type="button"
-                        onClick={() => {
-                          const next = groupForm.custom.filter((_, cidx) => cidx !== idx)
-                          setGroupForm({ ...groupForm, custom: next })
-                        }}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-                  <button
-                    className="button ghost"
-                    type="button"
-                    onClick={() => setGroupForm({
-                      ...groupForm,
-                      custom: [...groupForm.custom, { key: '', value: '' }],
-                    })}
-                  >
-                    Add Custom Label
-                  </button>
-                </div>
-              </div>
-              <div className="full inline-row">
-                <button className="button" type="submit">
-                  {groupForm.groupId ? 'Update Group' : 'Create Group'}
-                </button>
-                {groupsStatus && <span className="status">{groupsStatus}</span>}
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <GroupModal
+        {...{
+          canManageGroups,
+          groupForm,
+          groupModalOpen,
+          groupsStatus,
+          handleSaveGroup,
+          setGroupForm,
+          setGroupModalOpen,
+        }}
+      />
 
       {canManageGroups && groupMultiEditOpen && (
         <div className="modal-backdrop" onClick={() => setGroupMultiEditOpen(false)}>
@@ -7934,456 +5673,94 @@ export default function App() {
         </div>
       )}
 
-      {canManageDesiredState && groupMultiDesiredOpen && (
-        <div className="modal-backdrop" onClick={() => setGroupMultiDesiredOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="section-header">
-              <h3>Set Desired for Selected Groups</h3>
-              <button className="button ghost" onClick={() => setGroupMultiDesiredOpen(false)}>
-                Close
-              </button>
-            </div>
-            <form className="form" onSubmit={handleApplyGroupMultiDesired}>
-              <label>Selected Groups</label>
-              <input value={String(selectedGroupIds.length)} readOnly />
-              <label>Components</label>
-              <div className="component-editor">
-                {groupMultiDesiredForm.components.map((row, idx) => {
-                  const locked = Boolean(row.locked)
-                  const type = normalizeArtifactType(row.artifactType)
-                  const groupsForType = filterArtifactGroupsByType(activeArtifactGroups, type)
-                  const allowedGroupsForType = filterArtifactGroupsByTrustPolicy(groupsForType, artifactTrustPolicy)
-                  const allGroupsForType = filterArtifactGroupsByType(artifactGroups, type)
-                  const selected = artifacts.find((a) => a.artifactId === row.artifactId)
-                  const selectedGroup = selected
-                    ? (groupsForType.find((g) => g.name === selected.name) ||
-                      allGroupsForType.find((g) => g.name === selected.name))
-                    : null
-                  return (
-                    <div className="component-row" key={row.id || `${row.key}-${idx}`}>
-                      <div className="inline-row">
-                        <input
-                          value={row.key}
-                          onChange={(e) => updateGroupMultiDesiredComponent(idx, { key: e.target.value })}
-                          placeholder="component key (e.g. app:customer)"
-                          disabled={locked}
-                        />
-                        <input
-                          list="artifact-types"
-                          value={row.artifactType}
-                          onChange={(e) => updateGroupMultiDesiredComponent(idx, { artifactType: e.target.value })}
-                          placeholder="artifact type"
-                          disabled={locked}
-                        />
-                        <select
-                          value={row.autoTrackMode || 'inherit'}
-                          onChange={(e) => updateGroupMultiDesiredComponent(idx, { autoTrackMode: e.target.value })}
-                          disabled={locked}
-                        >
-                          {autoTrackModes.map((mode) => (
-                            <option key={mode.id} value={mode.id}>{`Auto ${mode.label}`}</option>
-                          ))}
-                        </select>
-                        <label className="inline-toggle">
-                          <input
-                            type="checkbox"
-                            checked={locked}
-                            onChange={(e) => updateGroupMultiDesiredComponent(idx, { locked: e.target.checked })}
-                          />
-                          Lock
-                        </label>
-                        <button
-                          className="button ghost"
-                          type="button"
-                          onClick={() => removeGroupMultiDesiredComponent(idx)}
-                          disabled={locked || groupMultiDesiredForm.components.length <= 1}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                      <div className="inline-row">
-                        <select
-                          value={selected?.name || ''}
-                          onChange={(e) => {
-                            const name = e.target.value
-                            const group = allowedGroupsForType.find((g) => g.name === name)
-                            if (!group) {
-                              updateGroupMultiDesiredComponent(idx, { artifactId: '', desiredVersion: '' })
-                            } else {
-                              const pick = group.versions[group.versions.length - 1]
-                              updateGroupMultiDesiredComponent(idx, {
-                                artifactId: pick.artifactId,
-                                desiredVersion: pick.version,
-                                artifactType: normalizeArtifactType(pick.type),
-                              })
-                            }
-                          }}
-                          disabled={locked}
-                        >
-                          <option value="">Select artifact</option>
-                          {allowedGroupsForType.map((group) => (
-                            <option key={group.name} value={group.name}>{group.name}</option>
-                          ))}
-                        </select>
-                        <button
-                          className="button ghost"
-                          type="button"
-                          onClick={() => openArtifactPicker('groupBulk', idx)}
-                          disabled={locked}
-                        >
-                          Browse
-                        </button>
-                        <select
-                          value={selected?.version || ''}
-                          onChange={(e) => {
-                            const version = e.target.value
-                            const pick = selectedGroup?.versions.find((v) => v.version === version)
-                            if (pick) {
-                              updateGroupMultiDesiredComponent(idx, {
-                                artifactId: pick.artifactId,
-                                desiredVersion: pick.version,
-                                artifactType: normalizeArtifactType(pick.type),
-                              })
-                            }
-                          }}
-                          disabled={locked}
-                        >
-                          <option value="">Select version</option>
-                          {(selectedGroup?.versions || []).filter((artifact) => artifactAllowedByTrustPolicy(artifact, artifactTrustPolicy)).map((artifact) => (
-                            <option key={artifact.artifactId} value={artifact.version}>
-                              {artifact.version}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="inline-row">
-                        <input value={row.artifactId} readOnly placeholder="artifact uuid" />
-                        <input
-                          value={row.desiredVersion}
-                          onChange={(e) => updateGroupMultiDesiredComponent(idx, { desiredVersion: e.target.value })}
-                          placeholder="desired version"
-                          disabled={locked}
-                        />
-                        <input
-                          value={row.desiredConfigRev}
-                          onChange={(e) => updateGroupMultiDesiredComponent(idx, { desiredConfigRev: e.target.value })}
-                          placeholder="config rev"
-                          disabled={locked}
-                        />
-                      </div>
-                      {selected && (
-                        <div className="detail-note">
-                          Trust: {verificationPillLabel(selected)} ({artifactSignerSummary(selected)})
-                          {!artifactAllowedByTrustPolicy(selected, artifactTrustPolicy) && ' — blocked by current trust policy'}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-                <button className="button ghost" type="button" onClick={addGroupMultiDesiredComponent}>
-                  Add component
-                </button>
-              </div>
-              <label>Check-in Interval (sec)</label>
-              <input
-                value={groupMultiDesiredForm.checkinIntervalSec}
-                onChange={(e) => setGroupMultiDesiredForm({ ...groupMultiDesiredForm, checkinIntervalSec: e.target.value })}
-                placeholder="30"
-              />
-              <div className="inline-row">
-                <button className="button" type="submit">Apply to Selected</button>
-                {groupMultiDesiredStatus && <span className="status">{groupMultiDesiredStatus}</span>}
-              </div>
-            </form>
-            {groupMultiDesiredError && <div className="error">{groupMultiDesiredError}</div>}
-          </div>
-        </div>
-      )}
+      <GroupMultiDesiredModal
+        {...{
+          activeArtifactGroups,
+          addGroupMultiDesiredComponent,
+          artifactAllowedByTrustPolicy,
+          artifactGroups,
+          artifactSignerSummary,
+          artifactTrustPolicy,
+          artifacts,
+          autoTrackModes,
+          canManageDesiredState,
+          filterArtifactGroupsByTrustPolicy,
+          filterArtifactGroupsByType,
+          groupMultiDesiredError,
+          groupMultiDesiredForm,
+          groupMultiDesiredOpen,
+          groupMultiDesiredStatus,
+          handleApplyGroupMultiDesired,
+          normalizeArtifactType,
+          openArtifactPicker,
+          openTrustOverrideEditor,
+          removeGroupMultiDesiredComponent,
+          resolveEffectiveTrustPolicy,
+          selectedGroupIds,
+          setGroupMultiDesiredForm,
+          setGroupMultiDesiredOpen,
+          trustPolicySummary,
+          updateGroupMultiDesiredComponent,
+          verificationPillLabel,
+        }}
+      />
 
-      {canManageGroups && groupBulkOpen && (
-        <div className="modal-backdrop" onClick={() => setGroupBulkOpen(false)}>
-          <div className="modal bulk-group-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="section-header">
-              <h3>Bulk Group Management</h3>
-              <button className="button ghost" onClick={() => setGroupBulkOpen(false)}>
-                Close
-              </button>
-            </div>
-            <div className="bulk-group-toolbar">
-              <button className="button ghost" onClick={downloadGroupBulkTemplate}>
-                Download template
-              </button>
-              <label className="button ghost bulk-group-file">
-                Load CSV
-                <input
-                  type="file"
-                  accept=".csv,text/csv"
-                  onChange={handleGroupBulkFileChange}
-                />
-              </label>
-              <button className="button ghost" onClick={handlePreviewGroupBulk}>
-                Preview
-              </button>
-              <button className="button" onClick={handleApplyGroupBulk} disabled={groupBulkApplying}>
-                {groupBulkApplying ? 'Applying…' : 'Apply'}
-              </button>
-              {groupBulkRollbackCsv && (
-                <button className="button ghost" onClick={downloadGroupBulkRollback}>
-                  Download rollback CSV
-                </button>
-              )}
-            </div>
-            <div className="hint">
-              CSV columns: <code>action</code>, <code>groupId</code>, <code>name</code>, <code>region</code>, <code>role</code>,
-              <code>site</code>, <code>selector_json</code>, or dynamic <code>selector.&lt;key&gt;</code> columns.
-            </div>
-            <div className="form">
-              <div className="full">
-                <label>CSV input</label>
-                <textarea
-                  className="bulk-group-input"
-                  value={groupBulkCsv}
-                  onChange={(e) => {
-                    setGroupBulkCsv(e.target.value)
-                    setGroupBulkPreview(null)
-                    setGroupBulkRollbackCsv('')
-                    setGroupBulkError('')
-                    setGroupBulkStatus('')
-                  }}
-                  placeholder="action,groupId,name,region,role,site,selector_json"
-                />
-              </div>
-            </div>
-            {groupBulkError && <div className="error">{groupBulkError}</div>}
-            {groupBulkStatus && <div className="status">{groupBulkStatus}</div>}
-            {groupBulkPreview && (
-              <>
-                <div className="detail-note">
-                  Rows: {groupBulkPreview.summary.totalRows} · valid {groupBulkPreview.summary.validRows} · errors {groupBulkPreview.summary.errorRows} ·
-                  create {groupBulkPreview.summary.createRows} · update {groupBulkPreview.summary.updateRows} ·
-                  delete {groupBulkPreview.summary.deleteRows} · no change {groupBulkPreview.summary.noChangeRows}
-                </div>
-                <div className="table-wrap bulk-group-table">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Line</th>
-                        <th>Action</th>
-                        <th>Group ID</th>
-                        <th>Name</th>
-                        <th>Selector</th>
-                        <th>Preview</th>
-                        <th>Apply</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {groupBulkPreview.rows.map((row) => (
-                        <tr key={row.rowId}>
-                          <td>{row.line}</td>
-                          <td>{row.action}</td>
-                          <td className="mono">{row.groupId || '—'}</td>
-                          <td>{row.name || '—'}</td>
-                          <td><code>{row.action === 'upsert' ? formatSelector(row.selector) : '—'}</code></td>
-                          <td>
-                            {row.error ? (
-                              <span className="status error-inline">{row.error}</span>
-                            ) : (
-                              <span className="pill">{row.outcome}</span>
-                            )}
-                          </td>
-                          <td>
-                            {row.applyStatus ? (
-                              <span className={`pill ${row.applyStatus === 'applied' ? 'signed' : 'unsigned'}`}>
-                                {row.applyStatus === 'applied' ? 'ok' : 'failed'}
-                              </span>
-                            ) : '—'}
-                            {row.applyError && <div className="status error-inline">{row.applyError}</div>}
-                          </td>
-                        </tr>
-                      ))}
-                      {groupBulkPreview.rows.length === 0 && (
-                        <tr>
-                          <td colSpan={7}>No rows parsed.</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
+      <BulkGroupManagementModal
+        {...{
+          canManageGroups,
+          downloadGroupBulkRollback,
+          downloadGroupBulkTemplate,
+          formatSelector,
+          groupBulkApplying,
+          groupBulkCsv,
+          groupBulkError,
+          groupBulkOpen,
+          groupBulkPreview,
+          groupBulkRollbackCsv,
+          groupBulkStatus,
+          handleApplyGroupBulk,
+          handleGroupBulkFileChange,
+          handlePreviewGroupBulk,
+          setGroupBulkCsv,
+          setGroupBulkError,
+          setGroupBulkOpen,
+          setGroupBulkPreview,
+          setGroupBulkRollbackCsv,
+          setGroupBulkStatus,
+        }}
+      />
 
-      {canManageDesiredState && groupDesiredOpen && (
-        <div className="modal-backdrop" onClick={() => setGroupDesiredOpen(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="section-header">
-              <h3>Group Desired State</h3>
-              <button className="button ghost" onClick={() => setGroupDesiredOpen(false)}>
-                Close
-              </button>
-            </div>
-            <form className="form" onSubmit={handleGroupDesired}>
-              <label>Group ID</label>
-              <input value={groupDesiredForm.groupId} readOnly />
-              <label>Components</label>
-              <div className="component-editor">
-                {groupDesiredForm.components.map((row, idx) => {
-                  const locked = Boolean(row.locked)
-                  const type = normalizeArtifactType(row.artifactType)
-                  const groupsForType = filterArtifactGroupsByType(activeArtifactGroups, type)
-                  const allowedGroupsForType = filterArtifactGroupsByTrustPolicy(groupsForType, artifactTrustPolicy)
-                  const allGroupsForType = filterArtifactGroupsByType(artifactGroups, type)
-                  const selected = artifacts.find((a) => a.artifactId === row.artifactId)
-                  const selectedGroup = selected
-                    ? (groupsForType.find((g) => g.name === selected.name) ||
-                      allGroupsForType.find((g) => g.name === selected.name))
-                    : null
-                  return (
-                    <div className="component-row" key={row.id || `${row.key}-${idx}`}>
-                      <div className="inline-row">
-                        <input
-                          value={row.key}
-                          onChange={(e) => updateGroupComponent(idx, { key: e.target.value })}
-                          placeholder="component key (e.g. app:customer)"
-                          disabled={locked}
-                        />
-                        <input
-                          list="artifact-types"
-                          value={row.artifactType}
-                          onChange={(e) => updateGroupComponent(idx, { artifactType: e.target.value })}
-                          placeholder="artifact type"
-                          disabled={locked}
-                        />
-                        <select
-                          value={row.autoTrackMode || 'inherit'}
-                          onChange={(e) => updateGroupComponent(idx, { autoTrackMode: e.target.value })}
-                          disabled={locked}
-                        >
-                          {autoTrackModes.map((mode) => (
-                            <option key={mode.id} value={mode.id}>{`Auto ${mode.label}`}</option>
-                          ))}
-                        </select>
-                        <label className="inline-toggle">
-                          <input
-                            type="checkbox"
-                            checked={locked}
-                            onChange={(e) => updateGroupComponent(idx, { locked: e.target.checked })}
-                          />
-                          Lock
-                        </label>
-                        <button
-                          className="button ghost"
-                          type="button"
-                          onClick={() => removeGroupComponent(idx)}
-                          disabled={locked || groupDesiredForm.components.length <= 1}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                      <div className="inline-row">
-                        <select
-                          value={selected?.name || ''}
-                          onChange={(e) => {
-                            const name = e.target.value
-                            const group = allowedGroupsForType.find((g) => g.name === name)
-                            if (!group) {
-                              updateGroupComponent(idx, { artifactId: '', desiredVersion: '' })
-                            } else {
-                              const pick = group.versions[group.versions.length - 1]
-                              updateGroupComponent(idx, {
-                                artifactId: pick.artifactId,
-                                desiredVersion: pick.version,
-                                artifactType: normalizeArtifactType(pick.type),
-                              })
-                            }
-                          }}
-                          disabled={locked}
-                        >
-                          <option value="">Select artifact</option>
-                          {allowedGroupsForType.map((group) => (
-                            <option key={group.name} value={group.name}>{group.name}</option>
-                          ))}
-                        </select>
-                        <button
-                          className="button ghost"
-                          type="button"
-                          onClick={() => openArtifactPicker('group', idx)}
-                          disabled={locked}
-                        >
-                          Browse
-                        </button>
-                        <select
-                          value={selected?.version || ''}
-                          onChange={(e) => {
-                            const version = e.target.value
-                            const pick = selectedGroup?.versions.find((v) => v.version === version)
-                            if (pick) {
-                              updateGroupComponent(idx, {
-                                artifactId: pick.artifactId,
-                                desiredVersion: pick.version,
-                                artifactType: normalizeArtifactType(pick.type),
-                              })
-                            }
-                          }}
-                          disabled={locked}
-                        >
-                          <option value="">Select version</option>
-                          {(selectedGroup?.versions || []).filter((artifact) => artifactAllowedByTrustPolicy(artifact, artifactTrustPolicy)).map((artifact) => (
-                            <option key={artifact.artifactId} value={artifact.version}>
-                              {artifact.version}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="inline-row">
-                        <input value={row.artifactId} readOnly placeholder="artifact uuid" />
-                        <input
-                          value={row.desiredVersion}
-                          onChange={(e) => updateGroupComponent(idx, { desiredVersion: e.target.value })}
-                          placeholder="desired version"
-                          disabled={locked}
-                        />
-                        <input
-                          value={row.desiredConfigRev}
-                          onChange={(e) => updateGroupComponent(idx, { desiredConfigRev: e.target.value })}
-                          placeholder="config rev"
-                          disabled={locked}
-                        />
-                      </div>
-                      {selected && (
-                        <div className="detail-note">
-                          Trust: {verificationPillLabel(selected)} ({artifactSignerSummary(selected)})
-                          {!artifactAllowedByTrustPolicy(selected, artifactTrustPolicy) && ' — blocked by current trust policy'}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-                <button className="button ghost" type="button" onClick={addGroupComponent}>
-                  Add component
-                </button>
-              </div>
-              <label>Check-in Interval (sec)</label>
-              <input
-                value={groupDesiredForm.checkinIntervalSec}
-                onChange={(e) => setGroupDesiredForm({ ...groupDesiredForm, checkinIntervalSec: e.target.value })}
-                placeholder="30"
-              />
-              <div className="inline-row">
-                <button className="button" type="submit">Apply</button>
-                {selectedGroupDesired && (
-                  <button className="button ghost" type="button" onClick={handleClearGroupDesired}>
-                    Clear group desired state
-                  </button>
-                )}
-                {groupsStatus && <span className="status">{groupsStatus}</span>}
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <GroupDesiredModal
+        {...{
+          activeArtifactGroups,
+          addGroupComponent,
+          artifactAllowedByTrustPolicy,
+          artifactGroups,
+          artifactSignerSummary,
+          artifactTrustPolicy,
+          artifacts,
+          autoTrackModes,
+          canManageDesiredState,
+          filterArtifactGroupsByTrustPolicy,
+          filterArtifactGroupsByType,
+          groupDesiredForm,
+          groupDesiredOpen,
+          groupsStatus,
+          handleClearGroupDesired,
+          handleGroupDesired,
+          normalizeArtifactType,
+          openArtifactPicker,
+          openTrustOverrideEditor,
+          removeGroupComponent,
+          resolveEffectiveTrustPolicy,
+          selectedGroupDesired,
+          setGroupDesiredForm,
+          setGroupDesiredOpen,
+          trustPolicySummary,
+          updateGroupComponent,
+          verificationPillLabel,
+        }}
+      />
       <datalist id="artifact-types">
         {componentTypes.map((comp) => (
           <option key={comp.id} value={comp.id}>{comp.label}</option>
