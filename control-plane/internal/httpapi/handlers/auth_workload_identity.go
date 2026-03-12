@@ -27,6 +27,11 @@ type WorkloadIdentityExchangeResponse struct {
 	Metadata  map[string]string `json:"metadata,omitempty"`
 }
 
+type WorkloadIdentityStatusResponse struct {
+	Enabled   bool                                `json:"enabled"`
+	Providers []auth.WorkloadIdentityProviderInfo `json:"providers,omitempty"`
+}
+
 func ExchangeWorkloadIdentityToken(logger *log.Logger, authManager *auth.Manager, exchanger auth.WorkloadIdentityExchanger, st store.Store, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if authManager == nil || !authManager.Enabled() || exchanger == nil {
@@ -98,5 +103,17 @@ func ExchangeWorkloadIdentityToken(logger *log.Logger, authManager *auth.Manager
 			Name:      session.Name,
 			Metadata:  session.Metadata,
 		})
+	}
+}
+
+func GetWorkloadIdentityStatus(exchanger *auth.WorkloadIdentityManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		resp := WorkloadIdentityStatusResponse{
+			Enabled: exchanger != nil && len(exchanger.ProviderInfos()) > 0,
+		}
+		if exchanger != nil {
+			resp.Providers = exchanger.ProviderInfos()
+		}
+		writeJSON(w, resp)
 	}
 }

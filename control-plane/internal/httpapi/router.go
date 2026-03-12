@@ -114,6 +114,9 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(loginLimiter.Middleware).Post("/auth/password-reset/complete", handlers.CompletePasswordResetToken(logger, deps.Auth, deps.Store, deps.TrustProxy))
 		if deps.WorkloadIdentity != nil {
 			r.With(loginLimiter.Middleware).Post("/auth/workload-identity/exchange", handlers.ExchangeWorkloadIdentityToken(logger, deps.Auth, deps.WorkloadIdentity, deps.Store, deps.TrustProxy))
+			if statusManager, ok := deps.WorkloadIdentity.(*auth.WorkloadIdentityManager); ok {
+				r.With(admin).Get("/auth/workload-identity/status", handlers.GetWorkloadIdentityStatus(statusManager))
+			}
 		}
 		if deps.OIDCProvider != nil {
 			r.Get("/auth/oidc/login", handlers.OIDCLogin(deps.OIDCProvider))

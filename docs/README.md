@@ -83,6 +83,7 @@ Associated scripts: `../scripts/testing/`
 | `../scripts/testing/prod-lab-first-contact.sh` | End-to-end first-contact approval flow validation |
 | `../scripts/testing/prod-lab-down.sh` | Stop/wipe production-like Docker lab |
 | `../scripts/test-artifact-ingest.sh` | Push/pull ingest smoke test |
+| `../scripts/test-workload-identity.sh` | Validate configured workload identity providers and optional OIDC exchange |
 | `../scripts/build-customer-docs-bundle.sh` | Assemble a zip-ready customer docs bundle |
 | `../scripts/reload-pull-credentials.sh` | Reload pull credential resolver without restarting control-plane |
 | `../scripts/setup-artifactory-demo.sh` | Local Artifactory setup for pull adapter tests |

@@ -24,7 +24,7 @@ Authored docs in this folder:
 Assembled into the customer bundle at build time:
 - `icd.md` - client integration contract (assembled into the bundle)
 - `ci-templates/` - scaffold templates for GitHub Actions, GitLab CI, and Jenkins
-- `ci-helpers/` - helper scripts for push/pull and workload identity exchange
+- `ci-helpers/` - helper scripts for push/pull, workload identity exchange, and smoke validation
 
 Recommended reading order:
 1. `setup-onprem.md`

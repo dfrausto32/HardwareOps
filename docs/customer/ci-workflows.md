@@ -56,6 +56,17 @@ POST /api/v1/auth/workload-identity/exchange
 Scope today:
 - `artifact.publish`
 
+Control-plane configuration sources:
+- `CI_WORKLOAD_IDENTITY_PROVIDERS_FILE`
+- `CI_WORKLOAD_IDENTITY_PROVIDERS_JSON`
+- `CI_WORKLOAD_IDENTITY_PROVIDERS_AWS_SECRET_ID` + `CI_WORKLOAD_IDENTITY_PROVIDERS_AWS_REGION`
+
+Admin verification endpoint:
+
+```text
+GET /api/v1/auth/workload-identity/status
+```
+
 ## 4. GitHub Actions
 
 Use the included template:
@@ -99,6 +110,16 @@ ci-helpers/ci-exchange-gitlab-workload-identity.sh
 ci-helpers/ci-exchange-jenkins-workload-identity.sh
 ci-helpers/ci-upload-artifact.sh
 ci-helpers/ci-pull-artifact.sh
+ci-helpers/test-workload-identity.sh
+```
+
+Validation helper:
+
+```bash
+AUTH_EMAIL=<admin-email> \
+AUTH_PASSWORD=<admin-password> \
+BASE_URL=https://app.customer.example.com \
+./ci-helpers/test-workload-identity.sh
 ```
 
 Requirements:

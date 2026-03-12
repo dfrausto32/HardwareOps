@@ -67,6 +67,12 @@ Recommended:
 - use workload identity for CI where possible
 - require verified artifacts for controlled environments
 
+When CI workload identity is enabled, the vendor should provide:
+- provider name
+- expected audience
+- allowed repository/project/branch/workflow constraints
+- whether GitHub, GitLab, or Jenkins helper templates are the supported path
+
 ## 6. Recovery and security
 
 Use `security-and-recovery.md`.

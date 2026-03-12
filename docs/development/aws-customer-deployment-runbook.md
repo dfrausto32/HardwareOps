@@ -213,7 +213,55 @@ Use one secret per customer environment:
 
 Treat this secret as the bootstrap/additive source. Ongoing key lifecycle still happens through the UI/API registry.
 
-### 6.4 Production secret-ARN map
+### 6.4 CI workload identity provider config secret
+
+If CI jobs should exchange GitHub/GitLab/Jenkins OIDC job tokens for short-lived HardwareOps publish tokens, bootstrap the provider config from Secrets Manager before apply.
+
+1. Create the provider config payload:
+
+```json
+[
+  {
+    "name": "github-actions",
+    "issuer": "https://token.actions.githubusercontent.com",
+    "audience": "hardwareops-ci",
+    "allowedScopes": ["artifact.publish"],
+    "defaultScopes": ["artifact.publish"],
+    "ttl": "15m",
+    "claimMatches": {
+      "repository": ["acme/device-releases"],
+      "ref": ["refs/heads/main"],
+      "workflow_ref": ["acme/device-releases/.github/workflows/release.yml@refs/heads/main"]
+    }
+  }
+]
+```
+
+2. Create or update the secret:
+
+```bash
+aws secretsmanager create-secret \
+  --name hardwareops/acme/prod/workload-identity-providers \
+  --secret-string file:///tmp/workload-identity-providers.json \
+|| aws secretsmanager put-secret-value \
+  --secret-id hardwareops/acme/prod/workload-identity-providers \
+  --secret-string file:///tmp/workload-identity-providers.json
+```
+
+3. Reference it in Terraform:
+
+```hcl
+ci_workload_identity_providers_aws_secret_id = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/acme/prod/workload-identity-providers-AbCdEf"
+```
+
+4. After apply, verify runtime:
+- `GET /api/v1/auth/workload-identity/status` shows the configured provider
+- `./scripts/test-workload-identity.sh` succeeds for admin status validation
+- a real CI job OIDC token can be exchanged and used for `artifact.publish`
+
+Treat this secret as runtime config, not a signing or auth secret. Rotate/update it through change control when repository, branch, or workflow constraints change.
+
+### 6.5 Production secret-ARN map
 
 For production, move sensitive values out of `control_plane_env` and into `control_plane_secret_arns`.
 

@@ -38,6 +38,8 @@ gateway_image       = "111122223333.dkr.ecr.us-east-1.amazonaws.com/hardwareops-
 # artifact_pull_credentials_aws_secret_id = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/customer-a/dev/artifact-pull-credentials-AbCdEf"
 # Optional: Secrets Manager secret containing trusted signing key bootstrap JSON.
 # trusted_signing_keys_aws_secret_id = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/customer-a/dev/trusted-signing-keys-AbCdEf"
+# Optional: Secrets Manager secret containing CI workload identity provider config JSON.
+# ci_workload_identity_providers_aws_secret_id = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/customer-a/dev/workload-identity-providers-AbCdEf"
 # If referenced Secrets Manager secrets use customer-managed CMKs, list those key ARNs.
 # secret_kms_key_arns = ["arn:aws:kms:us-east-1:111122223333:key/00000000-0000-0000-0000-000000000000"]
 

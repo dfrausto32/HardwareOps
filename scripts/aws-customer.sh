@@ -37,6 +37,7 @@ CONTROL_PLANE_IMAGE=""
 GATEWAY_IMAGE=""
 ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID=""
 TRUSTED_SIGNING_KEYS_AWS_SECRET_ID=""
+CI_WORKLOAD_IDENTITY_PROVIDERS_AWS_SECRET_ID=""
 ARTIFACT_SIGNING_KEY_ID=""
 DB_MASTER_PASSWORD=""
 DB_MANAGE_MASTER_USER_PASSWORD=0
@@ -108,6 +109,8 @@ Customer setup options (init):
                               Optional Secrets Manager secret ID/ARN for pull adapter credentials
   --trusted-signing-keys-secret-id <id-or-arn>
                               Optional Secrets Manager secret ID/ARN for trusted signing keys JSON
+  --ci-workload-identity-providers-secret-id <id-or-arn>
+                              Optional Secrets Manager secret ID/ARN for CI workload identity provider config JSON
   --artifact-signing-key-id <key-id>
                               Optional pinned signing key ID for strict artifact trust policy
   --auth-bootstrap-email <email>    Local auth bootstrap admin email (default generated)
@@ -186,7 +189,9 @@ Customer-specific:
  12) Optional trusted signing key bootstrap:
      - Secrets Manager secret ID/ARN containing trusted signing key JSON
      - Optional pinned signing key ID used in strict artifact trust policy
- 13) Optional demo fleet setup:
+ 13) Optional CI workload identity provider config:
+     - Secrets Manager secret ID/ARN containing OIDC provider config JSON for GitHub/GitLab/Jenkins job token exchange
+ 14) Optional demo fleet setup:
      - demo agent image URI in ECR
      - bootstrap credentials for demo enrollment token creation
 
@@ -486,6 +491,9 @@ EOF
   if [ -n "$TRUSTED_SIGNING_KEYS_AWS_SECRET_ID" ]; then
     printf 'trusted_signing_keys_aws_secret_id = "%s"\n' "$TRUSTED_SIGNING_KEYS_AWS_SECRET_ID" >> "$path"
   fi
+  if [ -n "$CI_WORKLOAD_IDENTITY_PROVIDERS_AWS_SECRET_ID" ]; then
+    printf 'ci_workload_identity_providers_aws_secret_id = "%s"\n' "$CI_WORKLOAD_IDENTITY_PROVIDERS_AWS_SECRET_ID" >> "$path"
+  fi
 }
 
 init_customer() {
@@ -722,6 +730,7 @@ while [ $# -gt 0 ]; do
     --gateway-image) GATEWAY_IMAGE=$2; shift 2 ;;
     --artifact-pull-credentials-secret-id) ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID=$2; shift 2 ;;
     --trusted-signing-keys-secret-id) TRUSTED_SIGNING_KEYS_AWS_SECRET_ID=$2; shift 2 ;;
+    --ci-workload-identity-providers-secret-id) CI_WORKLOAD_IDENTITY_PROVIDERS_AWS_SECRET_ID=$2; shift 2 ;;
     --artifact-signing-key-id) ARTIFACT_SIGNING_KEY_ID=$2; shift 2 ;;
     --auth-bootstrap-email) AUTH_BOOTSTRAP_EMAIL=$2; shift 2 ;;
     --auth-bootstrap-password) AUTH_BOOTSTRAP_PASSWORD=$2; shift 2 ;;

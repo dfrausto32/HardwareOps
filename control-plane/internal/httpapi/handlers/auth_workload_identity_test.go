@@ -89,3 +89,20 @@ func TestExchangeWorkloadIdentityTokenFailure(t *testing.T) {
 		t.Fatalf("expected 401, got %d", rec.Code)
 	}
 }
+
+func TestGetWorkloadIdentityStatus(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/workload-identity/status", nil)
+	manager := &auth.WorkloadIdentityManager{}
+	GetWorkloadIdentityStatus(manager).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var resp WorkloadIdentityStatusResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Enabled {
+		t.Fatal("expected disabled response")
+	}
+}

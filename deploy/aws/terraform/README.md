@@ -47,6 +47,7 @@ Acceptance helper: `../../../scripts/aws-hardening-check.sh`.
 - optional demo fleet image URI (`demo_agent_image`) when `enable_demo_fleet = true`
 - optional pull credential secret (`artifact_pull_credentials_aws_secret_id`) for adapter `credentialRef`
 - optional trusted signing key bootstrap secret (`trusted_signing_keys_aws_secret_id`) for artifact verification
+- optional workload identity provider secret (`ci_workload_identity_providers_aws_secret_id`) for CI OIDC exchange
 - optional customer-managed secret KMS keys (`secret_kms_key_arns`)
 - secrets map for sensitive env values (for example `DATABASE_URL`)
 4. Run:
@@ -70,6 +71,7 @@ After apply, run:
 - WAF is associated to the shared ALB, but its managed rules and optional rate limit are scope-down matched to `app_host` so device mTLS traffic is not filtered by app rules.
 - `artifact_pull_credentials_aws_secret_id` can be set to a secret **name or ARN**, but ARN is recommended for least-privilege IAM policy generation.
 - `trusted_signing_keys_aws_secret_id` can be set to a secret **name or ARN** containing trusted signing key JSON. Use `control_plane_env.ARTIFACT_TRUST_ALLOWED_SIGNING_KEY_IDS` to pin specific key IDs when needed.
+- `ci_workload_identity_providers_aws_secret_id` can be set to a secret **name or ARN** containing workload identity provider config JSON for GitHub/GitLab/Jenkins OIDC exchange.
 - Set `secret_kms_key_arns` only when referenced Secrets Manager secrets use customer-managed KMS keys; AWS-managed Secrets Manager keys do not need extra input here.
 - For local auth mode, ensure `AUTH_JWT_SECRET` and bootstrap credentials are set in `control_plane_env`.
 - For token-based first-time enrollment, start with `device_mtls_mode = "passthrough"`, enroll devices, then switch to `device_mtls_mode = "verify"` and re-apply.
@@ -160,6 +162,84 @@ Credential JSON format must be a ref map, for example:
   }
 }
 ```
+
+## Add AWS Secrets Manager for workload identity providers (step-by-step)
+Use this when CI jobs should exchange GitHub/GitLab/Jenkins OIDC tokens for short-lived HardwareOps publish tokens.
+
+1. Create a provider config JSON file:
+   ```json
+   [
+     {
+       "name": "github-actions",
+       "issuer": "https://token.actions.githubusercontent.com",
+       "audience": "hardwareops-ci",
+       "allowedScopes": ["artifact.publish"],
+       "defaultScopes": ["artifact.publish"],
+       "ttl": "15m",
+       "claimMatches": {
+         "repository": ["my-org/my-repo"],
+         "ref": ["refs/heads/main"],
+         "workflow_ref": ["my-org/my-repo/.github/workflows/release.yml@refs/heads/main"]
+       }
+     }
+   ]
+   ```
+
+2. Create or update the secret:
+   ```bash
+   AWS_PROFILE=hwops-admin
+   AWS_REGION=us-east-1
+   CUSTOMER=parcel
+   ENV=dev
+   SECRET_NAME="hardwareops/${CUSTOMER}/${ENV}/workload-identity-providers"
+
+   aws --profile "$AWS_PROFILE" --region "$AWS_REGION" secretsmanager create-secret \
+     --name "$SECRET_NAME" \
+     --secret-string file:///tmp/workload-identity-providers.json \
+   || aws --profile "$AWS_PROFILE" --region "$AWS_REGION" secretsmanager put-secret-value \
+     --secret-id "$SECRET_NAME" \
+     --secret-string file:///tmp/workload-identity-providers.json
+   ```
+
+3. Get the ARN:
+   ```bash
+   SECRET_ARN=$(aws --profile "$AWS_PROFILE" --region "$AWS_REGION" secretsmanager describe-secret \
+     --secret-id "$SECRET_NAME" --query ARN --output text)
+   echo "$SECRET_ARN"
+   ```
+
+4. Set it in your environment `terraform.tfvars`:
+   ```hcl
+   ci_workload_identity_providers_aws_secret_id = "<SECRET_ARN>"
+   ```
+
+5. Apply Terraform:
+   ```bash
+   ./scripts/aws-customer.sh apply \
+     --customer "$CUSTOMER" \
+     --env "$ENV" \
+     --region "$AWS_REGION" \
+     --profile "$AWS_PROFILE" \
+     --auto-approve
+   ```
+
+6. Validate runtime configuration:
+   ```bash
+   AUTH_EMAIL=<bootstrap-admin-email> \
+   AUTH_PASSWORD=<bootstrap-admin-password> \
+   BASE_URL=https://app.<customer-domain> \
+   ./scripts/test-workload-identity.sh
+   ```
+
+7. Optional real exchange smoke:
+   ```bash
+   AUTH_EMAIL=<bootstrap-admin-email> \
+   AUTH_PASSWORD=<bootstrap-admin-password> \
+   BASE_URL=https://app.<customer-domain> \
+   CI_WORKLOAD_IDENTITY_PROVIDER=github-actions \
+   CI_WORKLOAD_IDENTITY_TOKEN=<real-oidc-job-token> \
+   ./scripts/test-workload-identity.sh
+   ```
 
 ## Database URL Secret (Secrets Manager)
 

@@ -40,6 +40,7 @@ Current shipped path:
 Control-plane configuration:
 - `CI_WORKLOAD_IDENTITY_PROVIDERS_JSON`
 - or `CI_WORKLOAD_IDENTITY_PROVIDERS_FILE`
+- or `CI_WORKLOAD_IDENTITY_PROVIDERS_AWS_SECRET_ID` + `CI_WORKLOAD_IDENTITY_PROVIDERS_AWS_REGION`
 
 Example GitHub Actions provider:
 
@@ -101,6 +102,12 @@ Jenkins usage:
 
 Other CI systems can call the same exchange endpoint directly by passing an OIDC token in `CI_WORKLOAD_IDENTITY_TOKEN`.
 
+Admin verification endpoint:
+
+```text
+GET /api/v1/auth/workload-identity/status
+```
+
 ## Push workflow inputs
 
 - `ARTIFACT_NAME`
@@ -117,6 +124,7 @@ Implementation helper:
   - `scripts/ci-exchange-workload-identity.sh`
   - `scripts/ci-exchange-gitlab-workload-identity.sh`
   - `scripts/ci-exchange-jenkins-workload-identity.sh`
+  - `scripts/test-workload-identity.sh`
 
 ## Pull workflow inputs
 
@@ -140,6 +148,9 @@ Implementation helper:
 - Workload identity tokens are exchanged on demand and do not require long-lived secret files in CI.
 - GitHub/GitLab templates prefer workload identity and only use static CI tokens as fallback.
 - Jenkins templates support workload identity if your Jenkins environment injects an OIDC token; otherwise they can still use a static service token.
+- Deployment/runtime validation:
+  - `AUTH_EMAIL=<admin> AUTH_PASSWORD=<password> BASE_URL=https://app.<customer-domain> ./scripts/test-workload-identity.sh`
+  - set `CI_WORKLOAD_IDENTITY_PROVIDER` and `CI_WORKLOAD_IDENTITY_TOKEN` to exercise a real exchange plus `artifact.publish` presign smoke
 - For pull with `credentialRef`, configure resolver sources in control-plane:
   - `ARTIFACT_PULL_CREDENTIALS_FILE` / `ARTIFACT_PULL_CREDENTIALS_JSON`
   - or AWS Secrets Manager (`ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID`)

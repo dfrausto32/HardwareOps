@@ -7,9 +7,13 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"github.com/hardwareops/control-plane/internal/config"
 )
@@ -22,6 +26,25 @@ type WorkloadIdentityManager struct {
 	providers map[string]*workloadIdentityProvider
 }
 
+type WorkloadIdentityProviderInfo struct {
+	Name          string              `json:"name"`
+	Issuer        string              `json:"issuer"`
+	Audience      string              `json:"audience"`
+	AllowedScopes []string            `json:"allowedScopes"`
+	DefaultScopes []string            `json:"defaultScopes"`
+	TTL           string              `json:"ttl"`
+	ClaimMatches  map[string][]string `json:"claimMatches"`
+}
+
+type awsSecretsManagerClient interface {
+	GetSecretValue(ctx context.Context, params *secretsmanager.GetSecretValueInput, optFns ...func(*secretsmanager.Options)) (*secretsmanager.GetSecretValueOutput, error)
+}
+
+var loadAWSConfig = awsconfig.LoadDefaultConfig
+var newAWSSecretsManagerClient = func(cfg aws.Config) awsSecretsManagerClient {
+	return secretsmanager.NewFromConfig(cfg)
+}
+
 func (m *WorkloadIdentityManager) ProviderNames() []string {
 	if m == nil || len(m.providers) == 0 {
 		return nil
@@ -30,17 +53,34 @@ func (m *WorkloadIdentityManager) ProviderNames() []string {
 	for name := range m.providers {
 		out = append(out, name)
 	}
+	sort.Strings(out)
+	return out
+}
+
+func (m *WorkloadIdentityManager) ProviderInfos() []WorkloadIdentityProviderInfo {
+	if m == nil || len(m.providers) == 0 {
+		return nil
+	}
+	out := make([]WorkloadIdentityProviderInfo, 0, len(m.providers))
+	for _, provider := range m.providers {
+		out = append(out, provider.info())
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Name < out[j].Name
+	})
 	return out
 }
 
 type workloadIdentityProvider struct {
-	name          string
-	issuer        string
-	verifier      *gooidc.IDTokenVerifier
-	claimMatches  map[string][]string
-	allowedScopes map[string]struct{}
-	defaultScopes []string
-	ttl           time.Duration
+	name              string
+	issuer            string
+	audience          string
+	verifier          *gooidc.IDTokenVerifier
+	claimMatches      map[string][]string
+	allowedScopes     map[string]struct{}
+	allowedScopesList []string
+	defaultScopes     []string
+	ttl               time.Duration
 }
 
 type workloadIdentityProviderConfig struct {
@@ -54,7 +94,7 @@ type workloadIdentityProviderConfig struct {
 }
 
 func NewWorkloadIdentityManager(ctx context.Context, cfg *config.Config) (*WorkloadIdentityManager, error) {
-	configs, err := loadWorkloadIdentityConfigs(cfg)
+	configs, err := loadWorkloadIdentityConfigs(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -201,17 +241,19 @@ func buildWorkloadIdentityProvider(ctx context.Context, cfg workloadIdentityProv
 		claimMatches[claim] = out
 	}
 	return &workloadIdentityProvider{
-		name:          name,
-		issuer:        strings.TrimSpace(cfg.Issuer),
-		verifier:      verifier,
-		claimMatches:  claimMatches,
-		allowedScopes: scopeSet(allowedScopes),
-		defaultScopes: defaultScopes,
-		ttl:           ttl,
+		name:              name,
+		issuer:            strings.TrimSpace(cfg.Issuer),
+		audience:          audience,
+		verifier:          verifier,
+		claimMatches:      claimMatches,
+		allowedScopes:     scopeSet(allowedScopes),
+		allowedScopesList: append([]string(nil), allowedScopes...),
+		defaultScopes:     append([]string(nil), defaultScopes...),
+		ttl:               ttl,
 	}, nil
 }
 
-func loadWorkloadIdentityConfigs(cfg *config.Config) ([]workloadIdentityProviderConfig, error) {
+func loadWorkloadIdentityConfigs(ctx context.Context, cfg *config.Config) ([]workloadIdentityProviderConfig, error) {
 	if cfg == nil || !cfg.WorkloadIdentityEnabled() {
 		return nil, nil
 	}
@@ -234,6 +276,13 @@ func loadWorkloadIdentityConfigs(cfg *config.Config) ([]workloadIdentityProvider
 		}
 		configs = append(configs, parsed...)
 	}
+	if raw := strings.TrimSpace(cfg.CIWorkloadIdentityProvidersAWSSecretID); raw != "" {
+		parsed, err := LoadWorkloadIdentityConfigsFromAWSSecretManager(ctx, raw, cfg.CIWorkloadIdentityProvidersAWSRegion)
+		if err != nil {
+			return nil, err
+		}
+		configs = append(configs, parsed...)
+	}
 	seen := map[string]struct{}{}
 	out := make([]workloadIdentityProviderConfig, 0, len(configs))
 	for _, providerCfg := range configs {
@@ -249,6 +298,39 @@ func loadWorkloadIdentityConfigs(cfg *config.Config) ([]workloadIdentityProvider
 		out = append(out, providerCfg)
 	}
 	return out, nil
+}
+
+func LoadWorkloadIdentityConfigsFromAWSSecretManager(ctx context.Context, secretID, region string) ([]workloadIdentityProviderConfig, error) {
+	secretID = strings.TrimSpace(secretID)
+	region = strings.TrimSpace(region)
+	if secretID == "" {
+		return nil, nil
+	}
+	loadOpts := []func(*awsconfig.LoadOptions) error{}
+	if region != "" {
+		loadOpts = append(loadOpts, awsconfig.WithRegion(region))
+	}
+	awsCfg, err := loadAWSConfig(ctx, loadOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("aws config load: %w", err)
+	}
+	client := newAWSSecretsManagerClient(awsCfg)
+	out, err := client.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{SecretId: &secretID})
+	if err != nil {
+		return nil, fmt.Errorf("aws secretsmanager get-secret-value: %w", err)
+	}
+	raw := strings.TrimSpace(valueOrEmpty(out.SecretString))
+	if raw == "" && len(out.SecretBinary) > 0 {
+		raw = strings.TrimSpace(string(out.SecretBinary))
+	}
+	if raw == "" {
+		return nil, fmt.Errorf("secret %q has empty SecretString", secretID)
+	}
+	parsed, err := parseWorkloadIdentityConfigBlob([]byte(raw))
+	if err != nil {
+		return nil, fmt.Errorf("parse workload identity config aws secret: %w", err)
+	}
+	return parsed, nil
 }
 
 func parseWorkloadIdentityConfigBlob(data []byte) ([]workloadIdentityProviderConfig, error) {
@@ -418,6 +500,22 @@ func (p *workloadIdentityProvider) resolveScopes(requested []string) ([]string, 
 	return scopes, nil
 }
 
+func (p *workloadIdentityProvider) info() WorkloadIdentityProviderInfo {
+	claimMatches := make(map[string][]string, len(p.claimMatches))
+	for key, values := range p.claimMatches {
+		claimMatches[key] = append([]string(nil), values...)
+	}
+	return WorkloadIdentityProviderInfo{
+		Name:          p.name,
+		Issuer:        p.issuer,
+		Audience:      p.audience,
+		AllowedScopes: append([]string(nil), p.allowedScopesList...),
+		DefaultScopes: append([]string(nil), p.defaultScopes...),
+		TTL:           p.ttl.String(),
+		ClaimMatches:  claimMatches,
+	}
+}
+
 func metadataForClaims(claims map[string]any, provider string) map[string]string {
 	out := map[string]string{
 		"provider": provider,
@@ -446,4 +544,11 @@ func displayNameForClaims(claims map[string]any, provider string) string {
 		return provider + ":" + subject
 	}
 	return provider
+}
+
+func valueOrEmpty(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
 }

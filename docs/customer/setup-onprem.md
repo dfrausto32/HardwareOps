@@ -59,6 +59,19 @@ TRUSTED_SIGNING_KEYS_FILE=/opt/hardwareops/trust/trusted-signing-keys.json
 ARTIFACT_TRUST_ALLOWED_SIGNING_KEY_IDS=<comma-separated-key-ids>
 ```
 
+If using CI workload identity from day one:
+
+```env
+CI_WORKLOAD_IDENTITY_PROVIDERS_FILE=/opt/hardwareops/ci/workload-identity-providers.json
+```
+
+For connected environments using AWS Secrets Manager as the provider-config source:
+
+```env
+CI_WORKLOAD_IDENTITY_PROVIDERS_AWS_SECRET_ID=<secret-id-or-arn>
+CI_WORKLOAD_IDENTITY_PROVIDERS_AWS_REGION=<aws-region>
+```
+
 ## 4. Start the stack
 
 ```bash

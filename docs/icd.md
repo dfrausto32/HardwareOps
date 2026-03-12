@@ -80,6 +80,7 @@ All paths below are full paths.
 | POST | `/api/v1/auth/login` | public | rate limited, returns JWT |
 | POST | `/api/v1/auth/register` | public | voucher/bootstrap-driven local registration |
 | GET | `/api/v1/auth/me` | viewer | caller identity |
+| GET | `/api/v1/auth/workload-identity/status` | admin | configured workload identity providers |
 | POST | `/api/v1/auth/vouchers` | admin | create registration voucher |
 | POST | `/api/v1/auth/service-tokens` | admin | create service token |
 | GET | `/api/v1/auth/service-tokens` | admin | list service tokens |

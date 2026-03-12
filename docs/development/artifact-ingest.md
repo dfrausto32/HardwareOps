@@ -233,6 +233,12 @@ The control-plane seeds the trusted key registry on startup from one or more boo
 - `TRUSTED_SIGNING_KEYS_AWS_REGION=us-east-1`
 - `CI_WORKLOAD_IDENTITY_PROVIDERS_FILE=/path/to/workload-identity-providers.json`
 - `CI_WORKLOAD_IDENTITY_PROVIDERS_JSON='[{"name":"github-actions","issuer":"https://token.actions.githubusercontent.com","audience":"hardwareops-ci","claimMatches":{"repository":["my-org/my-repo"]}}]'`
+- `CI_WORKLOAD_IDENTITY_PROVIDERS_AWS_SECRET_ID=hardwareops/customer-a/prod/workload-identity-providers`
+- `CI_WORKLOAD_IDENTITY_PROVIDERS_AWS_REGION=us-east-1`
+
+Operational verification:
+- admin status endpoint: `GET /api/v1/auth/workload-identity/status`
+- smoke helper: `scripts/test-workload-identity.sh`
 
 Supported JSON payload:
 

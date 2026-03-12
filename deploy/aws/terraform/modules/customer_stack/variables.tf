@@ -245,6 +245,12 @@ variable "trusted_signing_keys_aws_secret_id" {
   default     = null
 }
 
+variable "ci_workload_identity_providers_aws_secret_id" {
+  description = "Optional AWS Secrets Manager secret ID/ARN containing CI workload identity provider config JSON."
+  type        = string
+  default     = null
+}
+
 variable "secret_kms_key_arns" {
   description = "Optional customer-managed KMS key ARNs used by referenced Secrets Manager secrets."
   type        = list(string)

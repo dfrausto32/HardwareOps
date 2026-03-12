@@ -58,6 +58,19 @@ locals {
     TRUSTED_SIGNING_KEYS_AWS_SECRET_ID = local.trusted_signing_keys_secret_id
     TRUSTED_SIGNING_KEYS_AWS_REGION    = data.aws_region.current.region
   } : {}
+  ci_workload_identity_providers_secret_id = trimspace(var.ci_workload_identity_providers_aws_secret_id != null ? var.ci_workload_identity_providers_aws_secret_id : "")
+  ci_workload_identity_providers_enabled   = local.ci_workload_identity_providers_secret_id != ""
+  ci_workload_identity_providers_secret_arn = startswith(local.ci_workload_identity_providers_secret_id, "arn:") ? local.ci_workload_identity_providers_secret_id : format(
+    "arn:%s:secretsmanager:%s:%s:secret:%s*",
+    data.aws_partition.current.partition,
+    data.aws_region.current.region,
+    data.aws_caller_identity.current.account_id,
+    local.ci_workload_identity_providers_secret_id,
+  )
+  ci_workload_identity_providers_env = local.ci_workload_identity_providers_enabled ? {
+    CI_WORKLOAD_IDENTITY_PROVIDERS_AWS_SECRET_ID = local.ci_workload_identity_providers_secret_id
+    CI_WORKLOAD_IDENTITY_PROVIDERS_AWS_REGION    = data.aws_region.current.region
+  } : {}
 
   demo_agents_enabled = var.enable_demo_fleet && var.demo_agent_count > 0 && var.demo_agent_image != null && trimspace(var.demo_agent_image) != ""
   demo_control_plane_env = local.demo_agents_enabled ? {
@@ -81,6 +94,7 @@ locals {
   task_secret_arns = concat(
     local.artifact_pull_credentials_enabled ? [local.artifact_pull_credentials_secret_arn] : [],
     local.trusted_signing_keys_enabled ? [local.trusted_signing_keys_secret_arn] : [],
+    local.ci_workload_identity_providers_enabled ? [local.ci_workload_identity_providers_secret_arn] : [],
     var.database_url_secret_arn != "" ? [var.database_url_secret_arn] : [],
   )
 }
@@ -250,7 +264,7 @@ module "ecs" {
   default_dns_resolver         = cidrhost(var.vpc_cidr, 2)
   control_plane_desired_count  = var.control_plane_desired_count
   gateway_desired_count        = var.gateway_desired_count
-  control_plane_env            = merge(local.default_control_plane_env, local.demo_control_plane_env, local.artifact_pull_credentials_env, local.trusted_signing_keys_env, var.control_plane_env)
+  control_plane_env            = merge(local.default_control_plane_env, local.demo_control_plane_env, local.artifact_pull_credentials_env, local.trusted_signing_keys_env, local.ci_workload_identity_providers_env, var.control_plane_env)
   gateway_env                  = var.gateway_env
   control_plane_secret_arns = merge(
     var.control_plane_secret_arns,
