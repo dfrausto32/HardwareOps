@@ -57,6 +57,8 @@ import {
   setEventRetention,
   getMetricsText,
   login as apiLogin,
+  generateRecoveryCodes as apiGenerateRecoveryCodes,
+  resetPasswordWithRecoveryCode as apiResetPasswordWithRecoveryCode,
   getMe,
   getAuthStatus,
   getBootstrapStatus,
@@ -209,6 +211,16 @@ export default function App() {
     displayName: '',
   })
   const [registerStatus, setRegisterStatus] = useState('')
+  const [recoveryForm, setRecoveryForm] = useState({
+    email: '',
+    recoveryCode: '',
+    newPassword: '',
+  })
+  const [recoveryStatus, setRecoveryStatus] = useState('')
+  const [recoveryCodes, setRecoveryCodes] = useState([])
+  const [recoveryCodesGeneratedAt, setRecoveryCodesGeneratedAt] = useState('')
+  const [recoveryCodesStatus, setRecoveryCodesStatus] = useState('')
+  const [recoveryCodesError, setRecoveryCodesError] = useState('')
   const [users, setUsers] = useState([])
   const [usersError, setUsersError] = useState('')
   const [usersStatus, setUsersStatus] = useState('')
@@ -1383,6 +1395,63 @@ export default function App() {
     }
   }
 
+  async function doGenerateRecoveryCodes() {
+    setRecoveryCodesStatus('Generating recovery codes...')
+    setRecoveryCodesError('')
+    try {
+      const res = await apiGenerateRecoveryCodes()
+      const codes = Array.isArray(res?.codes) ? res.codes : []
+      setRecoveryCodes(codes)
+      setRecoveryCodesGeneratedAt(res?.generatedAt || '')
+      setRecoveryCodesStatus(codes.length > 0 ? 'Recovery codes generated. Store them now; they are only shown once.' : '')
+      setAuthUser((prev) =>
+        prev
+          ? {
+              ...prev,
+              recoveryCodesConfigured: codes.length > 0,
+              recoveryCodesGeneratedAt: res?.generatedAt || new Date().toISOString(),
+            }
+          : prev,
+      )
+      loadUsers()
+    } catch (err) {
+      setRecoveryCodesStatus('')
+      setRecoveryCodesError(err.message || String(err))
+    }
+  }
+
+  function doDownloadRecoveryCodes() {
+    if (recoveryCodes.length === 0) return
+    const lines = [
+      'HardwareOps recovery codes',
+      `Generated: ${recoveryCodesGeneratedAt ? formatTime(recoveryCodesGeneratedAt) : new Date().toLocaleString()}`,
+      '',
+      ...recoveryCodes,
+      '',
+      'Each code can be used once.',
+    ]
+    downloadTextFile('hardwareops-recovery-codes.txt', lines.join('\n'))
+  }
+
+  async function doResetWithRecoveryCode() {
+    setRecoveryStatus('Resetting password...')
+    setAuthError('')
+    try {
+      await apiResetPasswordWithRecoveryCode(
+        recoveryForm.email,
+        recoveryForm.recoveryCode,
+        recoveryForm.newPassword,
+      )
+      setRecoveryStatus('Password reset. Sign in with your new password.')
+      setLoginForm((prev) => ({ ...prev, email: recoveryForm.email, password: '' }))
+      setRecoveryForm({ email: recoveryForm.email, recoveryCode: '', newPassword: '' })
+      setAuthView('login')
+    } catch (err) {
+      setRecoveryStatus('')
+      setAuthError(err.message || String(err))
+    }
+  }
+
   async function doDownloadBootstrapCA() {
     setBootstrapStatusMessage('Downloading CA certificate...')
     try {
@@ -1406,6 +1475,10 @@ export default function App() {
     setAuthToken('')
     setAuthUser(null)
     setAuthUserLoaded(true)
+    setRecoveryCodes([])
+    setRecoveryCodesGeneratedAt('')
+    setRecoveryCodesStatus('')
+    setRecoveryCodesError('')
   }
 
   async function loadUsers() {
@@ -3978,6 +4051,14 @@ export default function App() {
             >
               Sign in
             </button>
+            {authStatus.mode === 'local' && (
+              <button
+                className={`tab ${authView === 'recover' ? 'active' : ''}`}
+                onClick={() => setAuthView('recover')}
+              >
+                Recovery code
+              </button>
+            )}
             <button
               className={`tab ${authView === 'register' ? 'active' : ''}`}
               onClick={() => setAuthView('register')}
@@ -4006,6 +4087,30 @@ export default function App() {
               />
               <button className="button" onClick={doLogin}>
                 Sign in
+              </button>
+            </div>
+          ) : authView === 'recover' ? (
+            <div className="form">
+              <label>Email</label>
+              <input
+                value={recoveryForm.email}
+                onChange={(e) => setRecoveryForm((prev) => ({ ...prev, email: e.target.value }))}
+                placeholder="user@example.com"
+              />
+              <label>Recovery code</label>
+              <input
+                value={recoveryForm.recoveryCode}
+                onChange={(e) => setRecoveryForm((prev) => ({ ...prev, recoveryCode: e.target.value }))}
+                placeholder="ABCD-EFGH-IJKL-MNOP"
+              />
+              <label>New password</label>
+              <input
+                type="password"
+                value={recoveryForm.newPassword}
+                onChange={(e) => setRecoveryForm((prev) => ({ ...prev, newPassword: e.target.value }))}
+              />
+              <button className="button" onClick={doResetWithRecoveryCode}>
+                Reset password
               </button>
             </div>
           ) : (
@@ -4041,6 +4146,7 @@ export default function App() {
           {authError && <div className="error">{authError}</div>}
           {loginStatus && <div className="status">{loginStatus}</div>}
           {registerStatus && <div className="status">{registerStatus}</div>}
+          {recoveryStatus && <div className="status">{recoveryStatus}</div>}
           <div className="status hint">
             Auth mode: {authStatus.mode}
           </div>
@@ -5014,6 +5120,8 @@ export default function App() {
             canViewBackups,
             doLogin,
             doLogout,
+            doDownloadRecoveryCodes,
+            doGenerateRecoveryCodes,
             enrollmentProfiles,
             enrollmentProfilesError,
             enrollmentProfilesLoading,
@@ -5070,6 +5178,10 @@ export default function App() {
             releaseAutoUpdateSaving,
             releaseAutoUpdateStatus,
             restoreStatus,
+            recoveryCodes,
+            recoveryCodesError,
+            recoveryCodesGeneratedAt,
+            recoveryCodesStatus,
             rotationError,
             rotationLoading,
             rotationMessage,

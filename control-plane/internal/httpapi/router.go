@@ -115,7 +115,9 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 			r.Get("/auth/oidc/login", handlers.OIDCLogin(deps.OIDCProvider))
 			r.Get("/auth/oidc/callback", handlers.OIDCCallback(logger, deps.OIDCProvider, deps.Store, deps.TrustProxy))
 		}
-		r.With(viewer).Get("/auth/me", handlers.GetMe())
+		r.With(viewer).Get("/auth/me", handlers.GetMe(deps.Store))
+		r.With(viewer).Post("/auth/recovery-codes/generate", handlers.GenerateRecoveryCodes(logger, deps.Auth, deps.Store, deps.TrustProxy))
+		r.With(loginLimiter.Middleware).Post("/auth/recovery-codes/reset", handlers.ResetPasswordWithRecoveryCode(logger, deps.Auth, deps.Store, deps.TrustProxy))
 		r.With(admin).Post("/auth/vouchers", handlers.CreateAuthVoucher(logger, deps.Store, deps.TrustProxy))
 		r.With(admin).Post("/auth/service-tokens", handlers.CreateServiceToken(logger, deps.Store, deps.TrustProxy))
 		r.With(admin).Get("/auth/service-tokens", handlers.ListServiceTokens(logger, deps.Store, deps.TrustProxy))

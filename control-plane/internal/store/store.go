@@ -119,24 +119,24 @@ type Group struct {
 }
 
 type Artifact struct {
-	ArtifactID   string
-	Name         string
-	Version      string
-	Type         string
-	Status       string
-	ObjectKey    string
-	SHA256       string
-	Signature    string
-	SignatureType string
-	SignatureKeyID string
+	ArtifactID         string
+	Name               string
+	Version            string
+	Type               string
+	Status             string
+	ObjectKey          string
+	SHA256             string
+	Signature          string
+	SignatureType      string
+	SignatureKeyID     string
 	VerificationStatus string
 	VerificationError  string
-	VerifiedAt    time.Time
-	SizeBytes    int64
-	MetadataJSON []byte
-	CreatedAt    time.Time
-	DeprecatedAt time.Time
-	DeleteAfter  time.Time
+	VerifiedAt         time.Time
+	SizeBytes          int64
+	MetadataJSON       []byte
+	CreatedAt          time.Time
+	DeprecatedAt       time.Time
+	DeleteAfter        time.Time
 }
 
 type TrustedSigningKey struct {
@@ -151,11 +151,11 @@ type TrustedSigningKey struct {
 }
 
 type ArtifactTrustPolicy struct {
-	VerificationMode         string
-	AllowedSigningKeyIDsJSON []byte
+	VerificationMode          string
+	AllowedSigningKeyIDsJSON  []byte
 	AllowedSignatureTypesJSON []byte
-	UpdatedAt                time.Time
-	UpdatedByUserID          string
+	UpdatedAt                 time.Time
+	UpdatedByUserID           string
 }
 
 type ArtifactStats struct {
@@ -261,17 +261,19 @@ type AuditEventFilter struct {
 }
 
 type User struct {
-	UserID       string
-	Email        string
-	DisplayName  string
-	PasswordHash string
-	RolesJSON    []byte
-	Disabled     bool
-	AuthProvider string
-	ExternalID   string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	LastLoginAt  time.Time
+	UserID                   string
+	Email                    string
+	DisplayName              string
+	PasswordHash             string
+	RolesJSON                []byte
+	RecoveryCodesJSON        []byte
+	Disabled                 bool
+	AuthProvider             string
+	ExternalID               string
+	CreatedAt                time.Time
+	UpdatedAt                time.Time
+	LastLoginAt              time.Time
+	RecoveryCodesGeneratedAt time.Time
 }
 
 type UserUpdate struct {
@@ -425,6 +427,8 @@ type Store interface {
 	ListUsers(limit, offset int) ([]User, error)
 	UpdateUser(update UserUpdate) error
 	SetUserLastLogin(userID string, at time.Time) error
+	SetUserRecoveryCodes(userID string, recoveryCodesJSON []byte, generatedAt time.Time) error
+	ConsumeUserRecoveryCode(email, recoveryCodeHash, passwordHash string, at time.Time) (User, bool, error)
 	CreateAuthVoucher(voucher AuthVoucher) error
 	GetAuthVoucherByTokenHash(tokenHash string) (AuthVoucher, bool, error)
 	MarkAuthVoucherUsed(voucherID, usedBy string, at time.Time) (bool, error)

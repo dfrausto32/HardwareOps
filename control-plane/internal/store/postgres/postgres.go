@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -2615,11 +2616,19 @@ func (s *Store) CreateUser(user store.User) error {
 	if user.AuthProvider == "" {
 		user.AuthProvider = "local"
 	}
+	recoveryCodes := user.RecoveryCodesJSON
+	if len(recoveryCodes) == 0 {
+		recoveryCodes = []byte(`[]`)
+	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO users (user_id, email, display_name, password_hash, roles, disabled, auth_provider, external_id, created_at, updated_at, last_login_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO users (
+			user_id, email, display_name, password_hash, roles, recovery_codes, disabled, auth_provider, external_id,
+			created_at, updated_at, last_login_at, recovery_codes_generated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	`, user.UserID, user.Email, nullIfEmpty(user.DisplayName), user.PasswordHash, nullIfEmptyBytes(user.RolesJSON),
-		user.Disabled, user.AuthProvider, nullIfEmpty(user.ExternalID), user.CreatedAt, user.UpdatedAt, nullIfZeroTime(user.LastLoginAt))
+		recoveryCodes, user.Disabled, user.AuthProvider, nullIfEmpty(user.ExternalID),
+		user.CreatedAt, user.UpdatedAt, nullIfZeroTime(user.LastLoginAt), nullIfZeroTime(user.RecoveryCodesGeneratedAt))
 	return err
 }
 
@@ -2629,12 +2638,14 @@ func (s *Store) GetUser(userID string) (store.User, bool, error) {
 	var u store.User
 	err := s.pool.QueryRow(ctx, `
 		SELECT user_id, email, COALESCE(display_name, ''), password_hash, COALESCE(roles, '[]'::jsonb),
-		       disabled, COALESCE(auth_provider, 'local'), COALESCE(external_id, ''), created_at, updated_at,
-		       COALESCE(last_login_at, '0001-01-01'::timestamptz)
+		       COALESCE(recovery_codes, '[]'::jsonb), disabled, COALESCE(auth_provider, 'local'),
+		       COALESCE(external_id, ''), created_at, updated_at,
+		       COALESCE(last_login_at, '0001-01-01'::timestamptz),
+		       COALESCE(recovery_codes_generated_at, '0001-01-01'::timestamptz)
 		FROM users
 		WHERE user_id = $1
-	`, userID).Scan(&u.UserID, &u.Email, &u.DisplayName, &u.PasswordHash, &u.RolesJSON, &u.Disabled,
-		&u.AuthProvider, &u.ExternalID, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt)
+	`, userID).Scan(&u.UserID, &u.Email, &u.DisplayName, &u.PasswordHash, &u.RolesJSON, &u.RecoveryCodesJSON, &u.Disabled,
+		&u.AuthProvider, &u.ExternalID, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt, &u.RecoveryCodesGeneratedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.User{}, false, nil
 	}
@@ -2650,12 +2661,14 @@ func (s *Store) GetUserByEmail(email string) (store.User, bool, error) {
 	var u store.User
 	err := s.pool.QueryRow(ctx, `
 		SELECT user_id, email, COALESCE(display_name, ''), password_hash, COALESCE(roles, '[]'::jsonb),
-		       disabled, COALESCE(auth_provider, 'local'), COALESCE(external_id, ''), created_at, updated_at,
-		       COALESCE(last_login_at, '0001-01-01'::timestamptz)
+		       COALESCE(recovery_codes, '[]'::jsonb), disabled, COALESCE(auth_provider, 'local'),
+		       COALESCE(external_id, ''), created_at, updated_at,
+		       COALESCE(last_login_at, '0001-01-01'::timestamptz),
+		       COALESCE(recovery_codes_generated_at, '0001-01-01'::timestamptz)
 		FROM users
 		WHERE email = $1
-	`, email).Scan(&u.UserID, &u.Email, &u.DisplayName, &u.PasswordHash, &u.RolesJSON, &u.Disabled,
-		&u.AuthProvider, &u.ExternalID, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt)
+	`, email).Scan(&u.UserID, &u.Email, &u.DisplayName, &u.PasswordHash, &u.RolesJSON, &u.RecoveryCodesJSON, &u.Disabled,
+		&u.AuthProvider, &u.ExternalID, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt, &u.RecoveryCodesGeneratedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.User{}, false, nil
 	}
@@ -2671,13 +2684,15 @@ func (s *Store) GetUserByExternalID(provider, externalID string) (store.User, bo
 	var u store.User
 	err := s.pool.QueryRow(ctx, `
 		SELECT user_id, email, COALESCE(display_name, ''), password_hash, COALESCE(roles, '[]'::jsonb),
-		       disabled, COALESCE(auth_provider, 'local'), COALESCE(external_id, ''), created_at, updated_at,
-		       COALESCE(last_login_at, '0001-01-01'::timestamptz)
+		       COALESCE(recovery_codes, '[]'::jsonb), disabled, COALESCE(auth_provider, 'local'),
+		       COALESCE(external_id, ''), created_at, updated_at,
+		       COALESCE(last_login_at, '0001-01-01'::timestamptz),
+		       COALESCE(recovery_codes_generated_at, '0001-01-01'::timestamptz)
 		FROM users
 		WHERE auth_provider = $1 AND external_id = $2 AND NOT disabled
 		LIMIT 1
-	`, provider, externalID).Scan(&u.UserID, &u.Email, &u.DisplayName, &u.PasswordHash, &u.RolesJSON, &u.Disabled,
-		&u.AuthProvider, &u.ExternalID, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt)
+	`, provider, externalID).Scan(&u.UserID, &u.Email, &u.DisplayName, &u.PasswordHash, &u.RolesJSON, &u.RecoveryCodesJSON, &u.Disabled,
+		&u.AuthProvider, &u.ExternalID, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt, &u.RecoveryCodesGeneratedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.User{}, false, nil
 	}
@@ -2698,8 +2713,10 @@ func (s *Store) ListUsers(limit, offset int) ([]store.User, error) {
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT user_id, email, COALESCE(display_name, ''), password_hash, COALESCE(roles, '[]'::jsonb),
-		       disabled, COALESCE(auth_provider, 'local'), COALESCE(external_id, ''), created_at, updated_at,
-		       COALESCE(last_login_at, '0001-01-01'::timestamptz)
+		       COALESCE(recovery_codes, '[]'::jsonb), disabled, COALESCE(auth_provider, 'local'),
+		       COALESCE(external_id, ''), created_at, updated_at,
+		       COALESCE(last_login_at, '0001-01-01'::timestamptz),
+		       COALESCE(recovery_codes_generated_at, '0001-01-01'::timestamptz)
 		FROM users
 		ORDER BY created_at DESC
 		LIMIT $1 OFFSET $2
@@ -2711,8 +2728,8 @@ func (s *Store) ListUsers(limit, offset int) ([]store.User, error) {
 	out := []store.User{}
 	for rows.Next() {
 		var u store.User
-		if err := rows.Scan(&u.UserID, &u.Email, &u.DisplayName, &u.PasswordHash, &u.RolesJSON, &u.Disabled,
-			&u.AuthProvider, &u.ExternalID, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt); err != nil {
+		if err := rows.Scan(&u.UserID, &u.Email, &u.DisplayName, &u.PasswordHash, &u.RolesJSON, &u.RecoveryCodesJSON, &u.Disabled,
+			&u.AuthProvider, &u.ExternalID, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt, &u.RecoveryCodesGeneratedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
@@ -2756,6 +2773,97 @@ func (s *Store) SetUserLastLogin(userID string, at time.Time) error {
 		WHERE user_id = $1
 	`, userID, at)
 	return err
+}
+
+func (s *Store) SetUserRecoveryCodes(userID string, recoveryCodesJSON []byte, generatedAt time.Time) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if userID == "" {
+		return errors.New("user_id required")
+	}
+	if len(recoveryCodesJSON) == 0 {
+		recoveryCodesJSON = []byte(`[]`)
+	}
+	_, err := s.pool.Exec(ctx, `
+		UPDATE users
+		SET recovery_codes = $2,
+		    recovery_codes_generated_at = $3,
+		    updated_at = now()
+		WHERE user_id = $1
+	`, userID, recoveryCodesJSON, nullIfZeroTime(generatedAt))
+	return err
+}
+
+func (s *Store) ConsumeUserRecoveryCode(email, recoveryCodeHash, passwordHash string, at time.Time) (store.User, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if email == "" || recoveryCodeHash == "" || passwordHash == "" {
+		return store.User{}, false, errors.New("email, recovery_code_hash, and password_hash required")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return store.User{}, false, err
+	}
+	defer tx.Rollback(ctx)
+
+	var user store.User
+	err = tx.QueryRow(ctx, `
+		SELECT user_id, email, COALESCE(display_name, ''), password_hash, COALESCE(roles, '[]'::jsonb),
+		       COALESCE(recovery_codes, '[]'::jsonb), disabled, COALESCE(auth_provider, 'local'),
+		       COALESCE(external_id, ''), created_at, updated_at,
+		       COALESCE(last_login_at, '0001-01-01'::timestamptz),
+		       COALESCE(recovery_codes_generated_at, '0001-01-01'::timestamptz)
+		FROM users
+		WHERE email = $1
+		FOR UPDATE
+	`, email).Scan(&user.UserID, &user.Email, &user.DisplayName, &user.PasswordHash, &user.RolesJSON, &user.RecoveryCodesJSON,
+		&user.Disabled, &user.AuthProvider, &user.ExternalID, &user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt, &user.RecoveryCodesGeneratedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.User{}, false, nil
+	}
+	if err != nil {
+		return store.User{}, false, err
+	}
+	if user.Disabled {
+		return store.User{}, false, nil
+	}
+	var hashes []string
+	if len(user.RecoveryCodesJSON) > 0 {
+		if err := json.Unmarshal(user.RecoveryCodesJSON, &hashes); err != nil {
+			return store.User{}, false, err
+		}
+	}
+	match := -1
+	for i, hash := range hashes {
+		if hash == recoveryCodeHash {
+			match = i
+			break
+		}
+	}
+	if match < 0 {
+		return store.User{}, false, nil
+	}
+	hashes = append(hashes[:match], hashes[match+1:]...)
+	nextJSON, err := json.Marshal(hashes)
+	if err != nil {
+		return store.User{}, false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE users
+		SET password_hash = $2,
+		    recovery_codes = $3,
+		    updated_at = $4
+		WHERE user_id = $1
+	`, user.UserID, passwordHash, nextJSON, at); err != nil {
+		return store.User{}, false, err
+	}
+	user.PasswordHash = passwordHash
+	user.RecoveryCodesJSON = nextJSON
+	user.UpdatedAt = at
+	if err := tx.Commit(ctx); err != nil {
+		return store.User{}, false, err
+	}
+	return user, true, nil
 }
 
 func (s *Store) CreateAuthVoucher(voucher store.AuthVoucher) error {

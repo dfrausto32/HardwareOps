@@ -26,13 +26,15 @@ type LoginResponse struct {
 }
 
 type UserView struct {
-	UserID      string          `json:"userId"`
-	Email       string          `json:"email"`
-	DisplayName string          `json:"displayName,omitempty"`
-	Roles       json.RawMessage `json:"roles,omitempty"`
-	Disabled    bool            `json:"disabled,omitempty"`
-	CreatedAt   time.Time       `json:"createdAt,omitempty"`
-	LastLoginAt time.Time       `json:"lastLoginAt,omitempty"`
+	UserID                   string          `json:"userId"`
+	Email                    string          `json:"email"`
+	DisplayName              string          `json:"displayName,omitempty"`
+	Roles                    json.RawMessage `json:"roles,omitempty"`
+	Disabled                 bool            `json:"disabled,omitempty"`
+	CreatedAt                time.Time       `json:"createdAt,omitempty"`
+	LastLoginAt              time.Time       `json:"lastLoginAt,omitempty"`
+	RecoveryCodesConfigured  bool            `json:"recoveryCodesConfigured,omitempty"`
+	RecoveryCodesGeneratedAt time.Time       `json:"recoveryCodesGeneratedAt,omitempty"`
 }
 
 type AuthStatusResponse struct {
@@ -136,19 +138,24 @@ func setRetryAfterHeader(w http.ResponseWriter, retry time.Duration) {
 	w.Header().Set("Retry-After", strconv.Itoa(secs))
 }
 
-func GetMe() http.HandlerFunc {
+func GetMe(st store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user, ok := auth.UserFromContext(r.Context())
 		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		fullUser, found, err := st.GetUser(user.UserID)
+		if err != nil {
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		if !found {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"userId": user.UserID,
-			"email":  user.Email,
-			"roles":  user.Roles,
-		})
+		_ = json.NewEncoder(w).Encode(userView(fullUser))
 	}
 }
 
@@ -259,13 +266,15 @@ func Register(logger *log.Logger, manager *auth.Manager, st store.Store, trustPr
 
 func userView(user store.User) UserView {
 	return UserView{
-		UserID:      user.UserID,
-		Email:       user.Email,
-		DisplayName: user.DisplayName,
-		Roles:       json.RawMessage(user.RolesJSON),
-		Disabled:    user.Disabled,
-		CreatedAt:   user.CreatedAt,
-		LastLoginAt: user.LastLoginAt,
+		UserID:                   user.UserID,
+		Email:                    user.Email,
+		DisplayName:              user.DisplayName,
+		Roles:                    json.RawMessage(user.RolesJSON),
+		Disabled:                 user.Disabled,
+		CreatedAt:                user.CreatedAt,
+		LastLoginAt:              user.LastLoginAt,
+		RecoveryCodesConfigured:  len(user.RecoveryCodesJSON) > 0 && string(user.RecoveryCodesJSON) != "[]",
+		RecoveryCodesGeneratedAt: user.RecoveryCodesGeneratedAt,
 	}
 }
 

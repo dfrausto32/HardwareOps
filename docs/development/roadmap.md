@@ -21,7 +21,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Phase B — Operational Maturity | 🟢 Complete | Audit/metrics/events/lifecycle/CI ingest/bulk ops shipped and operational. |
 | Phase B Extension — UX + Realtime | 🟢 Complete | Bulk actions + realtime updates + auth-session UX reset shipped. |
 | Operational Hardening (between B and C) | 🟢 Complete | Pull-boundary, token exposure, startup guardrails, break-glass backend, proxy trust policy, and abuse controls are all shipped. |
-| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, and trusted-key deployment wiring are shipped. Remaining Phase C work is trust-override UX, password recovery/admin reset, custom RBAC, CI workload identity, provenance policy, LDAP, and broader secrets integration. |
+| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, and trust-override UX are shipped. Remaining Phase C work is password recovery/admin reset, custom RBAC, CI workload identity, provenance policy, LDAP, and broader secrets integration. |
 | Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Live-deployment acceptance gate execution remains. |
 
 ### Active work queue (what is still to do)
@@ -29,7 +29,6 @@ Use this section as the single source of truth for "what is done" vs "what is le
 No items currently in-flight. Queue is clear.
 
 ### Prepared next tasks (agent-scoped)
-- `C-TRUST-OVERRIDE-UI` — group/device/component trust override UX in desired-state editors
 - `C-PASSWORD-RECOVERY` — local-auth recovery/reset workflow + runbook + audit expectations
 - `C-CUSTOM-RBAC` — per-resource policy model on top of fixed roles
 - `C-CI-WORKLOAD-IDENTITY` — OIDC-based CI publish/pull credentials without long-lived secrets
@@ -75,6 +74,7 @@ No items currently in-flight. Queue is clear.
 - ✅ OIDC SSO (authorization code flow; `go-oidc/v3` + `oauth2`; IdP discovery; group-to-role mapping; user upsert on `auth_provider`+`external_id`; state cookie; `auth.oidc.login` audit events; UI SSO button; hardened-profile guards; per-IdP docs for Okta/Azure AD/Google Workspace).
 - ✅ Trusted-key artifact verification core (trusted signing key registry; global verification policy; control-plane cryptographic verification for create/upload/pull/complete; agent trust bundle distribution and apply-time re-verification; Security-page trust controls; artifact verification state/metrics/tests).
 - ✅ Trusted-key deployment wiring and AWS validation (startup seeding from `TRUSTED_SIGNING_KEYS_*` / `ARTIFACT_TRUST_*`; on-prem and AWS deployment templates updated; AWS `parcel/dev` bootstrapped from Secrets Manager; `scripts/test-artifact-trust.sh` validates unsigned reject / signed accept / wrong-key reject against the live stack).
+- ✅ Trust-override UX in desired-state editors (group, device, and multi-group desired-state rows can open a component trust-override modal; operators can set verification mode, allowed signature types, and allowed key IDs with inherited/effective-policy previews; artifact pickers and version selectors enforce the effective trust policy inline).
 
 ---
 
@@ -448,7 +448,7 @@ Confirm priorities with the team before mapping to agents.
 - **Notes:** Shipped: control-plane startup seeds DB policy/registry from `ARTIFACT_TRUST_*` + `TRUSTED_SIGNING_KEYS_*` bootstrap config; prod-lab generates `trusted-signing-keys.json`; on-prem compose/examples, installer/upgrade templates, and AWS Terraform expose trusted-key bootstrap wiring; AWS `parcel/dev` is validated end-to-end with a Secrets Manager-backed trusted key and `scripts/test-artifact-trust.sh`.
 
 #### Trust override UI (group/device policy overrides)
-- **Status:** ⬜ Planned
+- **Status:** 🟢 Complete
 - **Scope:** Expose group/device/component trust-policy overrides in desired-state editors with clear precedence over the global default.
 - **Dependencies:** Trusted-key verification core, desired-state policy model, UI editor components.
 - **Risks:** Operators weakening policy unintentionally or not understanding precedence.
@@ -456,7 +456,7 @@ Confirm priorities with the team before mapping to agents.
   - Group/device/component editors can set verification mode and allowed key/type overrides.
   - UI clearly shows inherited vs overridden trust policy.
   - Non-compliant selections are blocked or explained inline.
-- **Notes:** Backend policy precedence already exists; this item is the missing operator UX layer.
+- **Notes:** Shipped: device, group, and multi-group desired-state editors expose a `Trust` action per component row; the modal supports verification mode, allowed signature types, and allowed signing key IDs; inline trust summaries show inherited/effective policy; artifact selection and version pickers filter against the effective trust policy.
 
 #### Release channels (customer-defined canary/stable)
 - **Status:** ⬜ Planned
@@ -476,14 +476,26 @@ Confirm priorities with the team before mapping to agents.
 
 #### Password recovery / admin reset
 - **Status:** ⬜ Planned
-- **Scope:** Local-auth password recovery path for locked-out operators, including explicit reset steps and audit coverage.
+- **Scope:** Local-auth password recovery path for locked-out operators, including airgapped-safe recovery, optional email delivery, operator-assisted reset, emergency break-glass reset, and audit coverage.
 - **Dependencies:** Local auth mode, user management APIs, break-glass/admin recovery policy, deployment docs.
 - **Risks:** Weak recovery flow becoming an account-takeover path; undocumented operator steps causing outage during lockout.
 - **Acceptance:** 
-  - Documented operator runbook exists for local password recovery in dev, on-prem, and AWS deployments.
-  - Recovery path is auditable and does not require direct DB edits for normal cases.
-  - Emergency admin reset path is explicit, gated, and tested.
-- **Notes:** This should cover both product UX/API and operational runbook steps so customer deployments have a clear recovery story before broader enterprise identity expansion.
+  - Recovery codes work without SMTP/email and do not require direct DB edits.
+  - Operators can issue a one-time reset token for a local user in airgapped/on-prem deployments.
+  - Emergency break-glass local reset path is explicit, gated, and fully audited.
+  - Optional email delivery supports account setup/password reset for connected deployments.
+  - Recovery path is auditable end-to-end across UI/API/CLI.
+- **Notes:** Implement this in layers so airgapped recovery lands first and the connected/email path reuses the same token model. Recommended order: recovery codes → operator-issued reset token → break-glass local reset CLI → optional email delivery.
+- **Phase C design:**
+  - **Layer 1 — Recovery codes:** self-service one-time codes generated per user, stored only as hashes, downloadable once, usable from the login screen.
+  - **Layer 2 — Operator reset token:** local admin can generate a short-lived one-time reset token for a target user and hand it to them out of band.
+  - **Layer 3 — Break-glass local reset:** host-local CLI can reset an admin password or create a recovery admin when normal auth paths are unavailable.
+  - **Layer 4 — Email delivery:** optional SMTP/provider-backed reset link/code for connected deployments; reuses the same backend token semantics as operator-issued reset.
+- **Subtasks:**
+  - **C-PASSWORD-RECOVERY-1:** Recovery codes backend + UI (`POST /api/v1/auth/recovery-codes/generate`, `POST /api/v1/auth/recovery-codes/reset`, download/copy UX, audit events).
+  - **C-PASSWORD-RECOVERY-2:** Operator-issued reset token backend + admin UI (`POST /api/v1/users/{userId}/password-reset-token`, TTL, reason, one-time use, audit events).
+  - **C-PASSWORD-RECOVERY-3:** Break-glass local CLI reset/create-admin path for total lockout recovery.
+  - **C-PASSWORD-RECOVERY-4:** Optional email delivery for account setup/reset plus deployment/runbook guidance for SMTP-capable environments.
 
 #### CI workload identity federation
 - **Status:** ⬜ Planned

@@ -529,6 +529,20 @@ export async function login(email: string, password: string) {
   })
 }
 
+export async function generateRecoveryCodes() {
+  return requestJson('/api/v1/auth/recovery-codes/generate', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export async function resetPasswordWithRecoveryCode(email: string, recoveryCode: string, newPassword: string) {
+  return requestJson('/api/v1/auth/recovery-codes/reset', {
+    method: 'POST',
+    body: JSON.stringify({ email, recoveryCode, newPassword }),
+  })
+}
+
 export async function getMe() {
   return requestJson('/api/v1/auth/me')
 }

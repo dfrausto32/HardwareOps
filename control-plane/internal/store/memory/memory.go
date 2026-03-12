@@ -1546,6 +1546,65 @@ func (s *Store) SetUserLastLogin(userID string, at time.Time) error {
 	return nil
 }
 
+func (s *Store) SetUserRecoveryCodes(userID string, recoveryCodesJSON []byte, generatedAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user, ok := s.users[userID]
+	if !ok {
+		return errors.New("user not found")
+	}
+	if len(recoveryCodesJSON) == 0 {
+		recoveryCodesJSON = []byte(`[]`)
+	}
+	user.RecoveryCodesJSON = append([]byte(nil), recoveryCodesJSON...)
+	user.RecoveryCodesGeneratedAt = generatedAt
+	user.UpdatedAt = time.Now().UTC()
+	s.users[user.UserID] = user
+	return nil
+}
+
+func (s *Store) ConsumeUserRecoveryCode(email, recoveryCodeHash, passwordHash string, at time.Time) (store.User, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	userID, ok := s.userEmailIndex[email]
+	if !ok {
+		return store.User{}, false, nil
+	}
+	user, ok := s.users[userID]
+	if !ok {
+		return store.User{}, false, nil
+	}
+	if user.Disabled {
+		return store.User{}, false, nil
+	}
+	var hashes []string
+	if len(user.RecoveryCodesJSON) > 0 {
+		if err := json.Unmarshal(user.RecoveryCodesJSON, &hashes); err != nil {
+			return store.User{}, false, err
+		}
+	}
+	match := -1
+	for i, hash := range hashes {
+		if hash == recoveryCodeHash {
+			match = i
+			break
+		}
+	}
+	if match < 0 {
+		return store.User{}, false, nil
+	}
+	hashes = append(hashes[:match], hashes[match+1:]...)
+	nextJSON, err := json.Marshal(hashes)
+	if err != nil {
+		return store.User{}, false, err
+	}
+	user.RecoveryCodesJSON = nextJSON
+	user.PasswordHash = passwordHash
+	user.UpdatedAt = at
+	s.users[user.UserID] = user
+	return user, true, nil
+}
+
 func (s *Store) CreateAuthVoucher(voucher store.AuthVoucher) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

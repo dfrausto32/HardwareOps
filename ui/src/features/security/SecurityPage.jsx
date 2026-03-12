@@ -25,6 +25,8 @@ export default function SecurityPage({
   canRotate,
   canViewArtifactTrust,
   canViewBackups,
+  doDownloadRecoveryCodes,
+  doGenerateRecoveryCodes,
   doLogin,
   doLogout,
   enrollmentProfiles,
@@ -79,6 +81,10 @@ export default function SecurityPage({
   pendingEnrollmentsLoading,
   pendingEnrollmentsStatus,
   preflightOk,
+  recoveryCodes,
+  recoveryCodesError,
+  recoveryCodesGeneratedAt,
+  recoveryCodesStatus,
   releaseAutoUpdate,
   releaseAutoUpdateSaving,
   releaseAutoUpdateStatus,
@@ -154,7 +160,22 @@ export default function SecurityPage({
                       <div className="detail-label">Roles</div>
                       <div className="detail-value">{(authUser.roles || []).join(', ') || '—'}</div>
                     </div>
+                    {authStatus.mode === 'local' && (
+                      <div>
+                        <div className="detail-label">Recovery codes</div>
+                        <div className="detail-value">
+                          {authUser.recoveryCodesConfigured
+                            ? `Configured${authUser.recoveryCodesGeneratedAt ? ` (${formatTime(authUser.recoveryCodesGeneratedAt)})` : ''}`
+                            : 'Not configured'}
+                        </div>
+                      </div>
+                    )}
                     <div className="full">
+                      {authStatus.mode === 'local' && (
+                        <button className="button ghost" onClick={doGenerateRecoveryCodes} style={{ marginRight: '0.5rem' }}>
+                          {authUser.recoveryCodesConfigured ? 'Regenerate recovery codes' : 'Generate recovery codes'}
+                        </button>
+                      )}
                       <button className="button ghost" onClick={doLogout}>
                         Sign out
                       </button>
@@ -187,6 +208,28 @@ export default function SecurityPage({
                 )}
                 {authError && <div className="error">{authError}</div>}
                 {loginStatus && <div className="status">{loginStatus}</div>}
+                {recoveryCodesError && <div className="error">{recoveryCodesError}</div>}
+                {recoveryCodesStatus && <div className="status">{recoveryCodesStatus}</div>}
+                {recoveryCodes.length > 0 && (
+                  <div className="form compact" style={{ marginTop: '0.75rem' }}>
+                    <div className="field">
+                      <label>Recovery codes</label>
+                      <div className="placeholder">
+                        Generated {recoveryCodesGeneratedAt ? formatTime(recoveryCodesGeneratedAt) : 'just now'}. Store these now; they are only shown once.
+                      </div>
+                      <div style={{ display: 'grid', gap: '0.35rem', marginTop: '0.5rem' }}>
+                        {recoveryCodes.map((code) => (
+                          <code key={code}>{code}</code>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="field actions">
+                      <button className="button ghost" onClick={doDownloadRecoveryCodes}>
+                        Download codes
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="settings-section">
