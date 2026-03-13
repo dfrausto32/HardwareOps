@@ -60,6 +60,7 @@ type ArtifactResponse struct {
 	DeprecatedAt   *time.Time      `json:"deprecatedAt,omitempty"`
 	DeleteAfter    *time.Time      `json:"deleteAfter,omitempty"`
 	ReferenceCount int             `json:"referenceCount"`
+	Duplicate      bool            `json:"duplicate,omitempty"`
 }
 
 type ArtifactListResponse struct {
@@ -91,6 +92,7 @@ type UploadArtifactResponse struct {
 	Name       string `json:"name"`
 	Version    string `json:"version"`
 	Type       string `json:"type"`
+	Duplicate  bool   `json:"duplicate,omitempty"`
 }
 
 type PresignUploadRequest struct {
@@ -265,6 +267,17 @@ func createArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 			MetadataJSON:        meta,
 			CreatedAt:           time.Now().UTC(),
 		}
+		if existing, isDupe, isConflict := artifactDuplicateCheck(r, st, artifact.Name, artifact.Type, artifact.Version, artifact.SHA256); isConflict {
+			http.Error(w, "artifact_version_conflict: an artifact with this name/type/version exists with different content; use ?supersede=true to register as a distinct artifact", http.StatusConflict)
+			return
+		} else if isDupe {
+			resp := artifactToResponse(existing, 0)
+			resp.Duplicate = true
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
 		if err := st.CreateArtifact(artifact); err != nil {
 			logger.Printf("create artifact error: %v", err)
 			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.create", "artifact", artifact.ArtifactID), err)
@@ -441,6 +454,28 @@ func uploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 			MetadataJSON:        meta,
 			CreatedAt:           time.Now().UTC(),
 		}
+		if existing, isDupe, isConflict := artifactDuplicateCheck(r, st, artifact.Name, artifact.Type, artifact.Version, artifact.SHA256); isConflict {
+			record("error")
+			_ = objStore.DeleteObject(r.Context(), bucket, objectKey)
+			http.Error(w, "artifact_version_conflict: an artifact with this name/type/version exists with different content; use ?supersede=true to register as a distinct artifact", http.StatusConflict)
+			return
+		} else if isDupe {
+			record("success")
+			_ = objStore.DeleteObject(r.Context(), bucket, objectKey)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(UploadArtifactResponse{
+				ArtifactID: existing.ArtifactID,
+				ObjectKey:  existing.ObjectKey,
+				SHA256:     existing.SHA256,
+				SizeBytes:  existing.SizeBytes,
+				Name:       existing.Name,
+				Version:    existing.Version,
+				Type:       existing.Type,
+				Duplicate:  true,
+			})
+			return
+		}
+
 		if err := st.CreateArtifact(artifact); err != nil {
 			logger.Printf("create artifact error: %v", err)
 			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.upload", "artifact", artifactID), err)
@@ -725,6 +760,28 @@ func pullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, buck
 			MetadataJSON:        meta,
 			CreatedAt:           time.Now().UTC(),
 		}
+		if existing, isDupe, isConflict := artifactDuplicateCheck(r, st, artifact.Name, artifact.Type, artifact.Version, artifact.SHA256); isConflict {
+			record("error")
+			_ = objStore.DeleteObject(r.Context(), bucket, objectKey)
+			http.Error(w, "artifact_version_conflict: an artifact with this name/type/version exists with different content; use ?supersede=true to register as a distinct artifact", http.StatusConflict)
+			return
+		} else if isDupe {
+			record("success")
+			_ = objStore.DeleteObject(r.Context(), bucket, objectKey)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(UploadArtifactResponse{
+				ArtifactID: existing.ArtifactID,
+				ObjectKey:  existing.ObjectKey,
+				SHA256:     existing.SHA256,
+				SizeBytes:  existing.SizeBytes,
+				Name:       existing.Name,
+				Version:    existing.Version,
+				Type:       existing.Type,
+				Duplicate:  true,
+			})
+			return
+		}
+
 		if err := st.CreateArtifact(artifact); err != nil {
 			logger.Printf("create pulled artifact error: %v", err)
 			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.pull", "artifact", artifactID), err)
@@ -990,6 +1047,28 @@ func completeArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectS
 			MetadataJSON:        meta,
 			CreatedAt:           time.Now().UTC(),
 		}
+		if existing, isDupe, isConflict := artifactDuplicateCheck(r, st, artifact.Name, artifact.Type, artifact.Version, artifact.SHA256); isConflict {
+			record("error")
+			_ = objStore.DeleteObject(r.Context(), bucket, req.ObjectKey)
+			http.Error(w, "artifact_version_conflict: an artifact with this name/type/version exists with different content; use ?supersede=true to register as a distinct artifact", http.StatusConflict)
+			return
+		} else if isDupe {
+			record("success")
+			_ = objStore.DeleteObject(r.Context(), bucket, req.ObjectKey)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(UploadArtifactResponse{
+				ArtifactID: existing.ArtifactID,
+				ObjectKey:  existing.ObjectKey,
+				SHA256:     existing.SHA256,
+				SizeBytes:  existing.SizeBytes,
+				Name:       existing.Name,
+				Version:    existing.Version,
+				Type:       existing.Type,
+				Duplicate:  true,
+			})
+			return
+		}
+
 		if err := st.CreateArtifact(artifact); err != nil {
 			logger.Printf("create artifact error: %v", err)
 			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.upload.complete", "artifact", req.ArtifactID), err)
@@ -1615,6 +1694,25 @@ func normalizeArtifactType(val string) (string, error) {
 		return "", fmt.Errorf("invalid type: %s", atype)
 	}
 	return atype, nil
+}
+
+// artifactDuplicateCheck looks up an active artifact by name+type+version.
+// Returns (existing, isDuplicate, isConflict):
+//   - isDuplicate=true means same SHA256 → caller should return the existing artifact (idempotent).
+//   - isConflict=true means different SHA256 → caller should return 409.
+//   - Both false means no existing artifact found, or ?supersede=true was set.
+func artifactDuplicateCheck(r *http.Request, st store.Store, name, artifactType, version, sha256 string) (store.Artifact, bool, bool) {
+	if r.URL.Query().Get("supersede") == "true" {
+		return store.Artifact{}, false, false
+	}
+	existing, found, err := st.FindArtifactByNameTypeVersion(name, artifactType, version)
+	if err != nil || !found {
+		return store.Artifact{}, false, false
+	}
+	if strings.EqualFold(existing.SHA256, sha256) {
+		return existing, true, false
+	}
+	return store.Artifact{}, false, true
 }
 
 func normalizeMetadata(val json.RawMessage) ([]byte, error) {

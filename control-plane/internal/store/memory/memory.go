@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -1030,6 +1031,30 @@ func (s *Store) GetArtifact(artifactID string) (store.Artifact, bool, error) {
 	defer s.mu.Unlock()
 	a, ok := s.artifacts[artifactID]
 	return a, ok, nil
+}
+
+func (s *Store) FindArtifactByNameTypeVersion(name, artifactType, version string) (store.Artifact, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var best store.Artifact
+	found := false
+	for _, a := range s.artifacts {
+		if !strings.EqualFold(strings.TrimSpace(a.Status), "active") {
+			continue
+		}
+		if a.Name != name || a.Type != artifactType || a.Version != version {
+			continue
+		}
+		if !found {
+			best = a
+			found = true
+			continue
+		}
+		if a.CreatedAt.After(best.CreatedAt) || (a.CreatedAt.Equal(best.CreatedAt) && a.ArtifactID > best.ArtifactID) {
+			best = a
+		}
+	}
+	return best, found, nil
 }
 
 func (s *Store) ListArtifacts(name, version string, limit, offset int) ([]store.Artifact, error) {

@@ -1819,6 +1819,31 @@ func (s *Store) GetArtifact(artifactID string) (store.Artifact, bool, error) {
 	return a, true, nil
 }
 
+func (s *Store) FindArtifactByNameTypeVersion(name, artifactType, version string) (store.Artifact, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var a store.Artifact
+	err := s.pool.QueryRow(ctx, `
+		SELECT artifact_id, name, version, COALESCE(type, 'app_bundle'), COALESCE(status, 'active'), object_key, sha256, COALESCE(signature, ''),
+		       COALESCE(signature_type, ''), COALESCE(signature_key_id, ''), COALESCE(verification_status, 'legacy'), COALESCE(verification_error, ''),
+		       COALESCE(verified_at, '0001-01-01T00:00:00Z'::timestamptz),
+		       size_bytes, COALESCE(metadata, '{}'::jsonb), created_at,
+		       COALESCE(deprecated_at, '0001-01-01T00:00:00Z'::timestamptz), COALESCE(delete_after, '0001-01-01T00:00:00Z'::timestamptz)
+		FROM artifacts
+		WHERE name = $1 AND type = $2 AND version = $3 AND status = 'active'
+		ORDER BY created_at DESC, artifact_id DESC
+		LIMIT 1
+	`, name, artifactType, version).Scan(&a.ArtifactID, &a.Name, &a.Version, &a.Type, &a.Status, &a.ObjectKey, &a.SHA256, &a.Signature, &a.SignatureType, &a.SignatureKeyID, &a.VerificationStatus, &a.VerificationError, &a.VerifiedAt, &a.SizeBytes, &a.MetadataJSON, &a.CreatedAt, &a.DeprecatedAt, &a.DeleteAfter)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Artifact{}, false, nil
+	}
+	if err != nil {
+		return store.Artifact{}, false, err
+	}
+	return a, true, nil
+}
+
 func (s *Store) ListArtifacts(name, version string, limit, offset int) ([]store.Artifact, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

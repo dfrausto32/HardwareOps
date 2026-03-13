@@ -399,6 +399,7 @@ type Store interface {
 	DeleteDesiredStateGroup(groupID string) error
 	CreateArtifact(artifact Artifact) error
 	GetArtifact(artifactID string) (Artifact, bool, error)
+	FindArtifactByNameTypeVersion(name, artifactType, version string) (Artifact, bool, error)
 	ListArtifacts(name, version string, limit, offset int) ([]Artifact, error)
 	CountArtifactsByVerificationStatus(status string) (int, error)
 	DeprecateArtifact(artifactID string, deprecatedAt, deleteAfter time.Time) error

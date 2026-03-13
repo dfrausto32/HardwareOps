@@ -818,6 +818,297 @@ func newFakeObjectStore() *fakeObjectStore {
 	return &fakeObjectStore{objects: map[string][]byte{}}
 }
 
+// --- Duplicate artifact policy tests ---
+
+func TestCreateArtifact_IdempotentOnSameSHA256(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+
+	existingID := uuid.NewString()
+	if err := mem.CreateArtifact(store.Artifact{
+		ArtifactID: existingID,
+		Name:       "myapp",
+		Version:    "2.0.0",
+		Type:       "app_bundle",
+		Status:     "active",
+		ObjectKey:  "artifacts/" + existingID + "/artifact.tar.gz",
+		SHA256:     "aabbcc",
+		SizeBytes:  100,
+		CreatedAt:  time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed artifact: %v", err)
+	}
+
+	body := []byte(`{"name":"myapp","version":"2.0.0","type":"app_bundle","objectKey":"artifacts/new/artifact.tar.gz","sha256":"aabbcc","sizeBytes":100}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	CreateArtifact(logger, mem, false, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp ArtifactResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.ArtifactID != existingID {
+		t.Fatalf("expected existing artifact ID %s, got %s", existingID, resp.ArtifactID)
+	}
+	if !resp.Duplicate {
+		t.Fatalf("expected duplicate=true in response")
+	}
+}
+
+func TestCreateArtifact_ConflictOnDifferentSHA256(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+
+	existingID := uuid.NewString()
+	if err := mem.CreateArtifact(store.Artifact{
+		ArtifactID: existingID,
+		Name:       "myapp",
+		Version:    "2.0.0",
+		Type:       "app_bundle",
+		Status:     "active",
+		ObjectKey:  "artifacts/" + existingID + "/artifact.tar.gz",
+		SHA256:     "aabbcc",
+		SizeBytes:  100,
+		CreatedAt:  time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed artifact: %v", err)
+	}
+
+	body := []byte(`{"name":"myapp","version":"2.0.0","type":"app_bundle","objectKey":"artifacts/new/artifact.tar.gz","sha256":"ddeeff","sizeBytes":100}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	CreateArtifact(logger, mem, false, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "artifact_version_conflict") {
+		t.Fatalf("expected conflict error in body, got: %s", w.Body.String())
+	}
+}
+
+func TestCreateArtifact_SupersedeBypassesCheck(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+
+	existingID := uuid.NewString()
+	if err := mem.CreateArtifact(store.Artifact{
+		ArtifactID: existingID,
+		Name:       "myapp",
+		Version:    "2.0.0",
+		Type:       "app_bundle",
+		Status:     "active",
+		ObjectKey:  "artifacts/" + existingID + "/artifact.tar.gz",
+		SHA256:     "aabbcc",
+		SizeBytes:  100,
+		CreatedAt:  time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed artifact: %v", err)
+	}
+
+	body := []byte(`{"name":"myapp","version":"2.0.0","type":"app_bundle","objectKey":"artifacts/new/artifact.tar.gz","sha256":"ddeeff","sizeBytes":100}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts?supersede=true", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	CreateArtifact(logger, mem, false, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp ArtifactResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.ArtifactID == existingID {
+		t.Fatalf("expected new artifact ID, got same existing ID")
+	}
+	if resp.Duplicate {
+		t.Fatalf("expected duplicate=false for supersede path")
+	}
+}
+
+func TestCompleteArtifactUpload_IdempotentOnSameSHA256(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+	objStore := newFakeObjectStore()
+	bucket := "artifacts"
+
+	content := []byte("artifact content v1")
+	h := sha256.New()
+	h.Write(content)
+	sha := hex.EncodeToString(h.Sum(nil))
+
+	newID := uuid.NewString()
+	newKey := "artifacts/" + newID + "/artifact.tar.gz"
+	objStore.objects[newKey] = content
+
+	existingID := uuid.NewString()
+	if err := mem.CreateArtifact(store.Artifact{
+		ArtifactID: existingID,
+		Name:       "myapp",
+		Version:    "3.0.0",
+		Type:       "app_bundle",
+		Status:     "active",
+		ObjectKey:  "artifacts/" + existingID + "/artifact.tar.gz",
+		SHA256:     sha,
+		SizeBytes:  int64(len(content)),
+		CreatedAt:  time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed artifact: %v", err)
+	}
+
+	reqBody, _ := json.Marshal(map[string]any{
+		"artifactId": newID,
+		"name":       "myapp",
+		"version":    "3.0.0",
+		"type":       "app_bundle",
+		"objectKey":  newKey,
+		"sha256":     sha,
+		"sizeBytes":  int64(len(content)),
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts/upload/complete", bytes.NewReader(reqBody))
+	w := httptest.NewRecorder()
+
+	CompleteArtifactUpload(logger, mem, objStore, bucket, false, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp UploadArtifactResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.ArtifactID != existingID {
+		t.Fatalf("expected existing artifact ID %s, got %s", existingID, resp.ArtifactID)
+	}
+	if !resp.Duplicate {
+		t.Fatalf("expected duplicate=true")
+	}
+	if _, ok := objStore.objects[newKey]; ok {
+		t.Fatalf("expected orphaned object to be deleted on idempotent path")
+	}
+}
+
+func TestCompleteArtifactUpload_ConflictOnDifferentSHA256(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+	objStore := newFakeObjectStore()
+	bucket := "artifacts"
+
+	content := []byte("artifact content v1")
+	h := sha256.New()
+	h.Write(content)
+	sha := hex.EncodeToString(h.Sum(nil))
+
+	newID := uuid.NewString()
+	newKey := "artifacts/" + newID + "/artifact.tar.gz"
+	objStore.objects[newKey] = content
+
+	existingID := uuid.NewString()
+	if err := mem.CreateArtifact(store.Artifact{
+		ArtifactID: existingID,
+		Name:       "myapp",
+		Version:    "3.0.0",
+		Type:       "app_bundle",
+		Status:     "active",
+		ObjectKey:  "artifacts/" + existingID + "/artifact.tar.gz",
+		SHA256:     "totallydifferentsha",
+		SizeBytes:  int64(len(content)),
+		CreatedAt:  time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed artifact: %v", err)
+	}
+
+	reqBody, _ := json.Marshal(map[string]any{
+		"artifactId": newID,
+		"name":       "myapp",
+		"version":    "3.0.0",
+		"type":       "app_bundle",
+		"objectKey":  newKey,
+		"sha256":     sha,
+		"sizeBytes":  int64(len(content)),
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts/upload/complete", bytes.NewReader(reqBody))
+	w := httptest.NewRecorder()
+
+	CompleteArtifactUpload(logger, mem, objStore, bucket, false, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "artifact_version_conflict") {
+		t.Fatalf("expected conflict error in body, got: %s", w.Body.String())
+	}
+	if _, ok := objStore.objects[newKey]; ok {
+		t.Fatalf("expected orphaned object to be deleted on conflict")
+	}
+}
+
+func TestCompleteArtifactUpload_SupersedeBypassesCheck(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+	objStore := newFakeObjectStore()
+	bucket := "artifacts"
+
+	content := []byte("artifact content v2")
+	h := sha256.New()
+	h.Write(content)
+	sha := hex.EncodeToString(h.Sum(nil))
+
+	newID := uuid.NewString()
+	newKey := "artifacts/" + newID + "/artifact.tar.gz"
+	objStore.objects[newKey] = content
+
+	existingID := uuid.NewString()
+	if err := mem.CreateArtifact(store.Artifact{
+		ArtifactID: existingID,
+		Name:       "myapp",
+		Version:    "3.0.0",
+		Type:       "app_bundle",
+		Status:     "active",
+		ObjectKey:  "artifacts/" + existingID + "/artifact.tar.gz",
+		SHA256:     "totallydifferentsha",
+		SizeBytes:  int64(len(content)),
+		CreatedAt:  time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed artifact: %v", err)
+	}
+
+	reqBody, _ := json.Marshal(map[string]any{
+		"artifactId": newID,
+		"name":       "myapp",
+		"version":    "3.0.0",
+		"type":       "app_bundle",
+		"objectKey":  newKey,
+		"sha256":     sha,
+		"sizeBytes":  int64(len(content)),
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts/upload/complete?supersede=true", bytes.NewReader(reqBody))
+	w := httptest.NewRecorder()
+
+	CompleteArtifactUpload(logger, mem, objStore, bucket, false, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp UploadArtifactResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.ArtifactID != newID {
+		t.Fatalf("expected new artifact ID %s, got %s", newID, resp.ArtifactID)
+	}
+	if resp.Duplicate {
+		t.Fatalf("expected duplicate=false for supersede path")
+	}
+}
+
 type fakeObjectStore struct {
 	objects map[string][]byte
 }
