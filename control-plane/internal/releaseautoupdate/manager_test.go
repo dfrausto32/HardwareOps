@@ -320,3 +320,76 @@ func TestRunNow_ExplicitTrackingHonorsTrustPolicy(t *testing.T) {
 		t.Fatalf("expected verified artifact %s, got %s", verifiedNew.ArtifactID, comp.ArtifactID)
 	}
 }
+
+func TestRunNow_ExplicitTrackingPrefersNewestDuplicateVersion(t *testing.T) {
+	st := memory.New()
+	_, err := st.SetReleaseAutoUpdateSettings(store.ReleaseAutoUpdateSettings{
+		Enabled:       true,
+		AllowUnsigned: false,
+	})
+	if err != nil {
+		t.Fatalf("set settings: %v", err)
+	}
+
+	older := store.Artifact{
+		ArtifactID:         "11111111-1111-1111-1111-111111111111",
+		Name:               "trackingdemo",
+		Type:               "app_bundle",
+		Version:            "1.2.0",
+		Status:             "active",
+		Signature:          "sig",
+		VerificationStatus: artifacttrust.VerificationStatusVerified,
+		SignatureType:      artifacttrust.SignatureTypeEd25519,
+		SignatureKeyID:     "sha256:test-key",
+		CreatedAt:          time.Now().UTC().Add(-time.Hour),
+	}
+	newer := older
+	newer.ArtifactID = "22222222-2222-2222-2222-222222222222"
+	newer.CreatedAt = time.Now().UTC()
+	if err := st.CreateArtifact(older); err != nil {
+		t.Fatalf("create older artifact: %v", err)
+	}
+	if err := st.CreateArtifact(newer); err != nil {
+		t.Fatalf("create newer artifact: %v", err)
+	}
+
+	if err := st.UpsertDesiredStateGroup(store.DesiredStateGroup{
+		GroupID:        uuid.NewString(),
+		ComponentsJSON: []byte(`{"trackingdemo":{"artifactType":"app_bundle","desiredVersion":"","policy":{"hwops":{"tracking":{"mode":"enabled","name":"trackingdemo","artifactType":"app_bundle"}}}}}`),
+		UpdatedAt:      time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("upsert desired group: %v", err)
+	}
+
+	mgr := New(Config{Store: st, Interval: time.Second})
+	if _, err := mgr.RunNow("test"); err != nil {
+		t.Fatalf("run now: %v", err)
+	}
+
+	groups, err := st.ListDesiredStateGroups()
+	if err != nil {
+		t.Fatalf("list desired groups: %v", err)
+	}
+	comp := decodeDesiredComponents(groups[0].ComponentsJSON)["trackingdemo"]
+	if comp.ArtifactID != newer.ArtifactID {
+		t.Fatalf("expected newest duplicate artifact %s, got %s", newer.ArtifactID, comp.ArtifactID)
+	}
+}
+
+func TestPreferArtifactUsesArtifactIDAsStableTieBreaker(t *testing.T) {
+	now := time.Now().UTC()
+	a := versionedArtifact{
+		artifact: store.Artifact{ArtifactID: "aaa", CreatedAt: now},
+		version:  semver4{major: 1, minor: 2, patch: 3},
+	}
+	b := versionedArtifact{
+		artifact: store.Artifact{ArtifactID: "bbb", CreatedAt: now},
+		version:  semver4{major: 1, minor: 2, patch: 3},
+	}
+	if !preferArtifact(b, a) {
+		t.Fatalf("expected lexically larger artifact id to win as final tie-breaker")
+	}
+	if preferArtifact(a, b) {
+		t.Fatalf("expected lexically smaller artifact id to lose as final tie-breaker")
+	}
+}

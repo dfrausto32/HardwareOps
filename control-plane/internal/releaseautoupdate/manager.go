@@ -239,7 +239,7 @@ func (m *Manager) run(trigger string) (RunSummary, error) {
 	}
 	for key := range index {
 		sort.Slice(index[key], func(i, j int) bool {
-			return compareSemver(index[key][i].version, index[key][j].version) > 0
+			return preferArtifact(index[key][i], index[key][j])
 		})
 	}
 
@@ -406,6 +406,16 @@ func (m *Manager) recordRunAudit(run RunSummary, runErr error) {
 type versionedArtifact struct {
 	artifact store.Artifact
 	version  semver4
+}
+
+func preferArtifact(a, b versionedArtifact) bool {
+	if cmp := compareSemver(a.version, b.version); cmp != 0 {
+		return cmp > 0
+	}
+	if !a.artifact.CreatedAt.Equal(b.artifact.CreatedAt) {
+		return a.artifact.CreatedAt.After(b.artifact.CreatedAt)
+	}
+	return a.artifact.ArtifactID > b.artifact.ArtifactID
 }
 
 func maybeAdvanceComponent(comp componentState, defaultEnabled, allowUnsigned bool, globalTrustPolicy store.ArtifactTrustPolicy, byID map[string]store.Artifact, index map[string][]versionedArtifact) (componentState, componentResolution) {
