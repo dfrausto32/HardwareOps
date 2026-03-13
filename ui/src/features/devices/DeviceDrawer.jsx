@@ -6,10 +6,10 @@ export default function DeviceDrawer({
   artifactSignerSummary,
   artifactTrustPolicy,
   artifacts,
-  autoTrackModes,
   buildComponentRows,
   canDecommissionDevices,
   canManageDesiredState,
+  deviceTrackingModes,
   desiredError,
   deviceDetail,
   deviceDetailError,
@@ -20,6 +20,7 @@ export default function DeviceDrawer({
   drawerWidth,
   filterArtifactGroupsByTrustPolicy,
   filterArtifactGroupsByType,
+  getTrackingPreview,
   handleClearDeviceOverride,
   handleDeleteDevice,
   handleDesiredDevice,
@@ -173,14 +174,17 @@ export default function DeviceDrawer({
                       {deviceForm.components.map((row, idx) => {
                         const locked = Boolean(row.locked)
                         const type = normalizeArtifactType(row.artifactType)
+                        const trackingPreview = getTrackingPreview(row, 'device')
+                        const trackingEnabled = String(row.autoTrackMode || 'inherit') === 'enabled'
+                        const inheritFromGroup = String(row.autoTrackMode || 'inherit') === 'inherit'
                         const groupsForType = filterArtifactGroupsByType(activeArtifactGroups, type)
                         const effectiveTrustPolicy = resolveEffectiveTrustPolicy(row.policy, artifactTrustPolicy)
                         const allowedGroupsForType = filterArtifactGroupsByTrustPolicy(groupsForType, effectiveTrustPolicy)
                         const allGroupsForType = filterArtifactGroupsByType(artifactGroups, type)
                         const selected = artifacts.find((a) => a.artifactId === row.artifactId)
                         const selectedGroup = selected
-                          ? (groupsForType.find((g) => g.name === selected.name) ||
-                            allGroupsForType.find((g) => g.name === selected.name))
+                          ? (groupsForType.find((g) => g.name === selected.name && normalizeArtifactType(g.type) === normalizeArtifactType(selected.type)) ||
+                            allGroupsForType.find((g) => g.name === selected.name && normalizeArtifactType(g.type) === normalizeArtifactType(selected.type)))
                           : null
                         return (
                           <div className="component-row" key={row.id || `${row.key}-${idx}`}>
@@ -203,8 +207,8 @@ export default function DeviceDrawer({
                                 onChange={(e) => updateDeviceComponent(idx, { autoTrackMode: e.target.value })}
                                 disabled={locked}
                               >
-                                {autoTrackModes.map((mode) => (
-                                  <option key={mode.id} value={mode.id}>{`Auto ${mode.label}`}</option>
+                                {deviceTrackingModes.map((mode) => (
+                                  <option key={mode.id} value={mode.id}>{mode.label}</option>
                                 ))}
                               </select>
                               <button
@@ -232,6 +236,16 @@ export default function DeviceDrawer({
                                 Remove
                               </button>
                             </div>
+                            {trackingEnabled && (
+                              <div className="inline-row">
+                                <input
+                                  value={row.trackingName || ''}
+                                  onChange={(e) => updateDeviceComponent(idx, { trackingName: e.target.value })}
+                                  placeholder="tracked artifact name"
+                                  disabled={locked}
+                                />
+                              </div>
+                            )}
                             <div className="inline-row">
                               <select
                                 value={selected?.name || ''}
@@ -249,7 +263,7 @@ export default function DeviceDrawer({
                                     })
                                   }
                                 }}
-                                disabled={locked}
+                                disabled={locked || trackingEnabled || inheritFromGroup}
                               >
                                 <option value="">Select artifact</option>
                                 {allowedGroupsForType.map((group) => (
@@ -260,7 +274,7 @@ export default function DeviceDrawer({
                                 className="button ghost"
                                 type="button"
                                 onClick={() => openArtifactPicker('device', idx)}
-                                disabled={locked}
+                                disabled={locked || trackingEnabled || inheritFromGroup}
                               >
                                 Browse
                               </button>
@@ -277,7 +291,7 @@ export default function DeviceDrawer({
                                     })
                                   }
                                 }}
-                                disabled={locked}
+                                disabled={locked || trackingEnabled || inheritFromGroup}
                               >
                                 <option value="">Select version</option>
                                 {(selectedGroup?.versions || []).filter((artifact) => artifactAllowedByTrustPolicy(artifact, effectiveTrustPolicy)).map((artifact) => (
@@ -293,15 +307,21 @@ export default function DeviceDrawer({
                                 value={row.desiredVersion}
                                 onChange={(e) => updateDeviceComponent(idx, { desiredVersion: e.target.value })}
                                 placeholder="desired version"
-                                disabled={locked}
+                                disabled={locked || trackingEnabled || inheritFromGroup}
                               />
                               <input
                                 value={row.desiredConfigRev}
                                 onChange={(e) => updateDeviceComponent(idx, { desiredConfigRev: e.target.value })}
                                 placeholder="config rev"
-                                disabled={locked}
+                                disabled={locked || trackingEnabled || inheritFromGroup}
                               />
                             </div>
+                            <div className="detail-note">Tracking: {trackingPreview.message}</div>
+                            {trackingPreview.latestEligible && (
+                              <div className="detail-note">
+                                Latest eligible: {trackingPreview.latestEligible.version} ({artifactSignerSummary(trackingPreview.latestEligible)})
+                              </div>
+                            )}
                             <div className="detail-note">Trust policy: {trustPolicySummary(row.policy, artifactTrustPolicy)}</div>
                             {selected && (
                               <div className="detail-note">

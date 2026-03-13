@@ -107,12 +107,14 @@ import {
   rangeOptions,
   rangeMsById,
   chartColors,
-  autoTrackModes,
+  groupTrackingModes,
+  deviceTrackingModes,
   trustOverrideModes,
   signatureTypeOptions,
   parsePolicyObject,
   getAutoTrackModeFromPolicy,
-  mergeAutoTrackModeIntoPolicy,
+  getTrackingPolicyFromPolicy,
+  mergeTrackingIntoPolicy,
   verificationModeLabel,
   trustPolicyStrictness,
   normalizeTrustOverride,
@@ -126,6 +128,8 @@ import {
   newComponentRow,
   normalizeArtifactType,
   normalizeArtifactStatus,
+  parseSemver4,
+  compareSemver4,
   normalizeVerificationStatus,
   verificationPillLabel,
   artifactSignerSummary,
@@ -466,6 +470,7 @@ export default function App() {
 
   const [artifacts, setArtifacts] = useState([])
   const [selectedArtifactIds, setSelectedArtifactIds] = useState([])
+  const [artifactTrackingDetailKey, setArtifactTrackingDetailKey] = useState('')
   const [artifactsError, setArtifactsError] = useState('')
   const [artifactsStatus, setArtifactsStatus] = useState('')
   const [artifactTrustPolicy, setArtifactTrustPolicyState] = useState({
@@ -710,14 +715,17 @@ export default function App() {
       Object.entries(source).forEach(([key, comp]) => {
         if (key === 'app_bundle') return
         const policy = parsePolicyObject(comp.policy)
+        const tracking = getTrackingPolicyFromPolicy(policy)
+        const selectedArtifact = comp.artifactId ? artifactByID[comp.artifactId] : null
         rows.push(newComponentRow({
           key,
-          artifactType: fallbackComponentType(key, comp.artifactType),
+          artifactType: tracking.artifactType || fallbackComponentType(key, comp.artifactType || selectedArtifact?.type),
           artifactId: comp.artifactId || '',
           desiredVersion: comp.desiredVersion || '',
           desiredConfigRev: comp.desiredConfigRev || '',
           policy,
           autoTrackMode: getAutoTrackModeFromPolicy(policy),
+          trackingName: tracking.name || selectedArtifact?.name || '',
           locked: Boolean(comp.locked),
         }))
       })
@@ -749,15 +757,24 @@ export default function App() {
   }
 
   function buildComponentsPayload(rows) {
+    return buildComponentsPayloadForScope(rows, 'group')
+  }
+
+  function buildComponentsPayloadForScope(rows, scope) {
     const components = {}
     for (const row of rows || []) {
+      const mode = String(row.autoTrackMode || 'inherit').trim().toLowerCase()
+      if (scope === 'device' && mode === 'inherit') {
+        continue
+      }
+      const trackingRequiresTarget = scope === 'device' ? mode === 'enabled' : mode !== 'disabled'
       const hasValues = Boolean(
         row.key ||
         row.artifactType ||
         row.artifactId ||
         row.desiredVersion ||
         row.desiredConfigRev ||
-        (row.autoTrackMode && row.autoTrackMode !== 'inherit') ||
+        trackingRequiresTarget ||
         (row.policy && Object.keys(parsePolicyObject(row.policy)).length > 0) ||
         row.locked,
       )
@@ -773,7 +790,14 @@ export default function App() {
       if (!artifactType) {
         return { error: `Component ${key} requires an artifact type.` }
       }
-      const mergedPolicy = mergeAutoTrackModeIntoPolicy(row.policy, row.autoTrackMode)
+      if (trackingRequiresTarget && !String(row.trackingName || '').trim()) {
+        return { error: `Component ${key} requires a tracking artifact name.` }
+      }
+      const mergedPolicy = mergeTrackingIntoPolicy(row.policy, {
+        mode,
+        name: row.trackingName,
+        artifactType,
+      })
       components[key] = {
         artifactId: row.artifactId || undefined,
         artifactType,
@@ -912,6 +936,27 @@ export default function App() {
     setArtifactModalOpen(true)
   }
 
+  function shouldQueueTrackingRefresh(rows, scope) {
+    return (rows || []).some((row) => {
+      const mode = String(row?.autoTrackMode || 'inherit').trim().toLowerCase()
+      if (scope === 'device') {
+        return mode === 'enabled'
+      }
+      return mode !== 'disabled'
+    })
+  }
+
+  function queueTrackingRefresh() {
+    window.setTimeout(() => {
+      loadDesired()
+      loadArtifacts()
+    }, 500)
+    window.setTimeout(() => {
+      loadDesired()
+      loadArtifacts()
+    }, 1500)
+  }
+
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     localStorage.setItem('hwops-theme', theme)
@@ -1008,7 +1053,7 @@ export default function App() {
         fallbackComponentKey,
       ),
     })
-  }, [selectedDeviceId, desiredState, deviceDetail, deviceFormDirty])
+  }, [selectedDeviceId, desiredState, deviceDetail, deviceFormDirty, artifactByID])
 
   useEffect(() => {
     if (!selectedGroupId) return
@@ -1026,7 +1071,7 @@ export default function App() {
         null,
       ),
     })
-  }, [selectedGroupId, desiredState])
+  }, [selectedGroupId, desiredState, artifactByID])
 
   useEffect(() => {
     if (!upgrade.running) return
@@ -1957,9 +2002,20 @@ export default function App() {
     e.preventDefault()
     if (!canManageDesiredState) return
     setDesiredStatus('Setting desired state...')
-    const { components, error } = buildComponentsPayload(deviceForm.components)
+    const { components, error } = buildComponentsPayloadForScope(deviceForm.components, 'device')
     if (error) {
       setDesiredStatus(error)
+      return
+    }
+    const trackingConfigured = shouldQueueTrackingRefresh(deviceForm.components, 'device')
+    if (Object.keys(components || {}).length === 0 && !deviceForm.checkinIntervalSec) {
+      clearDesiredStateDevice(deviceForm.deviceId)
+        .then(() => {
+          setDesiredStatus('Device override cleared; group desired state will apply')
+          loadDesired()
+          setDeviceFormDirty(false)
+        })
+        .catch((err) => setDesiredStatus(err.message || String(err)))
       return
     }
     const payload = {
@@ -1972,6 +2028,7 @@ export default function App() {
       .then(() => {
         setDesiredStatus('Desired state set for device')
         loadDesired()
+        if (trackingConfigured) queueTrackingRefresh()
         setDeviceFormDirty(false)
       })
       .catch((err) => setDesiredStatus(err.message || String(err)))
@@ -2661,7 +2718,7 @@ export default function App() {
     if (selected.length === 0) return
     setGroupMultiDesiredError('')
     setGroupMultiDesiredStatus('Applying desired state...')
-    const { components, error } = buildComponentsPayload(groupMultiDesiredForm.components)
+    const { components, error } = buildComponentsPayloadForScope(groupMultiDesiredForm.components, 'group')
     if (error) {
       setGroupMultiDesiredError(error)
       setGroupMultiDesiredStatus('')
@@ -2688,6 +2745,7 @@ export default function App() {
       setGroupMultiDesiredOpen(false)
     }
     loadDesired()
+    if (shouldQueueTrackingRefresh(groupMultiDesiredForm.components, 'group')) queueTrackingRefresh()
   }
 
   async function handleGroupDeviceToggle(group, device, shouldAdd) {
@@ -2736,7 +2794,7 @@ export default function App() {
     e.preventDefault()
     if (!canManageDesiredState) return
     setGroupsStatus('Setting group desired state...')
-    const { components, error } = buildComponentsPayload(groupDesiredForm.components)
+    const { components, error } = buildComponentsPayloadForScope(groupDesiredForm.components, 'group')
     if (error) {
       setGroupsStatus(error)
       return
@@ -2751,6 +2809,7 @@ export default function App() {
       await setDesiredStateGroup(groupDesiredForm.groupId, payload)
       setGroupsStatus('Group desired state set')
       loadDesired()
+      if (shouldQueueTrackingRefresh(groupDesiredForm.components, 'group')) queueTrackingRefresh()
       setGroupDesiredOpen(false)
     } catch (err) {
       setGroupsStatus(err.message || String(err))
@@ -3839,16 +3898,20 @@ export default function App() {
   const artifactGroups = useMemo(() => {
     const map = new Map()
     artifacts.forEach((artifact) => {
-      const name = artifact.name || 'unnamed'
-      if (!map.has(name)) map.set(name, [])
-      map.get(name).push(artifact)
+      const name = String(artifact.name || 'unnamed')
+      const type = normalizeArtifactType(artifact.type || 'app_bundle')
+      const key = `${name}\u0000${type}`
+      if (!map.has(key)) {
+        map.set(key, { name, type, versions: [] })
+      }
+      map.get(key).versions.push(artifact)
     })
     return Array.from(map.entries())
-      .map(([name, items]) => {
-        const versions = [...items].sort((a, b) => a.version.localeCompare(b.version, undefined, { numeric: true }))
-        return { name, versions }
+      .map(([, group]) => {
+        const versions = [...group.versions].sort((a, b) => a.version.localeCompare(b.version, undefined, { numeric: true }))
+        return { name: group.name, type: group.type, versions }
       })
-      .sort((a, b) => a.name.localeCompare(b.name))
+      .sort((a, b) => `${a.name}|${a.type}`.localeCompare(`${b.name}|${b.type}`))
   }, [artifacts])
   const activeArtifactGroups = useMemo(() => {
     return artifactGroups
@@ -3930,6 +3993,177 @@ export default function App() {
     () => artifacts.find((artifact) => artifact.artifactId === trustOverrideEditorRow?.artifactId) || null,
     [artifacts, trustOverrideEditorRow],
   )
+
+  function artifactFamilyKey(name, type) {
+    return `${String(name || '').trim().toLowerCase()}|${normalizeArtifactType(type)}`
+  }
+
+  function findArtifactFamily(name, type, groupsList = activeArtifactGroups) {
+    const key = artifactFamilyKey(name, type)
+    return (groupsList || []).find((group) => artifactFamilyKey(group.name, group.type) === key) || null
+  }
+
+  function getTrackingPreview(row, scope = 'group') {
+    if (!row) return { state: 'none', message: 'No component selected.' }
+    const mode = String(row.autoTrackMode || 'inherit').trim().toLowerCase()
+    if (scope === 'device' && mode === 'inherit') {
+      return {
+        state: 'inherit-group',
+        message: 'Inherits group desired state. Saving this row removes the device override for this component.',
+      }
+    }
+
+    const trackingEnabled = scope === 'device' ? mode === 'enabled' : mode !== 'disabled'
+    if (!trackingEnabled) {
+      return { state: 'disabled', message: 'Tracking disabled. This component stays pinned to the selected artifact.' }
+    }
+    const waitingForGlobalEnable = scope !== 'device' && mode === 'inherit' && !releaseAutoUpdate.enabled
+
+    const targetName = String(row.trackingName || '').trim()
+    const targetType = normalizeArtifactType(row.artifactType)
+    if (!targetName || !targetType) {
+      return { state: 'misconfigured', message: 'Misconfigured target. Tracking requires an explicit artifact name and type.' }
+    }
+
+    const effectivePolicy = resolveEffectiveTrustPolicy(row.policy, artifactTrustPolicy)
+    const family = findArtifactFamily(targetName, targetType, activeArtifactGroups)
+    const currentArtifact = row.artifactId ? artifactByID[row.artifactId] : null
+    const currentVersion = parseSemver4(currentArtifact?.version || row.desiredVersion)
+
+    if (!family) {
+      return {
+        state: waitingForGlobalEnable ? 'global-disabled' : 'unavailable',
+        familyKey: artifactFamilyKey(targetName, targetType),
+        targetName,
+        targetType,
+        message: waitingForGlobalEnable
+          ? 'Global auto-follow is disabled. This target is configured but will not advance until the global setting is enabled.'
+          : 'No active artifacts match this tracking target.',
+      }
+    }
+
+    const semverCandidates = family.versions.filter((artifact) => parseSemver4(artifact.version))
+    if (semverCandidates.length === 0) {
+      return {
+        state: 'unavailable',
+        familyKey: artifactFamilyKey(targetName, targetType),
+        targetName,
+        targetType,
+        message: 'No eligible semver artifacts are available for this target.',
+      }
+    }
+
+    const trustEligible = semverCandidates.filter((artifact) => artifactAllowedByTrustPolicy(artifact, effectivePolicy))
+    if (trustEligible.length === 0) {
+      return {
+        state: waitingForGlobalEnable ? 'global-disabled' : 'trust-blocked',
+        familyKey: artifactFamilyKey(targetName, targetType),
+        targetName,
+        targetType,
+        message: waitingForGlobalEnable
+          ? 'Global auto-follow is disabled. Matching artifacts exist, but no update will be applied until the global setting is enabled.'
+          : 'Blocked by trust policy. Matching artifacts exist, but none satisfy the effective trust requirements.',
+      }
+    }
+
+    const latestEligible = [...trustEligible].sort((left, right) => compareSemver4(left.version, right.version))[trustEligible.length - 1]
+    const latestVersion = parseSemver4(latestEligible.version)
+    const familyKey = artifactFamilyKey(targetName, targetType)
+
+    if (!currentVersion) {
+      return {
+        state: waitingForGlobalEnable ? 'global-disabled' : 'advance',
+        familyKey,
+        targetName,
+        targetType,
+        latestEligible,
+        message: waitingForGlobalEnable
+          ? `Global auto-follow is disabled. Latest eligible artifact is ${latestEligible.version}.`
+          : `Will resolve to ${latestEligible.version} when saved.`,
+      }
+    }
+
+    const cmp = compareSemver4(latestVersion, currentVersion)
+    if (cmp > 0) {
+      return {
+        state: waitingForGlobalEnable ? 'global-disabled' : 'advance',
+        familyKey,
+        targetName,
+        targetType,
+        latestEligible,
+        message: waitingForGlobalEnable
+          ? `Global auto-follow is disabled. A newer eligible artifact (${latestEligible.version}) is available.`
+          : `Will auto-update to ${latestEligible.version} when saved.`,
+      }
+    }
+    return {
+      state: waitingForGlobalEnable ? 'global-disabled' : 'current',
+      familyKey,
+      targetName,
+      targetType,
+      latestEligible,
+      message: waitingForGlobalEnable
+        ? `Global auto-follow is disabled. Latest eligible artifact is ${latestEligible.version}.`
+        : `Following latest eligible artifact ${latestEligible.version}.`,
+    }
+  }
+
+  const trackedArtifactFamilies = useMemo(() => {
+    const groupNameByID = groups.reduce((acc, group) => {
+      acc[group.groupId] = group.name || group.groupId
+      return acc
+    }, {})
+    const devicesByID = devices.reduce((acc, device) => {
+      acc[device.deviceId] = device
+      return acc
+    }, {})
+    const families = new Map()
+
+    const addMember = (ownerType, ownerId, ownerLabel, componentKey, component, scope) => {
+      const preview = getTrackingPreview(component, scope)
+      if (!preview.familyKey) return
+      if (!families.has(preview.familyKey)) {
+        families.set(preview.familyKey, {
+          familyKey: preview.familyKey,
+          targetName: preview.targetName,
+          targetType: preview.targetType,
+          members: [],
+        })
+      }
+      families.get(preview.familyKey).members.push({
+        ownerType,
+        ownerId,
+        ownerLabel,
+        componentKey,
+        message: preview.message,
+        state: preview.state,
+        latestEligible: preview.latestEligible || null,
+      })
+    }
+
+    for (const groupDesired of desiredState.groups || []) {
+      for (const [componentKey, component] of Object.entries(groupDesired.components || {})) {
+        addMember('group', groupDesired.groupId, groupNameByID[groupDesired.groupId] || groupDesired.groupId, componentKey, component, 'group')
+      }
+    }
+    for (const deviceDesired of desiredState.devices || []) {
+      for (const [componentKey, component] of Object.entries(deviceDesired.components || {})) {
+        addMember('device', deviceDesired.deviceId, devicesByID[deviceDesired.deviceId]?.deviceId || deviceDesired.deviceId, componentKey, component, 'device')
+      }
+    }
+    return families
+  }, [desiredState, devices, groups, activeArtifactGroups, artifactByID, artifactTrustPolicy, releaseAutoUpdate.enabled])
+
+  const artifactTrackingDetail = useMemo(
+    () => trackedArtifactFamilies.get(artifactTrackingDetailKey) || null,
+    [artifactTrackingDetailKey, trackedArtifactFamilies],
+  )
+
+  useEffect(() => {
+    if (artifactTrackingDetailKey && !trackedArtifactFamilies.has(artifactTrackingDetailKey)) {
+      setArtifactTrackingDetailKey('')
+    }
+  }, [artifactTrackingDetailKey, trackedArtifactFamilies])
 
   const groupSelectorById = useMemo(() => {
     const map = {}
@@ -4520,6 +4754,7 @@ export default function App() {
                       <th>Type</th>
                       <th>Lifecycle</th>
                       <th>Trust</th>
+                      <th>Tracking</th>
                       <th>Refs</th>
                       <th>Delete After</th>
                       <th>Created</th>
@@ -4530,6 +4765,8 @@ export default function App() {
                     {artifactGroups.map((group) => (
                       group.versions.map((a, idx) => {
                         const lifecycle = normalizeArtifactStatus(a.status)
+                        const trackingKey = artifactFamilyKey(a.name, a.type)
+                        const trackedFamily = trackedArtifactFamilies.get(trackingKey)
                         const refs = Number(a.referenceCount || 0)
                         const canDeleteArtifactVersion =
                           canManageArtifacts && lifecycle === 'deprecated' && refs <= 0
@@ -4563,6 +4800,20 @@ export default function App() {
                                 </span>
                                 <div className="detail-note">{artifactSignerSummary(a)}</div>
                               </div>
+                            </td>
+                            <td>
+                              {trackedFamily ? (
+                                <div className="artifact-trust-cell">
+                                  <span className="pill info">tracked</span>
+                                  <button
+                                    className="button ghost"
+                                    type="button"
+                                    onClick={() => setArtifactTrackingDetailKey(trackingKey)}
+                                  >
+                                    {trackedFamily.members.length} target{trackedFamily.members.length === 1 ? '' : 's'}
+                                  </button>
+                                </div>
+                              ) : '—'}
                             </td>
                             <td>{refs}</td>
                             <td>{lifecycle === 'deprecated' ? formatTime(a.deleteAfter) : '—'}</td>
@@ -4599,12 +4850,46 @@ export default function App() {
                     ))}
                     {artifactGroups.length === 0 && (
                       <tr>
-                        <td colSpan={11}>No artifacts uploaded yet.</td>
+                        <td colSpan={12}>No artifacts uploaded yet.</td>
                       </tr>
                     )}
                   </tbody>
                 </table>
               </div>
+              {artifactTrackingDetail && (
+                <div className="artifact-tracking-panel">
+                  <div className="section-header">
+                    <h3>
+                      Tracking detail: {artifactTrackingDetail.targetName} ({artifactTrackingDetail.targetType})
+                    </h3>
+                    <button className="button ghost" type="button" onClick={() => setArtifactTrackingDetailKey('')}>
+                      Close
+                    </button>
+                  </div>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Owner</th>
+                          <th>Component</th>
+                          <th>Status</th>
+                          <th>Latest Eligible</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {artifactTrackingDetail.members.map((member) => (
+                          <tr key={`${member.ownerType}-${member.ownerId}-${member.componentKey}`}>
+                            <td>{member.ownerType === 'group' ? `Group: ${member.ownerLabel}` : `Device: ${member.ownerLabel}`}</td>
+                            <td>{member.componentKey}</td>
+                            <td>{member.message}</td>
+                            <td>{member.latestEligible?.version || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </section>
           </>
         )}
@@ -5386,10 +5671,10 @@ export default function App() {
           artifactSignerSummary,
           artifactTrustPolicy,
           artifacts,
-          autoTrackModes,
           buildComponentRows,
           canDecommissionDevices,
           canManageDesiredState,
+          deviceTrackingModes,
           desiredError,
           deviceDetail,
           deviceDetailError,
@@ -5400,6 +5685,7 @@ export default function App() {
           drawerWidth,
           filterArtifactGroupsByTrustPolicy,
           filterArtifactGroupsByType,
+          getTrackingPreview,
           handleClearDeviceOverride,
           handleDeleteDevice,
           handleDesiredDevice,
@@ -5629,10 +5915,11 @@ export default function App() {
           artifactSignerSummary,
           artifactTrustPolicy,
           artifacts,
-          autoTrackModes,
           canManageDesiredState,
           filterArtifactGroupsByTrustPolicy,
           filterArtifactGroupsByType,
+          getTrackingPreview,
+          groupTrackingModes,
           groupMultiDesiredError,
           groupMultiDesiredForm,
           groupMultiDesiredOpen,
@@ -5686,10 +5973,11 @@ export default function App() {
           artifactSignerSummary,
           artifactTrustPolicy,
           artifacts,
-          autoTrackModes,
           canManageDesiredState,
           filterArtifactGroupsByTrustPolicy,
           filterArtifactGroupsByType,
+          getTrackingPreview,
+          groupTrackingModes,
           groupDesiredForm,
           groupDesiredOpen,
           groupsStatus,

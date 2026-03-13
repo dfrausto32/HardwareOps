@@ -119,9 +119,9 @@ type DesiredComponent struct {
 }
 
 type CheckinResponse struct {
-	Desired        *DesiredState `json:"desired"`
-	PendingActions []Action      `json:"pendingActions,omitempty"`
-	ServerTime     time.Time     `json:"serverTime"`
+	Desired        *DesiredState       `json:"desired"`
+	PendingActions []Action            `json:"pendingActions,omitempty"`
+	ServerTime     time.Time           `json:"serverTime"`
 	SigningTrust   *SigningTrustBundle `json:"signingTrust,omitempty"`
 }
 
@@ -132,19 +132,19 @@ type Action struct {
 }
 
 type ArtifactResponse struct {
-	ArtifactID          string          `json:"artifactId"`
-	Name                string          `json:"name"`
-	Version             string          `json:"version"`
-	Type                string          `json:"type"`
-	ObjectKey           string          `json:"objectKey"`
-	SHA256              string          `json:"sha256"`
-	Signature           string          `json:"signature"`
-	SignatureType       string          `json:"signatureType"`
-	SignatureKeyID      string          `json:"signatureKeyId"`
-	VerificationStatus  string          `json:"verificationStatus"`
-	VerificationError   string          `json:"verificationError"`
-	SizeBytes           int64           `json:"sizeBytes"`
-	Metadata            json.RawMessage `json:"metadata"`
+	ArtifactID         string          `json:"artifactId"`
+	Name               string          `json:"name"`
+	Version            string          `json:"version"`
+	Type               string          `json:"type"`
+	ObjectKey          string          `json:"objectKey"`
+	SHA256             string          `json:"sha256"`
+	Signature          string          `json:"signature"`
+	SignatureType      string          `json:"signatureType"`
+	SignatureKeyID     string          `json:"signatureKeyId"`
+	VerificationStatus string          `json:"verificationStatus"`
+	VerificationError  string          `json:"verificationError"`
+	SizeBytes          int64           `json:"sizeBytes"`
+	Metadata           json.RawMessage `json:"metadata"`
 }
 
 type ReenrollResponse struct {
@@ -160,8 +160,8 @@ type SigningTrustKey struct {
 }
 
 type SigningTrustBundle struct {
-	UpdatedAt time.Time          `json:"updatedAt,omitempty"`
-	Keys      []SigningTrustKey  `json:"keys"`
+	UpdatedAt time.Time         `json:"updatedAt,omitempty"`
+	Keys      []SigningTrustKey `json:"keys"`
 }
 
 type PendingEnrollmentRequest struct {
@@ -186,13 +186,13 @@ type ClaimPendingEnrollmentRequest struct {
 }
 
 type ClaimPendingEnrollmentResponse struct {
-	Status       string    `json:"status"`
-	PollAfterSec int       `json:"pollAfterSec,omitempty"`
-	Reason       string    `json:"reason,omitempty"`
-	DeviceID     string    `json:"deviceId,omitempty"`
-	CertPEM      string    `json:"certPem,omitempty"`
-	CACertPEM    string    `json:"caCertPem,omitempty"`
-	ExpiresAt    time.Time `json:"expiresAt,omitempty"`
+	Status       string              `json:"status"`
+	PollAfterSec int                 `json:"pollAfterSec,omitempty"`
+	Reason       string              `json:"reason,omitempty"`
+	DeviceID     string              `json:"deviceId,omitempty"`
+	CertPEM      string              `json:"certPem,omitempty"`
+	CACertPEM    string              `json:"caCertPem,omitempty"`
+	ExpiresAt    time.Time           `json:"expiresAt,omitempty"`
 	SigningTrust *SigningTrustBundle `json:"signingTrust,omitempty"`
 }
 
@@ -406,7 +406,7 @@ func (c *Client) PostApplyResult(deviceID string, req ApplyResultRequest) error 
 }
 
 func (c *Client) GetArtifact(artifactID string) (*ArtifactResponse, error) {
-	url := fmt.Sprintf("%s/api/v1/artifacts/%s", c.baseURL, artifactID)
+	url := fmt.Sprintf("%s/api/v1/devices/artifacts/%s", c.baseURL, artifactID)
 	resp, err := c.http.Get(url)
 	if err != nil {
 		return nil, err
@@ -425,7 +425,7 @@ func (c *Client) GetArtifact(artifactID string) (*ArtifactResponse, error) {
 }
 
 func (c *Client) PresignArtifact(artifactID string) (*PresignResponse, error) {
-	url := fmt.Sprintf("%s/api/v1/artifacts/%s/presign", c.baseURL, artifactID)
+	url := fmt.Sprintf("%s/api/v1/devices/artifacts/%s/presign", c.baseURL, artifactID)
 	resp, err := c.http.Post(url, "application/json", bytes.NewReader([]byte("{}")))
 	if err != nil {
 		return nil, err

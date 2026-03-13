@@ -6,10 +6,11 @@ export default function GroupMultiDesiredModal({
   artifactSignerSummary,
   artifactTrustPolicy,
   artifacts,
-  autoTrackModes,
   canManageDesiredState,
   filterArtifactGroupsByTrustPolicy,
   filterArtifactGroupsByType,
+  getTrackingPreview,
+  groupTrackingModes,
   groupMultiDesiredError,
   groupMultiDesiredForm,
   groupMultiDesiredOpen,
@@ -46,14 +47,16 @@ export default function GroupMultiDesiredModal({
                 {groupMultiDesiredForm.components.map((row, idx) => {
                   const locked = Boolean(row.locked)
                   const type = normalizeArtifactType(row.artifactType)
+                  const trackingPreview = getTrackingPreview(row, 'group')
+                  const trackingEnabled = String(row.autoTrackMode || 'inherit') !== 'disabled'
                   const groupsForType = filterArtifactGroupsByType(activeArtifactGroups, type)
                   const effectiveTrustPolicy = resolveEffectiveTrustPolicy(row.policy, artifactTrustPolicy)
                   const allowedGroupsForType = filterArtifactGroupsByTrustPolicy(groupsForType, effectiveTrustPolicy)
                   const allGroupsForType = filterArtifactGroupsByType(artifactGroups, type)
                   const selected = artifacts.find((a) => a.artifactId === row.artifactId)
                   const selectedGroup = selected
-                    ? (groupsForType.find((g) => g.name === selected.name) ||
-                      allGroupsForType.find((g) => g.name === selected.name))
+                    ? (groupsForType.find((g) => g.name === selected.name && normalizeArtifactType(g.type) === normalizeArtifactType(selected.type)) ||
+                      allGroupsForType.find((g) => g.name === selected.name && normalizeArtifactType(g.type) === normalizeArtifactType(selected.type)))
                     : null
                   return (
                     <div className="component-row" key={row.id || `${row.key}-${idx}`}>
@@ -76,8 +79,8 @@ export default function GroupMultiDesiredModal({
                           onChange={(e) => updateGroupMultiDesiredComponent(idx, { autoTrackMode: e.target.value })}
                           disabled={locked}
                         >
-                          {autoTrackModes.map((mode) => (
-                            <option key={mode.id} value={mode.id}>{`Auto ${mode.label}`}</option>
+                          {groupTrackingModes.map((mode) => (
+                            <option key={mode.id} value={mode.id}>{mode.label}</option>
                           ))}
                         </select>
                         <button
@@ -105,6 +108,16 @@ export default function GroupMultiDesiredModal({
                           Remove
                         </button>
                       </div>
+                      {trackingEnabled && (
+                        <div className="inline-row">
+                          <input
+                            value={row.trackingName || ''}
+                            onChange={(e) => updateGroupMultiDesiredComponent(idx, { trackingName: e.target.value })}
+                            placeholder="tracked artifact name"
+                            disabled={locked}
+                          />
+                        </div>
+                      )}
                       <div className="inline-row">
                         <select
                           value={selected?.name || ''}
@@ -122,7 +135,7 @@ export default function GroupMultiDesiredModal({
                               })
                             }
                           }}
-                          disabled={locked}
+                          disabled={locked || trackingEnabled}
                         >
                           <option value="">Select artifact</option>
                           {allowedGroupsForType.map((group) => (
@@ -133,7 +146,7 @@ export default function GroupMultiDesiredModal({
                           className="button ghost"
                           type="button"
                           onClick={() => openArtifactPicker('groupBulk', idx)}
-                          disabled={locked}
+                          disabled={locked || trackingEnabled}
                         >
                           Browse
                         </button>
@@ -150,7 +163,7 @@ export default function GroupMultiDesiredModal({
                               })
                             }
                           }}
-                          disabled={locked}
+                          disabled={locked || trackingEnabled}
                         >
                           <option value="">Select version</option>
                           {(selectedGroup?.versions || []).filter((artifact) => artifactAllowedByTrustPolicy(artifact, effectiveTrustPolicy)).map((artifact) => (
@@ -166,15 +179,21 @@ export default function GroupMultiDesiredModal({
                           value={row.desiredVersion}
                           onChange={(e) => updateGroupMultiDesiredComponent(idx, { desiredVersion: e.target.value })}
                           placeholder="desired version"
-                          disabled={locked}
+                          disabled={locked || trackingEnabled}
                         />
                         <input
                           value={row.desiredConfigRev}
                           onChange={(e) => updateGroupMultiDesiredComponent(idx, { desiredConfigRev: e.target.value })}
                           placeholder="config rev"
-                          disabled={locked}
+                          disabled={locked || trackingEnabled}
                         />
                       </div>
+                      <div className="detail-note">Tracking: {trackingPreview.message}</div>
+                      {trackingPreview.latestEligible && (
+                        <div className="detail-note">
+                          Latest eligible: {trackingPreview.latestEligible.version} ({artifactSignerSummary(trackingPreview.latestEligible)})
+                        </div>
+                      )}
                       <div className="detail-note">Trust policy: {trustPolicySummary(row.policy, artifactTrustPolicy)}</div>
                       {selected && (
                         <div className="detail-note">

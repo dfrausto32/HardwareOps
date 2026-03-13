@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hardwareops/control-plane/internal/artifacttrust"
 	"github.com/hardwareops/control-plane/internal/store"
 )
 
@@ -27,15 +28,17 @@ type Config struct {
 }
 
 type RunSummary struct {
-	Trigger            string    `json:"trigger"`
-	StartedAt          time.Time `json:"startedAt,omitempty"`
-	FinishedAt         time.Time `json:"finishedAt,omitempty"`
-	GroupsUpdated      int       `json:"groupsUpdated"`
-	DevicesUpdated     int       `json:"devicesUpdated"`
-	ComponentsUpdated  int       `json:"componentsUpdated"`
-	SkippedNonSemver   int       `json:"skippedNonSemver"`
-	SkippedUnavailable int       `json:"skippedUnavailable"`
-	Error              string    `json:"error,omitempty"`
+	Trigger             string    `json:"trigger"`
+	StartedAt           time.Time `json:"startedAt,omitempty"`
+	FinishedAt          time.Time `json:"finishedAt,omitempty"`
+	GroupsUpdated       int       `json:"groupsUpdated"`
+	DevicesUpdated      int       `json:"devicesUpdated"`
+	ComponentsUpdated   int       `json:"componentsUpdated"`
+	SkippedNonSemver    int       `json:"skippedNonSemver"`
+	SkippedUnavailable  int       `json:"skippedUnavailable"`
+	SkippedMisconfig    int       `json:"skippedMisconfig"`
+	SkippedTrustBlocked int       `json:"skippedTrustBlocked"`
+	Error               string    `json:"error,omitempty"`
 }
 
 type Status struct {
@@ -74,6 +77,19 @@ type componentState struct {
 	Policy           json.RawMessage `json:"policy,omitempty"`
 	Source           string          `json:"source,omitempty"`
 	Locked           bool            `json:"locked,omitempty"`
+}
+
+const (
+	skipReasonNone         = ""
+	skipReasonUnavailable  = "unavailable"
+	skipReasonNonSemver    = "non_semver"
+	skipReasonMisconfig    = "misconfigured"
+	skipReasonTrustBlocked = "trust_blocked"
+)
+
+type componentResolution struct {
+	Updated    bool
+	SkipReason string
 }
 
 func New(cfg Config) *Manager {
@@ -195,6 +211,13 @@ func (m *Manager) run(trigger string) (RunSummary, error) {
 	if err != nil {
 		return finish(run, fmt.Errorf("get release auto-update settings: %w", err))
 	}
+	globalTrustPolicy, _, err := m.store.GetArtifactTrustPolicy()
+	if err != nil {
+		return finish(run, fmt.Errorf("get artifact trust policy: %w", err))
+	}
+	if globalTrustPolicy.VerificationMode == "" {
+		globalTrustPolicy.VerificationMode = artifacttrust.VerificationModeWarnUnsigned
+	}
 
 	artifacts, err := listAllArtifacts(m.store)
 	if err != nil {
@@ -205,9 +228,6 @@ func (m *Manager) run(trigger string) (RunSummary, error) {
 	for _, artifact := range artifacts {
 		byID[artifact.ArtifactID] = artifact
 		if !strings.EqualFold(strings.TrimSpace(artifact.Status), "active") {
-			continue
-		}
-		if !settings.AllowUnsigned && strings.TrimSpace(artifact.Signature) == "" {
 			continue
 		}
 		v, ok := parseSemver4(artifact.Version)
@@ -223,17 +243,17 @@ func (m *Manager) run(trigger string) (RunSummary, error) {
 		})
 	}
 
-	if err := m.updateGroups(settings.Enabled, byID, index, &run); err != nil {
+	if err := m.updateGroups(settings.Enabled, settings.AllowUnsigned, globalTrustPolicy, byID, index, &run); err != nil {
 		return finish(run, fmt.Errorf("update groups: %w", err))
 	}
-	if err := m.updateDevices(settings.Enabled, byID, index, &run); err != nil {
+	if err := m.updateDevices(settings.Enabled, settings.AllowUnsigned, globalTrustPolicy, byID, index, &run); err != nil {
 		return finish(run, fmt.Errorf("update devices: %w", err))
 	}
 
 	return finish(run, nil)
 }
 
-func (m *Manager) updateGroups(defaultEnabled bool, byID map[string]store.Artifact, index map[string][]versionedArtifact, run *RunSummary) error {
+func (m *Manager) updateGroups(defaultEnabled, allowUnsigned bool, globalTrustPolicy store.ArtifactTrustPolicy, byID map[string]store.Artifact, index map[string][]versionedArtifact, run *RunSummary) error {
 	groups, err := m.store.ListDesiredStateGroups()
 	if err != nil {
 		return err
@@ -245,14 +265,18 @@ func (m *Manager) updateGroups(defaultEnabled bool, byID map[string]store.Artifa
 		}
 		changed := false
 		for key, comp := range components {
-			next, updated, skippedNonSemver, skippedUnavailable := maybeAdvanceComponent(comp, defaultEnabled, byID, index)
-			if skippedNonSemver {
+			next, result := maybeAdvanceComponent(comp, defaultEnabled, allowUnsigned, globalTrustPolicy, byID, index)
+			switch result.SkipReason {
+			case skipReasonNonSemver:
 				run.SkippedNonSemver++
-			}
-			if skippedUnavailable {
+			case skipReasonUnavailable:
 				run.SkippedUnavailable++
+			case skipReasonMisconfig:
+				run.SkippedMisconfig++
+			case skipReasonTrustBlocked:
+				run.SkippedTrustBlocked++
 			}
-			if updated {
+			if result.Updated {
 				components[key] = next
 				changed = true
 				run.ComponentsUpdated++
@@ -280,7 +304,7 @@ func (m *Manager) updateGroups(defaultEnabled bool, byID map[string]store.Artifa
 	return nil
 }
 
-func (m *Manager) updateDevices(defaultEnabled bool, byID map[string]store.Artifact, index map[string][]versionedArtifact, run *RunSummary) error {
+func (m *Manager) updateDevices(defaultEnabled, allowUnsigned bool, globalTrustPolicy store.ArtifactTrustPolicy, byID map[string]store.Artifact, index map[string][]versionedArtifact, run *RunSummary) error {
 	devices, err := m.store.ListDesiredStateDevices()
 	if err != nil {
 		return err
@@ -295,14 +319,18 @@ func (m *Manager) updateDevices(defaultEnabled bool, byID map[string]store.Artif
 		}
 		changed := false
 		for key, comp := range components {
-			next, updated, skippedNonSemver, skippedUnavailable := maybeAdvanceComponent(comp, defaultEnabled, byID, index)
-			if skippedNonSemver {
+			next, result := maybeAdvanceComponent(comp, defaultEnabled, allowUnsigned, globalTrustPolicy, byID, index)
+			switch result.SkipReason {
+			case skipReasonNonSemver:
 				run.SkippedNonSemver++
-			}
-			if skippedUnavailable {
+			case skipReasonUnavailable:
 				run.SkippedUnavailable++
+			case skipReasonMisconfig:
+				run.SkippedMisconfig++
+			case skipReasonTrustBlocked:
+				run.SkippedTrustBlocked++
 			}
-			if updated {
+			if result.Updated {
 				components[key] = next
 				changed = true
 				run.ComponentsUpdated++
@@ -380,8 +408,12 @@ type versionedArtifact struct {
 	version  semver4
 }
 
-func maybeAdvanceComponent(comp componentState, defaultEnabled bool, byID map[string]store.Artifact, index map[string][]versionedArtifact) (componentState, bool, bool, bool) {
-	mode := autoModeFromPolicy(comp.Policy)
+func maybeAdvanceComponent(comp componentState, defaultEnabled, allowUnsigned bool, globalTrustPolicy store.ArtifactTrustPolicy, byID map[string]store.Artifact, index map[string][]versionedArtifact) (componentState, componentResolution) {
+	tracking := trackingFromPolicy(comp.Policy)
+	mode := tracking.Mode
+	if mode == autoModeInherit {
+		mode = autoModeFromPolicy(comp.Policy)
+	}
 	enabled := defaultEnabled
 	switch mode {
 	case autoModeEnabled:
@@ -390,40 +422,85 @@ func maybeAdvanceComponent(comp componentState, defaultEnabled bool, byID map[st
 		enabled = false
 	}
 	if !enabled {
-		return comp, false, false, false
+		return comp, componentResolution{}
 	}
-	if strings.TrimSpace(comp.ArtifactID) == "" {
-		return comp, false, false, true
+	trustPolicy, err := artifacttrust.ResolvePolicy(globalTrustPolicy, comp.Policy)
+	if err != nil {
+		return comp, componentResolution{SkipReason: skipReasonMisconfig}
 	}
-	currentArtifact, ok := byID[comp.ArtifactID]
-	if !ok {
-		return comp, false, false, true
+	targetName := tracking.Name
+	targetType := tracking.ArtifactType
+	currentArtifact, currentArtifactFound := byID[comp.ArtifactID]
+	if tracking.Explicit {
+		if targetName == "" || targetType == "" {
+			return comp, componentResolution{SkipReason: skipReasonMisconfig}
+		}
+	} else {
+		if strings.TrimSpace(comp.ArtifactID) == "" {
+			return comp, componentResolution{SkipReason: skipReasonUnavailable}
+		}
+		if !currentArtifactFound {
+			return comp, componentResolution{SkipReason: skipReasonUnavailable}
+		}
+		targetName = currentArtifact.Name
+		targetType = currentArtifact.Type
 	}
-	currentVersion, ok := parseSemver4(currentArtifact.Version)
-	if !ok {
-		return comp, false, true, false
+	currentVersion, currentVersionKnown := semver4{}, false
+	switch {
+	case currentArtifactFound:
+		var ok bool
+		currentVersion, ok = parseSemver4(currentArtifact.Version)
+		if !ok {
+			if tracking.Explicit {
+				if parsed, ok := parseSemver4(comp.DesiredVersion); ok {
+					currentVersion = parsed
+					currentVersionKnown = true
+				}
+			} else {
+				return comp, componentResolution{SkipReason: skipReasonNonSemver}
+			}
+		} else {
+			currentVersionKnown = true
+		}
+	case tracking.Explicit && strings.TrimSpace(comp.DesiredVersion) != "":
+		if parsed, ok := parseSemver4(comp.DesiredVersion); ok {
+			currentVersion = parsed
+			currentVersionKnown = true
+		}
 	}
-	candidates := index[artifactKey(currentArtifact.Name, currentArtifact.Type)]
+	candidates := index[artifactKey(targetName, targetType)]
 	if len(candidates) == 0 {
-		return comp, false, false, true
+		return comp, componentResolution{SkipReason: skipReasonUnavailable}
 	}
+	blockedByPolicy := false
 	for _, candidate := range candidates {
-		if candidate.artifact.ArtifactID == currentArtifact.ArtifactID {
+		if currentArtifactFound && candidate.artifact.ArtifactID == currentArtifact.ArtifactID {
 			continue
 		}
-		if compareSemver(candidate.version, currentVersion) <= 0 {
+		if currentVersionKnown && compareSemver(candidate.version, currentVersion) <= 0 {
+			continue
+		}
+		if !allowUnsigned && strings.TrimSpace(candidate.artifact.Signature) == "" {
+			blockedByPolicy = true
+			continue
+		}
+		if err := artifacttrust.ArtifactAllowedByPolicy(candidate.artifact, trustPolicy); err != nil {
+			blockedByPolicy = true
 			continue
 		}
 		prevDesiredVersion := comp.DesiredVersion
 		comp.ArtifactID = candidate.artifact.ArtifactID
 		comp.ArtifactType = candidate.artifact.Type
 		comp.DesiredVersion = candidate.artifact.Version
-		if comp.DesiredConfigRev != "" && (comp.DesiredConfigRev == prevDesiredVersion || comp.DesiredConfigRev == currentArtifact.Version) {
+		if comp.DesiredConfigRev != "" && (comp.DesiredConfigRev == prevDesiredVersion || (currentArtifactFound && comp.DesiredConfigRev == currentArtifact.Version)) {
 			comp.DesiredConfigRev = candidate.artifact.Version
 		}
-		return comp, true, false, false
+		return comp, componentResolution{Updated: true}
 	}
-	return comp, false, false, false
+	if blockedByPolicy {
+		return comp, componentResolution{SkipReason: skipReasonTrustBlocked}
+	}
+	return comp, componentResolution{}
 }
 
 func listAllArtifacts(st store.Store) ([]store.Artifact, error) {
@@ -504,10 +581,24 @@ type autoPolicyEnvelope struct {
 
 type autoPolicyRoot struct {
 	AutoVersion *autoVersionPolicy `json:"autoVersion,omitempty"`
+	Tracking    *trackingPolicy    `json:"tracking,omitempty"`
 }
 
 type autoVersionPolicy struct {
 	Mode string `json:"mode,omitempty"`
+}
+
+type trackingPolicy struct {
+	Mode         string `json:"mode,omitempty"`
+	Name         string `json:"name,omitempty"`
+	ArtifactType string `json:"artifactType,omitempty"`
+}
+
+type trackingSelection struct {
+	Mode         string
+	Name         string
+	ArtifactType string
+	Explicit     bool
 }
 
 func autoModeFromPolicy(raw json.RawMessage) string {
@@ -527,6 +618,31 @@ func autoModeFromPolicy(raw json.RawMessage) string {
 		return mode
 	default:
 		return autoModeInherit
+	}
+}
+
+func trackingFromPolicy(raw json.RawMessage) trackingSelection {
+	if len(raw) == 0 {
+		return trackingSelection{Mode: autoModeInherit}
+	}
+	var env autoPolicyEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return trackingSelection{Mode: autoModeInherit}
+	}
+	if env.Hwops == nil || env.Hwops.Tracking == nil {
+		return trackingSelection{Mode: autoModeInherit}
+	}
+	mode := strings.ToLower(strings.TrimSpace(env.Hwops.Tracking.Mode))
+	switch mode {
+	case autoModeEnabled, autoModeDisabled:
+	default:
+		mode = autoModeInherit
+	}
+	return trackingSelection{
+		Mode:         mode,
+		Name:         strings.TrimSpace(env.Hwops.Tracking.Name),
+		ArtifactType: strings.TrimSpace(env.Hwops.Tracking.ArtifactType),
+		Explicit:     true,
 	}
 }
 

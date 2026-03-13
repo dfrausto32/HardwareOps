@@ -21,7 +21,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Phase B — Operational Maturity | 🟢 Complete | Audit/metrics/events/lifecycle/CI ingest/bulk ops shipped and operational. |
 | Phase B Extension — UX + Realtime | 🟢 Complete | Bulk actions + realtime updates + auth-session UX reset shipped. |
 | Operational Hardening (between B and C) | 🟢 Complete | Pull-boundary, token exposure, startup guardrails, break-glass backend, proxy trust policy, and abuse controls are all shipped. |
-| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, the local-auth recovery stack (recovery codes, reset tokens, break-glass CLI), and CI workload identity federation are shipped. Remaining Phase C work is provenance policy, LDAP, and broader secrets integration. |
+| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, artifact tracking policies, the local-auth recovery stack (recovery codes, reset tokens, break-glass CLI), and CI workload identity federation are shipped. Remaining Phase C work is provenance policy, LDAP, and broader secrets integration. |
 | Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Remaining Phase D work is live-deployment acceptance gate execution, connected email delivery for auth recovery/setup, and custom RBAC policy delegation. |
 
 ### Active work queue (what is still to do)
@@ -29,6 +29,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 No items currently in-flight. Queue is clear.
 
 ### Prepared next tasks (agent-scoped)
+- `C-PROVENANCE-POLICY` — extend trusted-key verification into provenance / supply-chain policy
 - `D-PASSWORD-RECOVERY-EMAIL` — connected email delivery for account setup/reset plus deployment/runbook closeout
 - `D-CUSTOM-RBAC` — per-resource policy model on top of fixed roles
 
@@ -77,6 +78,7 @@ No items currently in-flight. Queue is clear.
 - ✅ Password recovery layers 1–2 (self-service recovery codes plus admin-issued one-time reset tokens with audit coverage and login-screen redemption flows).
 - ✅ Password recovery layer 3 (host-local break-glass CLI for emergency local-admin password reset and recovery-admin creation with explicit audit reason capture).
 - ✅ CI workload identity federation (GitHub/GitLab/Jenkins helper flows, AWS/on-prem provider config wiring, live AWS provider bootstrap, and end-to-end GitHub Actions OIDC exchange plus signed artifact upload validation against the strict trusted-key policy).
+- ✅ Artifact tracking policies (explicit group/device/component auto-follow targets, immediate reconcile on desired-state save, trust-aware eligibility, artifact-family visibility in the UI, device-scoped artifact retrieval for assigned artifacts, and live AWS validation with a local agent applying `trackingdemo` 1.3.0 end-to-end).
 
 ---
 
@@ -241,7 +243,7 @@ No items currently in-flight. Queue is clear.
   - Device slot reclaim/decommission path is explicit and auditable (no silent quota bypass by deletes).
 - **Notes:** Shipped: transactional cap enforcement, clone-suspicion runtime/audit events, hardware identity audit/enforce checks (`device-identity-hardening.md`), hardened startup profile guardrails (`HARDENED_PROFILE`), trusted-proxy allowlist enforcement, and explicit admin decommission endpoint for auditable slot reclaim (`POST /api/v1/devices/{deviceId}/decommission`).
 
-#### Artifact auto-version tracking
+#### Artifact auto-version tracking (v1)
 - **Status:** 🟢 Complete
 - **Scope:** Auto-advance desired state to the newest eligible artifact when `name + type` match and version is semver (`W.X.Y` or `W.X.Y.Z`).
 - **Dependencies:** Artifact metadata hygiene, desired-state components, audit trail.
@@ -252,7 +254,7 @@ No items currently in-flight. Queue is clear.
   - Only `status=active` artifacts are considered; signature required unless unsigned override is enabled.
   - Runs on schedule and immediately after artifact ingest (`create` / `upload` / `pull` / `complete`).
   - Updates components independently and emits audit events for entity updates + run summaries.
-- **Notes:** Supports immediate desired-state updates; agent-side apply rollback behavior remains unchanged.
+- **Notes:** This is the shipped core. The next follow-on item is to productize this as an explicit "artifact tracking policy" model with clearer UX, stronger visibility on the artifacts page, and tighter trust/eligibility controls.
 
 #### Bulk group management
 - **Status:** 🟢 Complete
@@ -453,13 +455,18 @@ Confirm priorities with the team before mapping to agents.
   - Non-compliant selections are blocked or explained inline.
 - **Notes:** Shipped: device, group, and multi-group desired-state editors expose a `Trust` action per component row; the modal supports verification mode, allowed signature types, and allowed signing key IDs; inline trust summaries show inherited/effective policy; artifact selection and version pickers filter against the effective trust policy.
 
-#### Release channels (customer-defined canary/stable)
-- **Status:** ⬜ Planned
-- **Scope:** Customer-owned channel labels and promotion workflow (for environments that want staged channel operations).
-- **Dependencies:** Desired-state/channel model, policy/audit controls, optional health/soak integration.
-- **Risks:** Mis-targeted promotions and policy drift across customers.
-- **Acceptance:** Controlled staged promotions with explicit visibility and rollback path.
-- **Notes:** Deferred from Phase B to Phase C because rollout policy is customer-specific.
+#### Artifact tracking policies (auto-follow latest eligible artifact)
+- **Status:** 🟢 Complete
+- **Scope:** Promote the shipped auto-version resolver into a first-class tracking policy model for groups, devices, and individual desired-state components.
+- **Dependencies:** Existing `autoVersion` resolver, desired-state editors, trust policy model, artifact list visibility, and audit trail.
+- **Risks:** Operator confusion if tracking state and pinned state are not clearly separated; unexpected upgrades if eligibility rules are too broad.
+- **Acceptance:**
+  - Group/device/component desired-state editors expose a first-class tracking control, not just a low-level `autoVersion.mode`.
+  - Tracking policy is explicitly based on `name + type + semver + eligibility` and only moves forward to the latest eligible artifact.
+  - Eligibility integrates with trusted-key policy (`active`, verification mode, allowed signing keys/types).
+  - Artifacts page shows whether artifacts are tracked, eligible, or excluded and why.
+  - Reconciliation still runs on ingest and on schedule, with auditable desired-state updates.
+- **Notes:** Shipped: explicit tracking controls in group/device/multi-group desired-state editors; exact `name + type` targeting; immediate reconcile on save; trust-aware eligibility; artifact-family tracking detail panel in the UI; and device-scoped artifact metadata/presign routes so assigned agents can apply tracked artifacts end-to-end. Classical canary/stable promotion remains deferred because it is customer-policy specific.
 
 #### OIDC SSO
 - **Status:** 🟢 Complete

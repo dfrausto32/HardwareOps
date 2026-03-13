@@ -136,6 +136,138 @@ func TestPresignArtifact(t *testing.T) {
 	}
 }
 
+func TestGetAssignedArtifact(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+
+	artifactID := uuid.NewString()
+	if err := mem.CreateArtifact(store.Artifact{
+		ArtifactID: artifactID,
+		Name:       "agent",
+		Version:    "1.0.0",
+		ObjectKey:  "artifacts/a.tar.gz",
+		SHA256:     "abc",
+		SizeBytes:  10,
+		CreatedAt:  time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("create artifact: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/artifacts/"+artifactID, nil)
+	req = withURLParam(req, "artifactId", artifactID)
+	req, deviceID := attachMTLSDevice(t, mem, req, "")
+	if err := mem.UpsertDesiredStateDevice(store.DesiredStateDevice{
+		DeviceID:       deviceID,
+		ArtifactID:     artifactID,
+		DesiredVersion: "1.0.0",
+		Source:         "manual",
+		UpdatedAt:      time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("upsert desired state device: %v", err)
+	}
+	w := httptest.NewRecorder()
+
+	GetAssignedArtifact(logger, mem, false, "").ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp ArtifactResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid response json: %v", err)
+	}
+	if resp.ArtifactID != artifactID {
+		t.Fatalf("expected artifact id %s, got %s", artifactID, resp.ArtifactID)
+	}
+}
+
+func TestGetAssignedArtifact_FromGroupDesiredState(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+
+	artifactID := uuid.NewString()
+	if err := mem.CreateArtifact(store.Artifact{
+		ArtifactID: artifactID,
+		Name:       "customer",
+		Version:    "2.0.0",
+		ObjectKey:  "artifacts/customer.tar.gz",
+		SHA256:     "abc",
+		SizeBytes:  10,
+		CreatedAt:  time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("create artifact: %v", err)
+	}
+
+	groupID := uuid.NewString()
+	if err := mem.UpsertGroup(store.Group{
+		GroupID:      groupID,
+		Name:         "all-devices",
+		SelectorJSON: []byte(`{}`),
+		CreatedAt:    time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("put group: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/artifacts/"+artifactID+"/presign", bytes.NewReader([]byte("{}")))
+	req = withURLParam(req, "artifactId", artifactID)
+	req, deviceID := attachMTLSDevice(t, mem, req, "")
+	if err := mem.UpsertDesiredStateGroup(store.DesiredStateGroup{
+		GroupID:        groupID,
+		ArtifactID:     artifactID,
+		DesiredVersion: "2.0.0",
+		UpdatedAt:      time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("upsert desired state group: %v", err)
+	}
+
+	objStore := newFakeObjectStore()
+	w := httptest.NewRecorder()
+	PresignAssignedArtifact(logger, mem, objStore, "artifacts", time.Minute, false, "", nil).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp PresignResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid response json: %v", err)
+	}
+	if resp.DownloadURL == "" {
+		t.Fatalf("expected presigned download url")
+	}
+	if deviceID == "" {
+		t.Fatalf("expected device id")
+	}
+}
+
+func TestGetAssignedArtifact_RejectsUnassignedArtifact(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+
+	artifactID := uuid.NewString()
+	if err := mem.CreateArtifact(store.Artifact{
+		ArtifactID: artifactID,
+		Name:       "agent",
+		Version:    "1.0.0",
+		ObjectKey:  "artifacts/a.tar.gz",
+		SHA256:     "abc",
+		SizeBytes:  10,
+		CreatedAt:  time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("create artifact: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/artifacts/"+artifactID, nil)
+	req = withURLParam(req, "artifactId", artifactID)
+	req, _ = attachMTLSDevice(t, mem, req, "")
+	w := httptest.NewRecorder()
+
+	GetAssignedArtifact(logger, mem, false, "").ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestPresignAndCompleteArtifactUpload(t *testing.T) {
 	logger := log.New(&bytes.Buffer{}, "", 0)
 	mem := memory.New()

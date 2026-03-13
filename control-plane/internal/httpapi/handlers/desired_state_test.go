@@ -173,7 +173,7 @@ func TestPutDesiredStateDevice_RejectsUnverifiedArtifactWhenStrictTrustPolicyEna
 	req = withURLParam(req, "deviceId", id)
 	w := httptest.NewRecorder()
 
-	PutDesiredStateDeviceWithPolicy(logger, mem, false, ArtifactSignaturePolicy{Store: mem}).ServeHTTP(w, req)
+	PutDesiredStateDeviceWithPolicy(logger, mem, false, ArtifactSignaturePolicy{Store: mem}, nil).ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", w.Code, w.Body.String())

@@ -47,7 +47,19 @@ export const chartColors = {
 
 export const autoTrackModes = [
   { id: 'inherit', label: 'Inherit' },
-  { id: 'enabled', label: 'Enabled' },
+  { id: 'enabled', label: 'Auto-follow latest' },
+  { id: 'disabled', label: 'Disabled' },
+]
+
+export const groupTrackingModes = [
+  { id: 'inherit', label: 'Inherit global default' },
+  { id: 'enabled', label: 'Auto-follow latest' },
+  { id: 'disabled', label: 'Disabled' },
+]
+
+export const deviceTrackingModes = [
+  { id: 'inherit', label: 'Inherit from group' },
+  { id: 'enabled', label: 'Auto-follow latest' },
   { id: 'disabled', label: 'Disabled' },
 ]
 
@@ -81,24 +93,61 @@ export function parsePolicyObject(raw) {
 
 export function getAutoTrackModeFromPolicy(raw) {
   const policy = parsePolicyObject(raw)
-  const mode = policy?.hwops?.autoVersion?.mode
+  const mode = policy?.hwops?.tracking?.mode || policy?.hwops?.autoVersion?.mode
   if (mode === 'enabled' || mode === 'disabled') return mode
   return 'inherit'
 }
 
-export function mergeAutoTrackModeIntoPolicy(raw, mode) {
+export function getTrackingPolicyFromPolicy(raw) {
   const policy = parsePolicyObject(raw)
   const hwops = policy.hwops && typeof policy.hwops === 'object' ? { ...policy.hwops } : {}
-  const autoVersion = hwops.autoVersion && typeof hwops.autoVersion === 'object' ? { ...hwops.autoVersion } : {}
-  if (mode === 'enabled' || mode === 'disabled') {
-    autoVersion.mode = mode
-    hwops.autoVersion = autoVersion
-    policy.hwops = hwops
-    return policy
+  const tracking = hwops.tracking && typeof hwops.tracking === 'object' ? { ...hwops.tracking } : {}
+  const mode = tracking.mode || hwops?.autoVersion?.mode
+  return {
+    mode: mode === 'enabled' || mode === 'disabled' ? mode : 'inherit',
+    name: String(tracking.name || '').trim(),
+    artifactType: normalizeArtifactType(tracking.artifactType || ''),
   }
-  if (hwops.autoVersion) {
+}
+
+export function mergeAutoTrackModeIntoPolicy(raw, mode) {
+  return mergeTrackingIntoPolicy(raw, { mode })
+}
+
+export function mergeTrackingIntoPolicy(raw, { mode = 'inherit', name = '', artifactType = '' } = {}) {
+  const policy = parsePolicyObject(raw)
+  const hwops = policy.hwops && typeof policy.hwops === 'object' ? { ...policy.hwops } : {}
+  const normalizedMode = mode === 'enabled' || mode === 'disabled' ? mode : 'inherit'
+  const normalizedName = String(name || '').trim()
+  const normalizedType = normalizeArtifactType(artifactType)
+
+  if (normalizedMode === 'enabled' || normalizedMode === 'inherit') {
+    const tracking = {
+      mode: normalizedMode,
+      name: normalizedName,
+      artifactType: normalizedType,
+    }
+    hwops.tracking = tracking
+  } else if (hwops.tracking) {
+    hwops.tracking = { mode: 'disabled' }
+  }
+
+  if (normalizedMode === 'enabled' || normalizedMode === 'disabled') {
+    hwops.autoVersion = { mode: normalizedMode }
+  } else if (hwops.autoVersion) {
     delete hwops.autoVersion
   }
+
+  if (normalizedMode === 'disabled' && !hwops.tracking) {
+    hwops.tracking = { mode: 'disabled' }
+  }
+
+  if (hwops.tracking) {
+    if (!hwops.tracking.name) delete hwops.tracking.name
+    if (!hwops.tracking.artifactType) delete hwops.tracking.artifactType
+    if (Object.keys(hwops.tracking).length === 0) delete hwops.tracking
+  }
+
   if (Object.keys(hwops).length > 0) {
     policy.hwops = hwops
   } else {
@@ -376,9 +425,32 @@ export function newComponentRow(overrides = {}) {
     desiredConfigRev: '',
     policy: {},
     autoTrackMode: 'inherit',
+    trackingName: '',
     locked: false,
     ...overrides,
   }
+}
+
+export function parseSemver4(value) {
+  const raw = String(value || '').trim().replace(/^v/i, '')
+  if (!raw) return null
+  const parts = raw.split('.')
+  if (parts.length !== 3 && parts.length !== 4) return null
+  const values = parts.map((part) => Number.parseInt(part, 10))
+  if (values.some((part) => Number.isNaN(part) || part < 0)) return null
+  while (values.length < 4) values.push(0)
+  return values
+}
+
+export function compareSemver4(a, b) {
+  const left = Array.isArray(a) ? a : parseSemver4(a)
+  const right = Array.isArray(b) ? b : parseSemver4(b)
+  if (!left || !right) return 0
+  for (let idx = 0; idx < 4; idx += 1) {
+    if (left[idx] > right[idx]) return 1
+    if (left[idx] < right[idx]) return -1
+  }
+  return 0
 }
 
 export function normalizeArtifactType(val) {
@@ -885,4 +957,3 @@ export function groupLabeledMetrics(metrics, name, labelKey, mapLabel) {
   })
   return out
 }
-

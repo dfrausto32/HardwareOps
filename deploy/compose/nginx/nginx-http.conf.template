@@ -115,6 +115,34 @@ http {
       proxy_pass http://$control_plane_upstream;
     }
 
+    location ~ "^/api/v1/devices/artifacts/[0-9a-fA-F-]{36}$" {
+      if ($is_agent_host = 0) {
+        return 421;
+      }
+      if ($alb_client_cert_final = "") {
+        return 401;
+      }
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-Proto https;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Client-Cert $alb_client_cert_final;
+      proxy_pass http://$control_plane_upstream;
+    }
+
+    location ~ "^/api/v1/devices/artifacts/[0-9a-fA-F-]{36}/presign$" {
+      if ($is_agent_host = 0) {
+        return 421;
+      }
+      if ($alb_client_cert_final = "") {
+        return 401;
+      }
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-Proto https;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Client-Cert $alb_client_cert_final;
+      proxy_pass http://$control_plane_upstream;
+    }
+
     location ~ "^/api/v1/artifacts/[0-9a-fA-F-]{36}$" {
       proxy_set_header Host $host;
       proxy_set_header X-Forwarded-Proto https;

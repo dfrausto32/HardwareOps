@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hardwareops/control-plane/internal/artifacttrust"
 	"github.com/hardwareops/control-plane/internal/store"
 	"github.com/hardwareops/control-plane/internal/store/memory"
 )
@@ -142,5 +143,180 @@ func TestParseSemver4(t *testing.T) {
 		if ok != tc.ok {
 			t.Fatalf("parseSemver4(%q) expected %v, got %v", tc.value, tc.ok, ok)
 		}
+	}
+}
+
+func TestRunNow_ExplicitTrackingResolvesWithoutCurrentArtifact(t *testing.T) {
+	st := memory.New()
+	_, err := st.SetReleaseAutoUpdateSettings(store.ReleaseAutoUpdateSettings{
+		Enabled:       true,
+		AllowUnsigned: false,
+	})
+	if err != nil {
+		t.Fatalf("set settings: %v", err)
+	}
+
+	artifactA := store.Artifact{
+		ArtifactID:         uuid.NewString(),
+		Name:               "customer-app",
+		Type:               "app_bundle",
+		Version:            "3.1.0",
+		Status:             "active",
+		Signature:          "sig",
+		VerificationStatus: artifacttrust.VerificationStatusVerified,
+		SignatureType:      artifacttrust.SignatureTypeEd25519,
+		SignatureKeyID:     "sha256:test-key",
+		CreatedAt:          time.Now().UTC(),
+	}
+	artifactB := artifactA
+	artifactB.ArtifactID = uuid.NewString()
+	artifactB.Version = "3.2.0"
+	if err := st.CreateArtifact(artifactA); err != nil {
+		t.Fatalf("create artifactA: %v", err)
+	}
+	if err := st.CreateArtifact(artifactB); err != nil {
+		t.Fatalf("create artifactB: %v", err)
+	}
+
+	if err := st.UpsertDesiredStateGroup(store.DesiredStateGroup{
+		GroupID:        uuid.NewString(),
+		ComponentsJSON: []byte(`{"customer":{"artifactType":"app_bundle","desiredVersion":"","policy":{"hwops":{"tracking":{"mode":"enabled","name":"customer-app","artifactType":"app_bundle"}}}}}`),
+		UpdatedAt:      time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("upsert desired group: %v", err)
+	}
+
+	mgr := New(Config{Store: st, Interval: time.Second})
+	if _, err := mgr.RunNow("test"); err != nil {
+		t.Fatalf("run now: %v", err)
+	}
+
+	groups, err := st.ListDesiredStateGroups()
+	if err != nil {
+		t.Fatalf("list desired groups: %v", err)
+	}
+	comp := decodeDesiredComponents(groups[0].ComponentsJSON)["customer"]
+	if comp.ArtifactID != artifactB.ArtifactID {
+		t.Fatalf("expected latest artifact %s, got %s", artifactB.ArtifactID, comp.ArtifactID)
+	}
+	if comp.DesiredVersion != artifactB.Version {
+		t.Fatalf("expected desiredVersion %s, got %s", artifactB.Version, comp.DesiredVersion)
+	}
+}
+
+func TestRunNow_ExplicitTrackingRequiresCompleteTarget(t *testing.T) {
+	st := memory.New()
+	_, err := st.SetReleaseAutoUpdateSettings(store.ReleaseAutoUpdateSettings{
+		Enabled:       true,
+		AllowUnsigned: false,
+	})
+	if err != nil {
+		t.Fatalf("set settings: %v", err)
+	}
+
+	artifact := store.Artifact{
+		ArtifactID: uuid.NewString(),
+		Name:       "customer-app",
+		Type:       "app_bundle",
+		Version:    "1.0.0",
+		Status:     "active",
+		Signature:  "sig",
+		CreatedAt:  time.Now().UTC(),
+	}
+	if err := st.CreateArtifact(artifact); err != nil {
+		t.Fatalf("create artifact: %v", err)
+	}
+	if err := st.UpsertDesiredStateGroup(store.DesiredStateGroup{
+		GroupID:        uuid.NewString(),
+		ComponentsJSON: []byte(`{"customer":{"policy":{"hwops":{"tracking":{"mode":"enabled","name":"customer-app"}}}}}`),
+		UpdatedAt:      time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("upsert desired group: %v", err)
+	}
+
+	mgr := New(Config{Store: st, Interval: time.Second})
+	summary, err := mgr.RunNow("test")
+	if err != nil {
+		t.Fatalf("run now: %v", err)
+	}
+	if summary.SkippedMisconfig != 1 {
+		t.Fatalf("expected one misconfigured component, got %+v", summary)
+	}
+	groups, err := st.ListDesiredStateGroups()
+	if err != nil {
+		t.Fatalf("list desired groups: %v", err)
+	}
+	comp := decodeDesiredComponents(groups[0].ComponentsJSON)["customer"]
+	if comp.ArtifactID != "" {
+		t.Fatalf("expected unresolved artifactId, got %s", comp.ArtifactID)
+	}
+}
+
+func TestRunNow_ExplicitTrackingHonorsTrustPolicy(t *testing.T) {
+	st := memory.New()
+	_, err := st.SetReleaseAutoUpdateSettings(store.ReleaseAutoUpdateSettings{
+		Enabled:       true,
+		AllowUnsigned: true,
+	})
+	if err != nil {
+		t.Fatalf("set settings: %v", err)
+	}
+	_, err = st.SetArtifactTrustPolicy(store.ArtifactTrustPolicy{
+		VerificationMode:          artifacttrust.VerificationModeRequire,
+		AllowedSigningKeyIDsJSON:  []byte(`["sha256:trusted"]`),
+		AllowedSignatureTypesJSON: []byte(`["ed25519"]`),
+		UpdatedAt:                 time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("set trust policy: %v", err)
+	}
+
+	legacyNew := store.Artifact{
+		ArtifactID:         uuid.NewString(),
+		Name:               "secure-app",
+		Type:               "app_bundle",
+		Version:            "2.0.0",
+		Status:             "active",
+		Signature:          "sig",
+		SignatureType:      artifacttrust.SignatureTypeEd25519,
+		SignatureKeyID:     "sha256:trusted",
+		VerificationStatus: artifacttrust.VerificationStatusLegacy,
+		CreatedAt:          time.Now().UTC(),
+	}
+	verifiedNew := legacyNew
+	verifiedNew.ArtifactID = uuid.NewString()
+	verifiedNew.Version = "2.1.0"
+	verifiedNew.VerificationStatus = artifacttrust.VerificationStatusVerified
+	if err := st.CreateArtifact(legacyNew); err != nil {
+		t.Fatalf("create legacyNew: %v", err)
+	}
+	if err := st.CreateArtifact(verifiedNew); err != nil {
+		t.Fatalf("create verifiedNew: %v", err)
+	}
+
+	if err := st.UpsertDesiredStateGroup(store.DesiredStateGroup{
+		GroupID:        uuid.NewString(),
+		ComponentsJSON: []byte(`{"secure":{"policy":{"hwops":{"tracking":{"mode":"enabled","name":"secure-app","artifactType":"app_bundle"}}}}}`),
+		UpdatedAt:      time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("upsert desired group: %v", err)
+	}
+
+	mgr := New(Config{Store: st, Interval: time.Second})
+	summary, err := mgr.RunNow("test")
+	if err != nil {
+		t.Fatalf("run now: %v", err)
+	}
+	if summary.SkippedTrustBlocked != 0 {
+		t.Fatalf("expected verified candidate to be selected, got summary %+v", summary)
+	}
+
+	groups, err := st.ListDesiredStateGroups()
+	if err != nil {
+		t.Fatalf("list desired groups: %v", err)
+	}
+	comp := decodeDesiredComponents(groups[0].ComponentsJSON)["secure"]
+	if comp.ArtifactID != verifiedNew.ArtifactID {
+		t.Fatalf("expected verified artifact %s, got %s", verifiedNew.ArtifactID, comp.ArtifactID)
 	}
 }

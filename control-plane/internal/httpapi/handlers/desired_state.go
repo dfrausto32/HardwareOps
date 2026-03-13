@@ -69,15 +69,19 @@ type DesiredStateListResponse struct {
 	Devices []DesiredStateDeviceResponse `json:"devices,omitempty"`
 }
 
+type desiredStateReleaseAutoTrigger interface {
+	Trigger(reason string)
+}
+
 func PutDesiredStateGroup(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
-	return putDesiredStateGroup(logger, st, trustProxy, ArtifactSignaturePolicy{})
+	return putDesiredStateGroup(logger, st, trustProxy, ArtifactSignaturePolicy{}, nil)
 }
 
-func PutDesiredStateGroupWithPolicy(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
-	return putDesiredStateGroup(logger, st, trustProxy, sigPolicy)
+func PutDesiredStateGroupWithPolicy(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto desiredStateReleaseAutoTrigger) http.HandlerFunc {
+	return putDesiredStateGroup(logger, st, trustProxy, sigPolicy, releaseAuto)
 }
 
-func putDesiredStateGroup(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
+func putDesiredStateGroup(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto desiredStateReleaseAutoTrigger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "groupId")
 		if groupID == "" {
@@ -147,6 +151,9 @@ func putDesiredStateGroup(logger *log.Logger, st store.Store, trustProxy bool, s
 			"components":       components,
 		})
 		writeAudit(logger, st, event, nil)
+		if releaseAuto != nil {
+			releaseAuto.Trigger("desired_state_group_upsert")
+		}
 
 		resp := DesiredStateGroupResponse{
 			GroupID:          state.GroupID,
@@ -164,14 +171,14 @@ func putDesiredStateGroup(logger *log.Logger, st store.Store, trustProxy bool, s
 }
 
 func PutDesiredStateDevice(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
-	return putDesiredStateDevice(logger, st, trustProxy, ArtifactSignaturePolicy{})
+	return putDesiredStateDevice(logger, st, trustProxy, ArtifactSignaturePolicy{}, nil)
 }
 
-func PutDesiredStateDeviceWithPolicy(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
-	return putDesiredStateDevice(logger, st, trustProxy, sigPolicy)
+func PutDesiredStateDeviceWithPolicy(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto desiredStateReleaseAutoTrigger) http.HandlerFunc {
+	return putDesiredStateDevice(logger, st, trustProxy, sigPolicy, releaseAuto)
 }
 
-func putDesiredStateDevice(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
+func putDesiredStateDevice(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto desiredStateReleaseAutoTrigger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		deviceID := chi.URLParam(r, "deviceId")
 		if deviceID == "" {
@@ -252,6 +259,9 @@ func putDesiredStateDevice(logger *log.Logger, st store.Store, trustProxy bool, 
 			"source":           state.Source,
 		})
 		writeAudit(logger, st, event, nil)
+		if releaseAuto != nil {
+			releaseAuto.Trigger("desired_state_device_upsert")
+		}
 
 		resp := DesiredStateDeviceResponse{
 			DeviceID:         state.DeviceID,
