@@ -16,11 +16,11 @@ jobs:
       id-token: write
     env:
       HWOPS_BASE_URL: ${{ vars.HWOPS_BASE_URL }}
-      CI_WORKLOAD_IDENTITY_AUDIENCE: ${{ vars.HWOPS_WORKLOAD_IDENTITY_AUDIENCE || 'hardwareops-ci' }}
-      WORKLOAD_IDENTITY_PROVIDER: ${{ vars.HWOPS_WORKLOAD_IDENTITY_PROVIDER || 'github-actions' }}
       SIGNING_KEY_ID: ${{ vars.HWOPS_SIGNING_KEY_ID }}
       HWOPS_CA_CERT_B64: ${{ secrets.HWOPS_CA_CERT_B64 }}
       HWOPS_SIGNING_KEY_B64: ${{ secrets.HWOPS_SIGNING_KEY_B64 }}
+      HWOPS_ADMIN_EMAIL: ${{ secrets.HWOPS_ADMIN_EMAIL }}
+      HWOPS_ADMIN_PASSWORD: ${{ secrets.HWOPS_ADMIN_PASSWORD }}
 
     steps:
       - name: Checkout
@@ -45,6 +45,10 @@ jobs:
             echo "Set repository variable HWOPS_SIGNING_KEY_ID (sha256:... key ID)." >&2
             exit 1
           }
+          ( test -n "$HWOPS_ADMIN_EMAIL" && test -n "$HWOPS_ADMIN_PASSWORD" ) || {
+            echo "Set secrets HWOPS_ADMIN_EMAIL and HWOPS_ADMIN_PASSWORD for login-based auth." >&2
+            exit 1
+          }
 
       - name: Write optional CA certificate
         if: ${{ env.HWOPS_CA_CERT_B64 != '' }}
@@ -55,31 +59,32 @@ jobs:
           echo "$HWOPS_SIGNING_KEY_B64" | base64 -d > /tmp/hwops-signing.key
           chmod 600 /tmp/hwops-signing.key
 
-      - name: Exchange GitHub Actions OIDC token
-        id: exchange
-        env:
-          BASE_URL: ${{ env.HWOPS_BASE_URL }}
-          CA_CERT_PATH: /tmp/hwops-ca.crt
-          WORKLOAD_IDENTITY_PROVIDER: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
-          CI_WORKLOAD_IDENTITY_AUDIENCE: ${{ env.CI_WORKLOAD_IDENTITY_AUDIENCE }}
+      - name: Login and obtain auth token
+        id: auth
         run: |
-          AUTH_TOKEN="$(./scripts/ci-exchange-workload-identity.sh)"
-          test -n "$AUTH_TOKEN"
-          echo "auth_token=$AUTH_TOKEN" >> "$GITHUB_OUTPUT"
+          ca_args=()
+          if [ -f /tmp/hwops-ca.crt ]; then
+            ca_args+=(--cacert /tmp/hwops-ca.crt)
+          fi
+          LOGIN=$(curl -sS --fail "${ca_args[@]}" \
+            -X POST "$HWOPS_BASE_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\":\"$HWOPS_ADMIN_EMAIL\",\"password\":\"$HWOPS_ADMIN_PASSWORD\"}")
+          TOKEN=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['token'])" "$LOGIN")
+          test -n "$TOKEN"
+          echo "auth_token=$TOKEN" >> "$GITHUB_OUTPUT"
 
       - name: Run duplicate ingest smoke test
         env:
           BASE_URL: ${{ env.HWOPS_BASE_URL }}
-          AUTH_TOKEN: ${{ steps.exchange.outputs.auth_token }}
-          CA_CERT_PATH: /tmp/hwops-ca.crt
+          AUTH_TOKEN: ${{ steps.auth.outputs.auth_token }}
           SIGNING_KEY: /tmp/hwops-signing.key
           SIGNING_KEY_ID: ${{ env.SIGNING_KEY_ID }}
           ARTIFACT_VERSION: ${{ inputs.artifact_version || format('1.0.{0}', github.run_number) }}
           ARTIFACT_NAME: gha-dup-smoke
         run: |
-          ca_args=()
-          if [ -f "$CA_CERT_PATH" ]; then
-            export CA_CERT_PATH="$CA_CERT_PATH"
+          if [ -f /tmp/hwops-ca.crt ]; then
+            export CA_CERT_PATH=/tmp/hwops-ca.crt
           else
             export INSECURE=1
           fi
