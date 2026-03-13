@@ -1,0 +1,86 @@
+name: artifact-duplicate-ingest-smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_version:
+        description: "Version string for the smoke artifact (default: 1.0.<run_number>)"
+        required: false
+        type: string
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      HWOPS_BASE_URL: ${{ vars.HWOPS_BASE_URL }}
+      CI_WORKLOAD_IDENTITY_AUDIENCE: ${{ vars.HWOPS_WORKLOAD_IDENTITY_AUDIENCE || 'hardwareops-ci' }}
+      WORKLOAD_IDENTITY_PROVIDER: ${{ vars.HWOPS_WORKLOAD_IDENTITY_PROVIDER || 'github-actions' }}
+      SIGNING_KEY_ID: ${{ vars.HWOPS_SIGNING_KEY_ID }}
+      HWOPS_CA_CERT_B64: ${{ secrets.HWOPS_CA_CERT_B64 }}
+      HWOPS_SIGNING_KEY_B64: ${{ secrets.HWOPS_SIGNING_KEY_B64 }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Validate configuration
+        run: |
+          test -n "$HWOPS_BASE_URL" || {
+            echo "Set repository variable HWOPS_BASE_URL before running this workflow." >&2
+            exit 1
+          }
+          test -n "$HWOPS_SIGNING_KEY_B64" || {
+            echo "Set repository secret HWOPS_SIGNING_KEY_B64 (Ed25519 private key, base64-encoded)." >&2
+            exit 1
+          }
+          test -n "$SIGNING_KEY_ID" || {
+            echo "Set repository variable HWOPS_SIGNING_KEY_ID (sha256:... key ID)." >&2
+            exit 1
+          }
+
+      - name: Write optional CA certificate
+        if: ${{ env.HWOPS_CA_CERT_B64 != '' }}
+        run: echo "$HWOPS_CA_CERT_B64" | base64 -d > /tmp/hwops-ca.crt
+
+      - name: Write signing key
+        run: |
+          echo "$HWOPS_SIGNING_KEY_B64" | base64 -d > /tmp/hwops-signing.key
+          chmod 600 /tmp/hwops-signing.key
+
+      - name: Exchange GitHub Actions OIDC token
+        id: exchange
+        env:
+          BASE_URL: ${{ env.HWOPS_BASE_URL }}
+          CA_CERT_PATH: /tmp/hwops-ca.crt
+          WORKLOAD_IDENTITY_PROVIDER: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          CI_WORKLOAD_IDENTITY_AUDIENCE: ${{ env.CI_WORKLOAD_IDENTITY_AUDIENCE }}
+        run: |
+          AUTH_TOKEN="$(./scripts/ci-exchange-workload-identity.sh)"
+          test -n "$AUTH_TOKEN"
+          echo "auth_token=$AUTH_TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Run duplicate ingest smoke test
+        env:
+          BASE_URL: ${{ env.HWOPS_BASE_URL }}
+          AUTH_TOKEN: ${{ steps.exchange.outputs.auth_token }}
+          CA_CERT_PATH: /tmp/hwops-ca.crt
+          SIGNING_KEY: /tmp/hwops-signing.key
+          SIGNING_KEY_ID: ${{ env.SIGNING_KEY_ID }}
+          ARTIFACT_VERSION: ${{ inputs.artifact_version || format('1.0.{0}', github.run_number) }}
+          ARTIFACT_NAME: gha-dup-smoke
+        run: |
+          ca_args=()
+          if [ -f "$CA_CERT_PATH" ]; then
+            export CA_CERT_PATH="$CA_CERT_PATH"
+          else
+            export INSECURE=1
+          fi
+          ./scripts/test-artifact-duplicate-ingest.sh
