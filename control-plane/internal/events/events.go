@@ -41,11 +41,18 @@ func NewHub(buffer int) *Hub {
 
 func (h *Hub) Publish(event Event) {
 	h.mu.RLock()
-	defer h.mu.RUnlock()
+	// Snapshot subscriber channels so we can release the lock before sending.
+	snapshot := make([]chan Event, 0, len(h.subs))
 	for ch := range h.subs {
+		snapshot = append(snapshot, ch)
+	}
+	h.mu.RUnlock()
+
+	for _, ch := range snapshot {
 		select {
 		case ch <- event:
 		default:
+			// Subscriber buffer full; drop event for this subscriber rather than blocking.
 		}
 	}
 }

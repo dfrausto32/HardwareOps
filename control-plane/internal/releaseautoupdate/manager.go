@@ -254,9 +254,13 @@ func (m *Manager) run(trigger string) (RunSummary, error) {
 }
 
 func (m *Manager) updateGroups(defaultEnabled, allowUnsigned bool, globalTrustPolicy store.ArtifactTrustPolicy, byID map[string]store.Artifact, index map[string][]versionedArtifact, run *RunSummary) error {
+	// TODO: paginate store.ListDesiredStateGroups at the store layer for true scalability.
 	groups, err := m.store.ListDesiredStateGroups()
 	if err != nil {
 		return err
+	}
+	if len(groups) > 10000 {
+		m.logger("auto-update: WARNING processing %d groups; consider paginating store.ListDesiredStateGroups", len(groups))
 	}
 	for _, group := range groups {
 		components := mergeLegacyDesiredComponents(decodeDesiredComponents(group.ComponentsJSON), group.ArtifactID, group.DesiredVersion, group.DesiredConfigRev, group.PolicyJSON, "")
@@ -305,9 +309,13 @@ func (m *Manager) updateGroups(defaultEnabled, allowUnsigned bool, globalTrustPo
 }
 
 func (m *Manager) updateDevices(defaultEnabled, allowUnsigned bool, globalTrustPolicy store.ArtifactTrustPolicy, byID map[string]store.Artifact, index map[string][]versionedArtifact, run *RunSummary) error {
+	// TODO: paginate store.ListDesiredStateDevices at the store layer for true scalability.
 	devices, err := m.store.ListDesiredStateDevices()
 	if err != nil {
 		return err
+	}
+	if len(devices) > 10000 {
+		m.logger("auto-update: WARNING processing %d devices; consider paginating store.ListDesiredStateDevices", len(devices))
 	}
 	for _, desired := range devices {
 		if strings.TrimSpace(strings.ToLower(desired.Source)) != "manual" {

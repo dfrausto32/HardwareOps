@@ -967,6 +967,13 @@ func (s *Store) GetDesiredStateGroupForDevice(deviceID string) (store.DesiredSta
 	return picked, found, nil
 }
 
+func (s *Store) GetDesiredStateGroup(groupID string) (store.DesiredStateGroup, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.desiredGroups[groupID]
+	return d, ok, nil
+}
+
 func (s *Store) ListDesiredStateGroups() ([]store.DesiredStateGroup, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

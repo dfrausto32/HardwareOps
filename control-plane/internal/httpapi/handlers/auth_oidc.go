@@ -68,8 +68,9 @@ func OIDCCallback(logger *log.Logger, provider *auth.OIDCProvider, st store.Stor
 			AuthMethod: "oidc",
 		}, "auth.oidc.login", "user", user.UserID), nil)
 
-		// Redirect the SPA with the token in query param so it can capture it.
-		redirectURL := "/?oidc_token=" + token
+		// Use the URL fragment so the token is not sent to the server and not
+		// recorded in proxy access logs or server logs.
+		redirectURL := "/#oidc_token=" + token
 		_ = expiresAt
 		http.Redirect(w, r, redirectURL, http.StatusFound)
 	}

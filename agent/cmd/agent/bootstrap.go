@@ -2,8 +2,8 @@ package main
 
 import (
 	"crypto"
+	"crypto/ed25519"
 	crand "crypto/rand"
-	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -310,7 +310,7 @@ func ensureDeviceKey(path string) (crypto.Signer, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	key, err := rsa.GenerateKey(crand.Reader, 2048)
+	_, key, err := ed25519.GenerateKey(crand.Reader)
 	if err != nil {
 		return nil, err
 	}

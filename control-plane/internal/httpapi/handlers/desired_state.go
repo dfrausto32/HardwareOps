@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,8 +66,10 @@ type DesiredStateDeviceResponse struct {
 }
 
 type DesiredStateListResponse struct {
-	Groups  []DesiredStateGroupResponse  `json:"groups,omitempty"`
-	Devices []DesiredStateDeviceResponse `json:"devices,omitempty"`
+	Groups      []DesiredStateGroupResponse  `json:"groups,omitempty"`
+	Devices     []DesiredStateDeviceResponse `json:"devices,omitempty"`
+	GroupTotal  int                          `json:"groupTotal"`
+	DeviceTotal int                          `json:"deviceTotal"`
 }
 
 type desiredStateReleaseAutoTrigger interface {
@@ -328,6 +331,18 @@ func ListDesiredState(logger *log.Logger, st store.Store, trustProxy bool) http.
 		scope := r.URL.Query().Get("scope")
 		resp := DesiredStateListResponse{}
 
+		// Apply pagination to avoid returning unbounded results.
+		limitStr := r.URL.Query().Get("limit")
+		offsetStr := r.URL.Query().Get("offset")
+		pageLimit := 500
+		pageOffset := 0
+		if v, err := strconv.Atoi(limitStr); err == nil && v > 0 && v <= 1000 {
+			pageLimit = v
+		}
+		if v, err := strconv.Atoi(offsetStr); err == nil && v >= 0 {
+			pageOffset = v
+		}
+
 		if scope == "" || scope == "group" {
 			groups, err := st.ListDesiredStateGroups()
 			if err != nil {
@@ -335,6 +350,16 @@ func ListDesiredState(logger *log.Logger, st store.Store, trustProxy bool) http.
 				http.Error(w, "storage error", http.StatusInternalServerError)
 				return
 			}
+			resp.GroupTotal = len(groups)
+			start := pageOffset
+			if start > len(groups) {
+				start = len(groups)
+			}
+			end := start + pageLimit
+			if end > len(groups) {
+				end = len(groups)
+			}
+			groups = groups[start:end]
 			resp.Groups = make([]DesiredStateGroupResponse, 0, len(groups))
 			for _, g := range groups {
 				components := decodeDesiredComponents(g.ComponentsJSON)
@@ -359,6 +384,16 @@ func ListDesiredState(logger *log.Logger, st store.Store, trustProxy bool) http.
 				http.Error(w, "storage error", http.StatusInternalServerError)
 				return
 			}
+			resp.DeviceTotal = len(devices)
+			start := pageOffset
+			if start > len(devices) {
+				start = len(devices)
+			}
+			end := start + pageLimit
+			if end > len(devices) {
+				end = len(devices)
+			}
+			devices = devices[start:end]
 			resp.Devices = make([]DesiredStateDeviceResponse, 0, len(devices))
 			for _, d := range devices {
 				components := decodeDesiredComponents(d.ComponentsJSON)
@@ -523,16 +558,11 @@ func existingGroupComponents(st store.Store, groupID string) map[string]DesiredC
 	if st == nil {
 		return nil
 	}
-	groups, err := st.ListDesiredStateGroups()
-	if err != nil {
+	group, ok, err := st.GetDesiredStateGroup(groupID)
+	if err != nil || !ok {
 		return nil
 	}
-	for _, group := range groups {
-		if group.GroupID == groupID {
-			return decodeDesiredComponents(group.ComponentsJSON)
-		}
-	}
-	return nil
+	return decodeDesiredComponents(group.ComponentsJSON)
 }
 
 func legacyFromComponents(components map[string]DesiredComponentResponse) legacyDesired {

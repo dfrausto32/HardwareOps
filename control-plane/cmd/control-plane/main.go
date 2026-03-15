@@ -58,7 +58,20 @@ func main() {
 		logger.Fatal("DATABASE_URL is required")
 	}
 
-	pool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
+	poolCfg, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		logger.Fatalf("db config parse: %v", err)
+	}
+	if cfg.DBMaxConns > 0 {
+		poolCfg.MaxConns = int32(cfg.DBMaxConns)
+	}
+	if cfg.DBMinConns > 0 {
+		poolCfg.MinConns = int32(cfg.DBMinConns)
+	}
+	if cfg.DBMaxConnIdleTime > 0 {
+		poolCfg.MaxConnIdleTime = cfg.DBMaxConnIdleTime
+	}
+	pool, err := pgxpool.NewWithConfig(context.Background(), poolCfg)
 	if err != nil {
 		logger.Fatalf("db connect: %v", err)
 	}

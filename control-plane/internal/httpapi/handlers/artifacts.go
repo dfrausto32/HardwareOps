@@ -238,7 +238,8 @@ func createArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 		if objStore != nil && bucket != "" {
 			verification, actualSHA, sizeBytes, err = verifyStoredArtifact(r.Context(), st, objStore, bucket, req.ObjectKey, req.SHA256, req.Signature, signatureType, req.SignatureKeyID, sigPolicy)
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
+				logger.Printf("verify artifact error: %v", err)
+				http.Error(w, "artifact verification failed", http.StatusBadRequest)
 				return
 			}
 		} else {
@@ -433,7 +434,8 @@ func uploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 		if err != nil {
 			record("error")
 			_ = objStore.DeleteObject(r.Context(), bucket, objectKey)
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			logger.Printf("verify artifact error: %v", err)
+			http.Error(w, "artifact verification failed", http.StatusBadRequest)
 			return
 		}
 		artifact := store.Artifact{
@@ -738,7 +740,8 @@ func pullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, buck
 		if err != nil {
 			record("error")
 			_ = objStore.DeleteObject(r.Context(), bucket, objectKey)
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			logger.Printf("verify artifact error: %v", err)
+			http.Error(w, "artifact verification failed", http.StatusBadRequest)
 			return
 		}
 
@@ -1025,7 +1028,8 @@ func completeArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectS
 		recordArtifactVerificationMetrics(metricsCollector, "complete", verification)
 		if err != nil {
 			record("error")
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			logger.Printf("verify artifact error: %v", err)
+			http.Error(w, "artifact verification failed", http.StatusBadRequest)
 			return
 		}
 

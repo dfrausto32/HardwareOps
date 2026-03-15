@@ -394,6 +394,7 @@ type Store interface {
 	GetDesiredStateDevice(deviceID string) (DesiredStateDevice, bool, error)
 	GetDesiredStateGroupForDevice(deviceID string) (DesiredStateGroup, bool, error)
 	ListDesiredStateGroups() ([]DesiredStateGroup, error)
+	GetDesiredStateGroup(groupID string) (DesiredStateGroup, bool, error)
 	ListDesiredStateDevices() ([]DesiredStateDevice, error)
 	DeleteDesiredStateDevice(deviceID string) error
 	DeleteDesiredStateGroup(groupID string) error

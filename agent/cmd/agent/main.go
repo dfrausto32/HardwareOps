@@ -132,6 +132,7 @@ func main() {
 					SigningKeyID:        cfg.SigningKeyID,
 					RequireSignature:    cfg.RequireSignature,
 					TrustKeys:           trustKeysFromState(st),
+					VerificationMode:    cfg.VerificationMode,
 				}
 				applyErr := applyDesiredComponents(cfg.ArtifactRoot, c, desiredComponents, &st, logger, applyOpts)
 				if applyErr != nil {
@@ -257,8 +258,14 @@ func generateCSR(key crypto.Signer, commonName string) ([]byte, error) {
 }
 
 func buildTLSConfig(cfg config.Config, logger *logging.Logger) *tls.Config {
+	// If no TLS config at all, allow it (unauthenticated dev mode).
 	if cfg.CACertPath == "" && cfg.DeviceCertPath == "" && cfg.DeviceKeyPath == "" {
 		return nil
+	}
+	// Once any TLS option is set, require the CA cert to prevent system CA fallback.
+	if cfg.CACertPath == "" {
+		logger.Errorf("CONTROL_PLANE_CA_CERT_PATH is required when using mTLS; refusing to fall back to system CA store")
+		os.Exit(1)
 	}
 
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}

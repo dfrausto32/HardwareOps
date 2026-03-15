@@ -32,6 +32,7 @@ type Config struct {
 	SigningKeyID           string
 	RequireSignature       bool
 	AutoReenroll           bool
+	VerificationMode       string
 }
 
 func FromEnv() Config {
@@ -104,6 +105,13 @@ func FromEnv() Config {
 		SigningKeyID:           os.Getenv("SIGNING_KEY_ID"),
 		RequireSignature:       parseBoolEnv("REQUIRE_ARTIFACT_SIGNATURE"),
 		AutoReenroll:           parseBoolEnvDefault("AUTO_REENROLL", true),
+		VerificationMode: func() string {
+			mode := strings.TrimSpace(strings.ToLower(os.Getenv("ARTIFACT_SIGNING_MODE")))
+			if mode == "" {
+				return "require_verified"
+			}
+			return mode
+		}(),
 	}
 }
 

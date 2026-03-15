@@ -267,11 +267,47 @@ func stepScriptPreApply(step plan.Step, ctx Context) error {
 	}
 	defer cancel()
 
+	// Reject commands with path traversal components.
+	if strings.Contains(command, "..") {
+		return fmt.Errorf("preApply command must not contain '..': %s", command)
+	}
+	// Reject absolute paths (commands must be relative, inside the artifact).
+	if filepath.IsAbs(command) {
+		return fmt.Errorf("preApply command must be a relative path: %s", command)
+	}
+	// Verify the resolved path is inside WorkingDir.
+	absWorking, err := filepath.Abs(ctx.WorkingDir)
+	if err != nil {
+		return fmt.Errorf("resolve working dir: %w", err)
+	}
+	absCommand, err := filepath.Abs(commandPath)
+	if err != nil {
+		return fmt.Errorf("resolve command path: %w", err)
+	}
+	if !strings.HasPrefix(absCommand, absWorking+string(filepath.Separator)) {
+		return fmt.Errorf("preApply command path escapes artifact directory: %s", command)
+	}
+	// Command must be a regular file, not a symlink or directory.
+	info, err := os.Lstat(commandPath)
+	if err != nil {
+		return fmt.Errorf("stat preApply command: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("preApply command must be a regular file: %s", command)
+	}
+
 	cmd := exec.CommandContext(ctxTimeout, commandPath, args...)
 	cmd.Dir = ctx.WorkingDir
-	if len(ctx.Env) > 0 {
-		cmd.Env = append(os.Environ(), ctx.Env...)
+	// Build a minimal base environment to prevent LD_PRELOAD, PATH, and similar
+	// injection attacks via the parent process environment.
+	baseEnv := []string{"PATH=/usr/bin:/bin:/usr/local/bin"}
+	if home := os.Getenv("HOME"); home != "" {
+		baseEnv = append(baseEnv, "HOME="+home)
 	}
+	if user := os.Getenv("USER"); user != "" {
+		baseEnv = append(baseEnv, "USER="+user)
+	}
+	cmd.Env = append(baseEnv, ctx.Env...)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out

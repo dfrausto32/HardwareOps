@@ -140,6 +140,9 @@ type Config struct {
 	DeviceIdentityRequireOnEnroll          bool
 	DeviceIdentityRequireOnCheckin         bool
 	HardenedProfile                        bool
+	DBMaxConns                             int
+	DBMinConns                             int
+	DBMaxConnIdleTime                      time.Duration
 }
 
 const defaultTrustedProxyCIDRs = "127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fc00::/7,fe80::/10"
@@ -291,6 +294,9 @@ func FromEnv() Config {
 		DeviceIdentityRequireOnEnroll:          parseBoolEnvDefault("DEVICE_IDENTITY_REQUIRE_ON_ENROLL", false),
 		DeviceIdentityRequireOnCheckin:         parseBoolEnvDefault("DEVICE_IDENTITY_REQUIRE_ON_CHECKIN", false),
 		HardenedProfile:                        parseBoolEnvDefault("HARDENED_PROFILE", false),
+		DBMaxConns:                             getenvInt("DB_MAX_CONNS", 50),
+		DBMinConns:                             getenvInt("DB_MIN_CONNS", 5),
+		DBMaxConnIdleTime:                      parseDurationDefault(getenvDefault("DB_MAX_CONN_IDLE_TIME", "10m"), 10*time.Minute),
 	}
 }
 

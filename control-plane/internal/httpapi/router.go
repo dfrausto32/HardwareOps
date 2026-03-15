@@ -20,6 +20,7 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 	if len(deps.CORSAllowedOrigins) > 0 {
 		r.Use(CORS(deps.CORSAllowedOrigins))
 	}
+	r.Use(SecurityHeaders())
 	if deps.Metrics != nil {
 		r.Use(deps.Metrics.Middleware)
 	}
@@ -181,7 +182,10 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(operator).Delete("/devices/{deviceId}", handlers.DeleteDevice(logger, deps.Store, deps.TrustProxy))
 		r.With(admin).Post("/devices/{deviceId}/decommission", handlers.DecommissionDevice(logger, deps.Store, deps.TrustProxy))
 		r.With(operator).Patch("/devices/{deviceId}", handlers.PatchDevice(logger, deps.Store, deps.TrustProxy))
-		r.With(applyLimiter.Middleware).Post("/devices/{deviceId}/apply-result", handlers.PostApplyResult(logger, deps.Store, deps.Events, deps.TrustProxy, deps.ClientCertHeader, deps.Metrics))
+		deviceIDKey := func(r *http.Request) string {
+			return chi.URLParam(r, "deviceId")
+		}
+		r.Method(http.MethodPost, "/devices/{deviceId}/apply-result", applyLimiter.MiddlewareWithKey(deviceIDKey, handlers.PostApplyResult(logger, deps.Store, deps.Events, deps.TrustProxy, deps.ClientCertHeader, deps.Metrics)))
 		var activeCAPool func() *x509.CertPool
 		if deps.CertManager != nil {
 			activeCAPool = deps.CertManager.ActivePool

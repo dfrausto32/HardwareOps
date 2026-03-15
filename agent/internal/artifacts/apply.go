@@ -209,21 +209,32 @@ func downloadAndVerify(client *http.Client, url, dest, expectedSHA string) (stri
 		return "", fmt.Errorf("download failed: status=%d", resp.StatusCode)
 	}
 
-	f, err := os.Create(dest)
+	tmpDest := dest + ".tmp"
+	f, err := os.OpenFile(tmpDest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
 
 	h := sha256.New()
 	mw := io.MultiWriter(f, h)
 	if _, err := io.Copy(mw, resp.Body); err != nil {
+		f.Close()
+		_ = os.Remove(tmpDest)
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmpDest)
 		return "", err
 	}
 
 	sum := hex.EncodeToString(h.Sum(nil))
 	if expectedSHA != "" && !strings.EqualFold(sum, expectedSHA) {
+		_ = os.Remove(tmpDest)
 		return "", fmt.Errorf("sha256 mismatch: expected %s got %s", expectedSHA, sum)
+	}
+	if err := os.Rename(tmpDest, dest); err != nil {
+		_ = os.Remove(tmpDest)
+		return "", fmt.Errorf("rename download: %w", err)
 	}
 	return sum, nil
 }
@@ -404,13 +415,15 @@ func normalizeVerificationMode(opts ApplyOptions) string {
 	switch mode {
 	case "allow_unsigned":
 		return "allow_unsigned"
+	case "warn_unsigned":
+		return "warn_unsigned"
 	case "require_verified":
 		return "require_verified"
 	default:
 		if opts.RequireSignature {
 			return "require_verified"
 		}
-		return "warn_unsigned"
+		return "require_verified"
 	}
 }
 
@@ -474,6 +487,10 @@ func extractTarGz(archivePath, dest string) error {
 			return fmt.Errorf("invalid path in archive: %s", hdr.Name)
 		}
 		path := filepath.Join(dest, hdr.Name)
+		// Post-join bounds check: ensure the resolved path is still inside dest.
+		if !strings.HasPrefix(path, dest+string(filepath.Separator)) && path != dest {
+			return fmt.Errorf("invalid path in archive (traversal): %s", hdr.Name)
+		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(path, 0o755); err != nil {
@@ -492,6 +509,8 @@ func extractTarGz(archivePath, dest string) error {
 				return err
 			}
 			out.Close()
+		case tar.TypeSymlink:
+			return fmt.Errorf("symlinks are not permitted in artifact archives: %s -> %s", hdr.Name, hdr.Linkname)
 		}
 	}
 	return nil
