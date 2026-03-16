@@ -162,6 +162,47 @@ import {
   sumLabeled,
   groupLabeledMetrics,
 } from './lib/appShared'
+
+const navIcons = {
+  'icon-dashboard': (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <rect x="1" y="1" width="6" height="6" rx="1.5"/>
+      <rect x="9" y="1" width="6" height="6" rx="1.5"/>
+      <rect x="1" y="9" width="6" height="6" rx="1.5"/>
+      <rect x="9" y="9" width="6" height="6" rx="1.5"/>
+    </svg>
+  ),
+  'icon-metrics': (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <rect x="1" y="9" width="3" height="6" rx="1"/>
+      <rect x="6" y="5" width="3" height="10" rx="1"/>
+      <rect x="11" y="2" width="3" height="13" rx="1"/>
+    </svg>
+  ),
+  'icon-logs': (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+      <line x1="2" y1="4" x2="14" y2="4"/>
+      <line x1="2" y1="8" x2="14" y2="8"/>
+      <line x1="2" y1="12" x2="10" y2="12"/>
+    </svg>
+  ),
+  'icon-security': (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path d="M8 1L2 3.5V8c0 3.3 2.5 5.8 6 6.9C11.5 13.8 14 11.3 14 8V3.5L8 1z"/>
+    </svg>
+  ),
+  'icon-settings': (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+      <line x1="2" y1="4" x2="14" y2="4"/>
+      <line x1="2" y1="8" x2="14" y2="8"/>
+      <line x1="2" y1="12" x2="14" y2="12"/>
+      <circle cx="10" cy="4" r="1.5" fill="currentColor" stroke="none"/>
+      <circle cx="5" cy="8" r="1.5" fill="currentColor" stroke="none"/>
+      <circle cx="11" cy="12" r="1.5" fill="currentColor" stroke="none"/>
+    </svg>
+  ),
+}
+
 export default function App() {
   const apiBaseUrl = useMemo(() => {
     if (import.meta.env.VITE_API_BASE_URL) return import.meta.env.VITE_API_BASE_URL
@@ -473,6 +514,13 @@ export default function App() {
   const [artifactTrackingDetailKey, setArtifactTrackingDetailKey] = useState('')
   const [artifactsError, setArtifactsError] = useState('')
   const [artifactsStatus, setArtifactsStatus] = useState('')
+  const artifactByID = useMemo(() => {
+    const map = {}
+    artifacts.forEach((artifact) => {
+      map[artifact.artifactId] = artifact
+    })
+    return map
+  }, [artifacts])
   const [artifactTrustPolicy, setArtifactTrustPolicyState] = useState({
     verificationMode: 'warn_unsigned',
     allowedSigningKeyIds: [],
@@ -1887,7 +1935,11 @@ export default function App() {
     buildArtifactUploadFormData(form)
       .then((formData) => uploadArtifact(formData))
       .then((resp) => {
-        setUploadStatus(`Uploaded artifact ${resp.artifactId}`)
+        if (resp.duplicate) {
+          setUploadStatus(`Already exists — existing artifact ${resp.artifactId?.slice(0, 8) ?? ''} returned (idempotent, nothing new created).`)
+        } else {
+          setUploadStatus(`Uploaded artifact ${resp.artifactId}`)
+        }
         form.reset()
         loadArtifacts()
         setArtifactUploadOpen(false)
@@ -2306,6 +2358,21 @@ export default function App() {
     setArtifactsStatus(
       `Bulk deprecate: ${deprecated} deprecated, ${failed} failed${skipped > 0 ? `, ${skipped} skipped` : ''}.`,
     )
+    loadArtifacts()
+  }
+
+  async function handleDeprecateDuplicateLosers(artifactIds) {
+    if (!canManageArtifacts || artifactIds.length === 0) return
+    const ok = window.confirm(`Deprecate ${artifactIds.length} duplicate artifact(s) for this version?`)
+    if (!ok) return
+    setArtifactsStatus('Deprecating duplicate artifacts...')
+    const retention = Number(artifactLifecyclePolicyInput) || undefined
+    let deprecated = 0; let failed = 0
+    for (const id of artifactIds) {
+      try { await deprecateArtifact(id, retention); deprecated++ }
+      catch { failed++ }
+    }
+    setArtifactsStatus(`Deprecated ${deprecated} duplicate(s)${failed ? `, ${failed} failed` : ''}.`)
     loadArtifacts()
   }
 
@@ -3888,13 +3955,6 @@ export default function App() {
   const selectedDesired = desiredState.devices?.find((d) => d.deviceId === selectedDeviceId)
   const selectedGroupDesired = desiredState.groups?.find((g) => g.groupId === selectedGroupId)
   const lastAppliedArtifact = artifacts.find((a) => a.artifactId === deviceDetail?.current?.lastApplyArtifactId)
-  const artifactByID = useMemo(() => {
-    const map = {}
-    artifacts.forEach((artifact) => {
-      map[artifact.artifactId] = artifact
-    })
-    return map
-  }, [artifacts])
   const artifactGroups = useMemo(() => {
     const map = new Map()
     artifacts.forEach((artifact) => {
@@ -3909,7 +3969,24 @@ export default function App() {
     return Array.from(map.entries())
       .map(([, group]) => {
         const versions = [...group.versions].sort((a, b) => a.version.localeCompare(b.version, undefined, { numeric: true }))
-        return { name: group.name, type: group.type, versions }
+        const versionBuckets = new Map()
+        versions.forEach(a => {
+          if (!versionBuckets.has(a.version)) versionBuckets.set(a.version, [])
+          versionBuckets.get(a.version).push(a)
+        })
+        const winnerIds = new Set()
+        const losersByVersion = new Map()
+        versionBuckets.forEach((members, version) => {
+          if (members.length <= 1) return
+          const sorted = [...members].sort((a, b) => {
+            const tDiff = new Date(b.createdAt) - new Date(a.createdAt)
+            if (tDiff !== 0) return tDiff
+            return b.artifactId.localeCompare(a.artifactId)
+          })
+          winnerIds.add(sorted[0].artifactId)
+          losersByVersion.set(version, sorted.slice(1).map(a => a.artifactId))
+        })
+        return { name: group.name, type: group.type, versions, winnerIds, losersByVersion }
       })
       .sort((a, b) => `${a.name}|${a.type}`.localeCompare(`${b.name}|${b.type}`))
   }, [artifacts])
@@ -4507,17 +4584,23 @@ export default function App() {
       <aside className="sidebar">
         <div className="brand">HardwareOps</div>
         <nav className="nav">
-          {visibleNav.map((item) => (
-            <a
-              key={item.id}
-              href={`#${item.id}`}
-              className={view === item.id ? 'active' : ''}
-              onClick={() => setView(item.id)}
-            >
-              <span className={`nav-icon ${item.icon}`} />
-              {item.label}
-            </a>
-          ))}
+          {visibleNav.map((item) => {
+            const pendingCount = item.id === 'security'
+              ? pendingEnrollments.filter((e) => e.status === 'pending').length
+              : 0
+            return (
+              <a
+                key={item.id}
+                href={`#${item.id}`}
+                className={view === item.id ? 'active' : ''}
+                onClick={() => setView(item.id)}
+              >
+                {navIcons[item.icon]}
+                {item.label}
+                {pendingCount > 0 && <span className="nav-badge">{pendingCount}</span>}
+              </a>
+            )
+          })}
         </nav>
         <div className="sidebar-footer">
           <div className="env">
@@ -4712,14 +4795,14 @@ export default function App() {
                   <div className="group-selection-count">{selectedArtifactIds.length} selected</div>
                   <div className="inline-row">
                     <button
-                      className="button"
+                      className="button danger"
                       onClick={handleBulkDeprecateSelectedArtifacts}
                       disabled={!canManageArtifacts || selectedArtifactIds.length === 0}
                     >
                       Deprecate Selected
                     </button>
                     <button
-                      className="button"
+                      className="button danger"
                       onClick={handleBulkDeleteSelectedArtifacts}
                       disabled={!canManageArtifacts || selectedArtifactIds.length === 0}
                     >
@@ -4792,6 +4875,12 @@ export default function App() {
                               <span className={`pill artifact-status ${lifecycle}`}>
                                 {lifecycle}
                               </span>
+                              {group.winnerIds.has(a.artifactId) && (
+                                <span className="pill canonical">canonical</span>
+                              )}
+                              {group.losersByVersion.has(a.version) && !group.winnerIds.has(a.artifactId) && (
+                                <span className="pill duplicate">duplicate</span>
+                              )}
                             </td>
                             <td>
                               <div className="artifact-trust-cell">
@@ -4843,6 +4932,16 @@ export default function App() {
                               >
                                 Delete
                               </button>
+                              {group.winnerIds.has(a.artifactId) && group.losersByVersion.has(a.version) && (
+                                <button
+                                  className="button ghost"
+                                  onClick={() => handleDeprecateDuplicateLosers(group.losersByVersion.get(a.version))}
+                                  disabled={!canManageArtifacts}
+                                  title="Deprecate non-canonical duplicates for this version"
+                                >
+                                  Deprecate duplicates
+                                </button>
+                              )}
                             </td>
                           </tr>
                         )

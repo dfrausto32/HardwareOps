@@ -546,7 +546,7 @@ export default function SecurityPage({
                                     Edit
                                   </button>
                                   <button
-                                    className="button ghost"
+                                    className="button danger"
                                     onClick={() => handleRetireTrustedSigningKey(key)}
                                     disabled={!canManageArtifactTrust || String(key.state || '').toLowerCase() === 'retired'}
                                   >
@@ -646,7 +646,7 @@ export default function SecurityPage({
                                       Rotate Token
                                     </button>
                                     <button
-                                      className="button ghost"
+                                      className={profile.disabled ? 'button ghost' : 'button danger'}
                                       onClick={() => handleSetEnrollmentProfileDisabled(profile.profileId, !profile.disabled)}
                                     >
                                       {profile.disabled ? 'Enable' : 'Disable'}

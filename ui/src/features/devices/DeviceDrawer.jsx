@@ -388,7 +388,7 @@ export default function DeviceDrawer({
                   </button>
                   {canDecommissionDevices && (
                     <button
-                      className="button ghost"
+                      className="button danger"
                       onClick={() => handleDeleteDevice(selectedDeviceId)}
                     >
                       Decommission Device

@@ -86,7 +86,7 @@ export default function GroupsSection({
                       </button>
                     )}
                     {canManageGroups && (
-                      <button className="button" onClick={() => handleBulkDeleteSelectedGroups(false)} disabled={selectedGroupIds.length === 0}>
+                      <button className="button danger" onClick={() => handleBulkDeleteSelectedGroups(false)} disabled={selectedGroupIds.length === 0}>
                         Delete Selected
                       </button>
                     )}
@@ -103,6 +103,12 @@ export default function GroupsSection({
                 </div>
               )}
 
+              {groups.length === 0 ? (
+                <div className="empty-state">
+                  <div className="empty-state-title">No groups yet</div>
+                  <div className="empty-state-hint">Groups let you apply desired state to multiple devices at once.</div>
+                </div>
+              ) : (
               <div className="table-wrap">
                 <table>
                   <thead>
@@ -177,7 +183,7 @@ export default function GroupsSection({
                           )}
                           {canManageGroups && (
                             <button
-                              className="button ghost"
+                              className="button danger"
                               onClick={() => handleDeleteGroup(group.groupId, false)}
                             >
                               Delete
@@ -185,7 +191,7 @@ export default function GroupsSection({
                           )}
                           {canManageGroups && canDecommissionDevices && (
                             <button
-                              className="button ghost"
+                              className="button danger"
                               onClick={() => handleDeleteGroup(group.groupId, true)}
                             >
                               Delete + Devices
@@ -194,14 +200,10 @@ export default function GroupsSection({
                         </td>
                       </tr>
                     ))}
-                    {groups.length === 0 && (
-                      <tr>
-                        <td colSpan={5}>No groups yet.</td>
-                      </tr>
-                    )}
                   </tbody>
                 </table>
               </div>
+              )}
 
               {selectedGroup && (
                 <div className="group-devices">

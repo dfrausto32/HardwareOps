@@ -46,7 +46,7 @@ export default function DevicesSection({
                   <div className="inline-row">
                     {canDecommissionDevices && (
                       <button
-                        className="button"
+                        className="button danger"
                         onClick={handleBulkDecommissionSelectedDevices}
                         disabled={selectedDeviceIds.length === 0}
                       >
@@ -61,6 +61,17 @@ export default function DevicesSection({
               )}
               {devicesLoading ? (
                 <div className="placeholder">Loading devices...</div>
+              ) : filteredDevices.length === 0 ? (
+                <div className="empty-state">
+                  <div className="empty-state-title">
+                    {deviceStatusFilter !== 'all' ? 'No devices match this filter' : 'No devices yet'}
+                  </div>
+                  <div className="empty-state-hint">
+                    {deviceStatusFilter !== 'all'
+                      ? 'Try a different status filter.'
+                      : 'Devices will appear here once they enroll.'}
+                  </div>
+                </div>
               ) : (
                 <div className="table-wrap">
                   <table>
@@ -122,11 +133,6 @@ export default function DevicesSection({
                           <td><code>{d.labels ? JSON.stringify(d.labels) : '—'}</code></td>
                         </tr>
                       ))}
-                      {filteredDevices.length === 0 && (
-                        <tr>
-                          <td colSpan={5}>No devices match this filter.</td>
-                        </tr>
-                      )}
                     </tbody>
                   </table>
                 </div>

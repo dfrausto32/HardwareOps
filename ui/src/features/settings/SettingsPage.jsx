@@ -271,7 +271,7 @@ export default function SettingsPage({
                         </select>
                       </div>
                       <div className="field actions">
-                        <button className="button ghost" onClick={handleRestore} disabled={!canManageBackups || !maintenance.enabled}>
+                        <button className="button danger" onClick={handleRestore} disabled={!canManageBackups || !maintenance.enabled}>
                           Restore + wipe
                         </button>
                         {!maintenance.enabled && (
