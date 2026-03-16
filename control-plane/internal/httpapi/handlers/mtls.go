@@ -24,6 +24,15 @@ func deviceFromMTLS(r *http.Request, st store.Store, trustProxy bool, header str
 	if cert == nil {
 		return store.Device{}, errClientCertRequired
 	}
+	// Check cert serial revocation before fingerprint lookup.
+	if cert.SerialNumber != nil {
+		serial := cert.SerialNumber.Text(16)
+		if serial != "" {
+			if revoked, err := st.IsCertSerialRevoked(serial); err == nil && revoked {
+				return store.Device{}, errUnknownDeviceCert
+			}
+		}
+	}
 	hash := sha256.Sum256(cert.Raw)
 	fingerprint := hex.EncodeToString(hash[:])
 

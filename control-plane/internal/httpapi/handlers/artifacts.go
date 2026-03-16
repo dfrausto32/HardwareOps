@@ -435,7 +435,7 @@ func uploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 			record("error")
 			_ = objStore.DeleteObject(r.Context(), bucket, objectKey)
 			logger.Printf("verify artifact error: %v", err)
-			http.Error(w, "artifact verification failed", http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		artifact := store.Artifact{

@@ -20,6 +20,7 @@ var (
 type Device struct {
 	DeviceID        string
 	CertFingerprint string
+	CertSerial      string
 	Status          string
 	LastSeen        time.Time
 	LabelsJSON      []byte
@@ -61,6 +62,7 @@ type EnrollmentProfile struct {
 	ApprovalDelaySec       int
 	MaxUses                int
 	Uses                   int
+	CertValidityDays       int
 	ExpiresAt              time.Time
 	PreviousTokenExpiresAt time.Time
 	TokenRotatedAt         time.Time
@@ -78,6 +80,7 @@ type EnrollmentProfileUpdate struct {
 	ChallengeHint     string
 	ApprovalDelaySec  int
 	MaxUses           int
+	CertValidityDays  int
 	DefaultLabelsJSON []byte
 }
 
@@ -384,6 +387,8 @@ type Store interface {
 	CountDevicesByStatus(status string) (int, error)
 	LatestDeviceSeen() (time.Time, error)
 	DeleteDevice(deviceID string) error
+	RevokeDeviceCertSerial(serial, deviceID string, at time.Time) error
+	IsCertSerialRevoked(serial string) (bool, error)
 	DeleteStaleDevices(cutoff time.Time) (int, error)
 	UpdateDeviceStatuses(staleCutoff, offlineCutoff time.Time) (int, error)
 	UpsertGroup(group Group) error

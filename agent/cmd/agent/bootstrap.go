@@ -39,7 +39,7 @@ func bootstrapApprovalIdentity(cfg config.Config, st *state.State, logger *loggi
 	if st.DeviceID != "" {
 		st.DeviceID = ""
 		logger.SetDeviceID("")
-		if err := state.Save(cfg.StatePath, *st); err != nil {
+		if err := saveState(cfg.StatePath, *st); err != nil {
 			logger.Warnf("save state: %v", err)
 		}
 	}
@@ -178,7 +178,7 @@ func bootstrapApprovalIdentity(cfg config.Config, st *state.State, logger *loggi
 		case "pending":
 			if resp.SigningTrust != nil {
 				applySigningTrust(st, resp.SigningTrust)
-				if err := state.Save(cfg.StatePath, *st); err != nil {
+				if err := saveState(cfg.StatePath, *st); err != nil {
 					logger.Warnf("save state: %v", err)
 				}
 			}
@@ -195,7 +195,7 @@ func bootstrapApprovalIdentity(cfg config.Config, st *state.State, logger *loggi
 		case "issued":
 			if resp.SigningTrust != nil {
 				applySigningTrust(st, resp.SigningTrust)
-				if err := state.Save(cfg.StatePath, *st); err != nil {
+				if err := saveState(cfg.StatePath, *st); err != nil {
 					logger.Warnf("save state: %v", err)
 				}
 			}
@@ -217,6 +217,9 @@ func bootstrapApprovalIdentity(cfg config.Config, st *state.State, logger *loggi
 				time.Sleep(cfg.BootstrapRetryInterval)
 				continue
 			}
+			// C8: clear the enrollment token from the process environment after
+			// successful enrollment to prevent child processes from inheriting it.
+			os.Unsetenv("ENROLLMENT_PROFILE_TOKEN")
 			return nil
 		case "denied":
 			bs.State = agentbootstrap.StateBootstrapDenied
@@ -296,7 +299,7 @@ func syncIssuedIdentity(cfg config.Config, st *state.State, logger *logging.Logg
 	}
 	st.DeviceID = deviceID
 	logger.SetDeviceID(deviceID)
-	if err := state.Save(cfg.StatePath, *st); err != nil {
+	if err := saveState(cfg.StatePath, *st); err != nil {
 		return fmt.Errorf("save state: %w", err)
 	}
 	logger.Infof("approval bootstrap complete device=%s", deviceID)

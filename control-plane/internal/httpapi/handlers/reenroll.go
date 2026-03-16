@@ -53,13 +53,14 @@ func DeviceReenroll(logger *log.Logger, st store.Store, signer interface {
 			return
 		}
 
-		certPEM, fingerprint, err := signer.SignDeviceCert([]byte(req.CSR), device.DeviceID, 365*24*time.Hour)
+		certPEM, fingerprint, err := signer.SignDeviceCert([]byte(req.CSR), device.DeviceID, 90*24*time.Hour)
 		if err != nil {
 			logger.Printf("reenroll sign error: %v", err)
 			http.Error(w, "csr invalid", http.StatusBadRequest)
 			return
 		}
 
+		certSerial := certSerialFromPEM(certPEM)
 		meta := []byte(nil)
 		if caFingerprint, _, err := caFingerprintFromPEM(signer.CACertPEM()); err == nil {
 			meta = updateCertMeta(device.MetadataJSON, map[string]any{
@@ -71,6 +72,7 @@ func DeviceReenroll(logger *log.Logger, st store.Store, signer interface {
 		if err := st.UpsertDevice(store.Device{
 			DeviceID:        device.DeviceID,
 			CertFingerprint: fingerprint,
+			CertSerial:      certSerial,
 			Status:          device.Status,
 			LastSeen:        time.Now().UTC(),
 			MetadataJSON:    meta,

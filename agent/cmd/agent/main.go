@@ -29,6 +29,16 @@ import (
 	"github.com/hardwareops/agent/internal/state"
 )
 
+// stateHMACKey is the HMAC key derived from the device private key. It is
+// set once during main() startup and used by saveState for integrity protection.
+var stateHMACKey []byte
+
+// saveState writes state to cfg.StatePath using HMAC signing when a key is
+// available.
+func saveState(path string, st state.State) error {
+	return state.SaveSigned(path, st, stateHMACKey)
+}
+
 func main() {
 	cfg := config.FromEnv()
 	once := flag.Bool("once", false, "run a single check-in and exit")
@@ -46,7 +56,15 @@ func main() {
 		logger.Infof("log export enabled addr=%s", cfg.LogExportAddr)
 	}
 
-	st, err := state.Load(cfg.StatePath)
+	// Derive state HMAC key from the device private key (may be nil pre-enrollment).
+	var err error
+	stateHMACKey, err = state.DeriveStateHMACKey(cfg.DeviceKeyPath)
+	if err != nil {
+		logger.Errorf("derive state hmac key: %v", err)
+		os.Exit(1)
+	}
+
+	st, err := state.LoadSigned(cfg.StatePath, stateHMACKey)
 	if err != nil {
 		logger.Errorf("load state: %v", err)
 		os.Exit(1)
@@ -68,7 +86,7 @@ func main() {
 		if deviceID != "" && st.DeviceID != deviceID {
 			st.DeviceID = deviceID
 			logger.SetDeviceID(deviceID)
-			if err := state.Save(cfg.StatePath, st); err != nil {
+			if err := saveState(cfg.StatePath, st); err != nil {
 				logger.Warnf("save state: %v", err)
 			}
 		}
@@ -134,15 +152,15 @@ func main() {
 					TrustKeys:           trustKeysFromState(st),
 					VerificationMode:    cfg.VerificationMode,
 				}
-				applyErr := applyDesiredComponents(cfg.ArtifactRoot, c, desiredComponents, &st, logger, applyOpts)
+				applyErr := applyDesiredComponents(cfg.ArtifactRoot, c, desiredComponents, &st, logger, applyOpts, cfg.MaxConsecutiveFailures)
 				if applyErr != nil {
-					if err := state.Save(cfg.StatePath, st); err != nil {
+					if err := saveState(cfg.StatePath, st); err != nil {
 						logger.Warnf("save state: %v", err)
 					}
 					if *once {
 						os.Exit(1)
 					}
-				} else if err := state.Save(cfg.StatePath, st); err != nil {
+				} else if err := saveState(cfg.StatePath, st); err != nil {
 					logger.Warnf("save state: %v", err)
 				}
 			}
@@ -410,7 +428,7 @@ func desiredSourceForLog(desired *client.DesiredState) string {
 	return source
 }
 
-func applyDesiredComponents(root string, c *client.Client, desired map[string]client.DesiredComponent, st *state.State, logger *logging.Logger, applyOpts artifacts.ApplyOptions) error {
+func applyDesiredComponents(root string, c *client.Client, desired map[string]client.DesiredComponent, st *state.State, logger *logging.Logger, applyOpts artifacts.ApplyOptions, maxConsecFail int) error {
 	if len(desired) == 0 {
 		return nil
 	}
@@ -428,29 +446,46 @@ func applyDesiredComponents(root string, c *client.Client, desired map[string]cl
 		if compDesired.ArtifactID == "" {
 			continue
 		}
-		if err := applyDesiredComponent(component, root, c, compDesired, st, logger, applyOpts); err != nil {
+		if err := applyDesiredComponent(component, root, c, compDesired, st, logger, applyOpts, maxConsecFail); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func applyDesiredComponent(component, root string, c *client.Client, desired client.DesiredComponent, st *state.State, logger *logging.Logger, applyOpts artifacts.ApplyOptions) error {
+func applyDesiredComponent(component, root string, c *client.Client, desired client.DesiredComponent, st *state.State, logger *logging.Logger, applyOpts artifacts.ApplyOptions, maxConsecFail int) error {
 	st.EnsureComponents()
 	compState := st.Components[component]
+
+	// C11: safe-halt if consecutive failure threshold is reached.
+	if maxConsecFail > 0 && compState.ConsecutiveFailures >= maxConsecFail {
+		return fmt.Errorf("safe-halt: component %s has %d consecutive failures (max %d); operator intervention required to clear state",
+			component, compState.ConsecutiveFailures, maxConsecFail)
+	}
+
+	// failReport calls reportApplyError and then increments ConsecutiveFailures.
+	failReport := func(errMsg string, outcome artifacts.ApplyOutcome, artifactID string) error {
+		applyErr := reportApplyError(c, st, component, errMsg, outcome, logger, artifactID)
+		st.EnsureComponents()
+		cs := st.Components[component]
+		cs.ConsecutiveFailures = compState.ConsecutiveFailures + 1
+		st.Components[component] = cs
+		return applyErr
+	}
+
 	oldVersion := compState.CurrentVersion
 	targetVersion := desired.SoftwareVersion
 
 	meta, err := c.GetArtifact(desired.ArtifactID)
 	if err != nil {
-		return reportApplyError(c, st, component, fmt.Sprintf("get artifact: %v", err), artifacts.ApplyOutcome{}, logger, desired.ArtifactID)
+		return failReport(fmt.Sprintf("get artifact: %v", err), artifacts.ApplyOutcome{}, desired.ArtifactID)
 	}
 
 	presign := desired.DownloadURL
 	if presign == "" {
 		pres, err := c.PresignArtifact(desired.ArtifactID)
 		if err != nil {
-			return reportApplyError(c, st, component, fmt.Sprintf("presign artifact: %v", err), artifacts.ApplyOutcome{}, logger, desired.ArtifactID)
+			return failReport(fmt.Sprintf("presign artifact: %v", err), artifacts.ApplyOutcome{}, desired.ArtifactID)
 		}
 		presign = pres.DownloadURL
 	}
@@ -459,7 +494,7 @@ func applyDesiredComponent(component, root string, c *client.Client, desired cli
 		targetVersion = meta.Version
 	}
 	if targetVersion == "" {
-		return reportApplyError(c, st, component, "desired version missing and artifact has no version", artifacts.ApplyOutcome{}, logger, desired.ArtifactID)
+		return failReport("desired version missing and artifact has no version", artifacts.ApplyOutcome{}, desired.ArtifactID)
 	}
 	if compState.CurrentVersion == targetVersion && compState.CurrentConfigRev == desired.ConfigRev {
 		return nil
@@ -492,7 +527,7 @@ func applyDesiredComponent(component, root string, c *client.Client, desired cli
 				errMsg = fmt.Sprintf("%s; rollback failed: %v", errMsg, rbErr)
 			}
 		}
-		return reportApplyError(c, st, component, errMsg, outcome, logger, desired.ArtifactID)
+		return failReport(errMsg, outcome, desired.ArtifactID)
 	}
 
 	compState.PreviousVersion = oldVersion
@@ -502,6 +537,7 @@ func applyDesiredComponent(component, root string, c *client.Client, desired cli
 	compState.LastApplyError = ""
 	compState.LastApplyAt = time.Now().UTC()
 	compState.LastApplyArtifactID = desired.ArtifactID
+	compState.ConsecutiveFailures = 0
 	if outcome.PreApplyStatus != "" {
 		compState.LastPreApplyStatus = outcome.PreApplyStatus
 		compState.LastPreApplyError = outcome.PreApplyError

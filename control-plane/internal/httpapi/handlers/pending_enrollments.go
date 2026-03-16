@@ -384,6 +384,7 @@ func UpdateEnrollmentProfile(logger *log.Logger, st store.Store, trustProxy bool
 			ChallengeHint:     next.ChallengeHint,
 			ApprovalDelaySec:  next.ApprovalDelaySec,
 			MaxUses:           next.MaxUses,
+			CertValidityDays:  next.CertValidityDays,
 			DefaultLabelsJSON: next.DefaultLabelsJSON,
 		})
 		if err != nil {
@@ -1030,12 +1031,13 @@ func ClaimPendingEnrollment(logger *log.Logger, st store.Store, lic *license.Man
 			return
 		}
 		deviceID := uuid.NewString()
-		certPEM, fingerprint, err := signer.SignDeviceCert([]byte(pending.CSR), deviceID, 365*24*time.Hour)
+		certPEM, fingerprint, err := signer.SignDeviceCert([]byte(pending.CSR), deviceID, certValidityDays(profile.CertValidityDays))
 		if err != nil {
 			record("error", "sign_error")
 			http.Error(w, "csr invalid", http.StatusBadRequest)
 			return
 		}
+		certSerial := certSerialFromPEM(certPEM)
 		meta := []byte(nil)
 		if caFingerprint, _, err := caFingerprintFromPEM(signer.CACertPEM()); err == nil {
 			meta = updateCertMeta(nil, map[string]any{
@@ -1053,6 +1055,7 @@ func ClaimPendingEnrollment(logger *log.Logger, st store.Store, lic *license.Man
 		updated, err := st.MarkPendingEnrollmentIssued(req.RequestID, claimHash, store.Device{
 			DeviceID:        deviceID,
 			CertFingerprint: fingerprint,
+			CertSerial:      certSerial,
 			Status:          "active",
 			LastSeen:        issuedAt,
 			LabelsJSON:      profile.DefaultLabelsJSON,

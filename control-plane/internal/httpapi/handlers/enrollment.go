@@ -218,7 +218,7 @@ func deviceEnroll(logger *log.Logger, st store.Store, lic *license.Manager, sign
 		}
 
 		deviceID := uuid.NewString()
-		certPEM, fingerprint, err := signer.SignDeviceCert([]byte(req.CSR), deviceID, 365*24*time.Hour)
+		certPEM, fingerprint, err := signer.SignDeviceCert([]byte(req.CSR), deviceID, 90*24*time.Hour)
 		if err != nil {
 			logger.Printf("sign csr error: %v", err)
 			record("error", "sign_error")
@@ -226,6 +226,7 @@ func deviceEnroll(logger *log.Logger, st store.Store, lic *license.Manager, sign
 			return
 		}
 
+		certSerial := certSerialFromPEM(certPEM)
 		meta := []byte(nil)
 		if caFingerprint, _, err := caFingerprintFromPEM(signer.CACertPEM()); err == nil {
 			meta = updateCertMeta(nil, map[string]any{
@@ -241,6 +242,7 @@ func deviceEnroll(logger *log.Logger, st store.Store, lic *license.Manager, sign
 		if err := st.EnrollDeviceWithToken(hash, store.Device{
 			DeviceID:        deviceID,
 			CertFingerprint: fingerprint,
+			CertSerial:      certSerial,
 			Status:          "active",
 			LastSeen:        time.Now().UTC(),
 			MetadataJSON:    meta,
@@ -303,6 +305,32 @@ func generateToken() (string, string, error) {
 func hashToken(token string) string {
 	h := sha256.Sum256([]byte(token))
 	return fmtHex(h[:])
+}
+
+// certSerialFromPEM parses a PEM-encoded certificate and returns the serial
+// number as a lowercase hexadecimal string. Returns "" if parsing fails.
+func certSerialFromPEM(certPEM []byte) string {
+	block, _ := pem.Decode(certPEM)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return ""
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return ""
+	}
+	if cert.SerialNumber == nil {
+		return ""
+	}
+	return cert.SerialNumber.Text(16)
+}
+
+// certValidityDays converts a profile cert_validity_days value to a duration.
+// If days is 0 (use server default), 90 days is returned.
+func certValidityDays(days int) time.Duration {
+	if days > 0 {
+		return time.Duration(days) * 24 * time.Hour
+	}
+	return 90 * 24 * time.Hour
 }
 
 func fmtHex(b []byte) string {

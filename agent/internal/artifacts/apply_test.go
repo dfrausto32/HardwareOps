@@ -42,7 +42,7 @@ func TestApplySuccess(t *testing.T) {
 		Type:       "app_bundle",
 	}
 
-	outcome, err := Apply(root, desired, meta, server.Client(), nil, ApplyOptions{})
+	outcome, err := Apply(root, desired, meta, server.Client(), nil, ApplyOptions{VerificationMode: "allow_unsigned"})
 	if err != nil {
 		t.Fatalf("apply failed: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestApplyUnsupportedTypeFails(t *testing.T) {
 		Type:       "firmware",
 	}
 
-	_, err := Apply(root, desired, meta, server.Client(), nil, ApplyOptions{})
+	_, err := Apply(root, desired, meta, server.Client(), nil, ApplyOptions{VerificationMode: "allow_unsigned"})
 	if err == nil {
 		t.Fatalf("expected error for unsupported type")
 	}
@@ -117,7 +117,7 @@ func TestApplyUnsupportedTypeAllowed(t *testing.T) {
 		Type:       "firmware",
 	}
 
-	outcome, err := Apply(root, desired, meta, server.Client(), nil, ApplyOptions{AllowUnsupported: true})
+	outcome, err := Apply(root, desired, meta, server.Client(), nil, ApplyOptions{AllowUnsupported: true, VerificationMode: "allow_unsigned"})
 	if err != nil {
 		t.Fatalf("apply failed: %v", err)
 	}

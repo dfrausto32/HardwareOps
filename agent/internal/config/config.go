@@ -28,11 +28,12 @@ type Config struct {
 	LogExportAddr          string
 	LogLevel               string
 	AllowUnsupportedApply  bool
-	SigningPubKeyPath      string
-	SigningKeyID           string
-	RequireSignature       bool
-	AutoReenroll           bool
-	VerificationMode       string
+	SigningPubKeyPath       string
+	SigningKeyID            string
+	RequireSignature        bool
+	AutoReenroll            bool
+	VerificationMode        string
+	MaxConsecutiveFailures  int
 }
 
 func FromEnv() Config {
@@ -81,6 +82,13 @@ func FromEnv() Config {
 			deviceIDPath = filepath.Join(filepath.Dir(statePath), "device-id")
 		}
 	}
+	maxConsecFail := 5
+	if raw := os.Getenv("MAX_CONSECUTIVE_FAILURES"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
+			maxConsecFail = n
+		}
+	}
+
 	return Config{
 		ControlPlaneURL:        url,
 		EnrollmentMode:         enrollmentMode,
@@ -101,10 +109,10 @@ func FromEnv() Config {
 		LogExportAddr:          os.Getenv("LOG_EXPORT_ADDR"),
 		LogLevel:               os.Getenv("LOG_LEVEL"),
 		AllowUnsupportedApply:  parseBoolEnv("ALLOW_UNSUPPORTED_APPLY"),
-		SigningPubKeyPath:      os.Getenv("SIGNING_PUB_KEY_PATH"),
-		SigningKeyID:           os.Getenv("SIGNING_KEY_ID"),
-		RequireSignature:       parseBoolEnv("REQUIRE_ARTIFACT_SIGNATURE"),
-		AutoReenroll:           parseBoolEnvDefault("AUTO_REENROLL", true),
+		SigningPubKeyPath:       os.Getenv("SIGNING_PUB_KEY_PATH"),
+		SigningKeyID:            os.Getenv("SIGNING_KEY_ID"),
+		RequireSignature:        parseBoolEnv("REQUIRE_ARTIFACT_SIGNATURE"),
+		AutoReenroll:            parseBoolEnvDefault("AUTO_REENROLL", true),
 		VerificationMode: func() string {
 			mode := strings.TrimSpace(strings.ToLower(os.Getenv("ARTIFACT_SIGNING_MODE")))
 			if mode == "" {
@@ -112,6 +120,7 @@ func FromEnv() Config {
 			}
 			return mode
 		}(),
+		MaxConsecutiveFailures: maxConsecFail,
 	}
 }
 

@@ -1,8 +1,12 @@
 package state
 
 import (
+	"crypto/hmac"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,6 +47,7 @@ type ComponentState struct {
 	LastPreApplyStatus  string    `json:"lastPreApplyStatus,omitempty"`
 	LastPreApplyError   string    `json:"lastPreApplyError,omitempty"`
 	LastPreApplyAt      time.Time `json:"lastPreApplyAt,omitempty"`
+	ConsecutiveFailures int       `json:"consecutiveFailures,omitempty"`
 }
 
 func Load(path string) (State, error) {
@@ -88,4 +93,74 @@ func (st *State) ensureComponents() {
 
 func (st *State) EnsureComponents() {
 	st.ensureComponents()
+}
+
+// LoadSigned loads state from path, verifying the HMAC sidecar at path+".hmac"
+// if hmacKey is non-nil. If the sidecar is absent the state is loaded without
+// verification (migration path). If the sidecar is present but the HMAC does
+// not match, an error is returned.
+func LoadSigned(path string, hmacKey []byte) (State, error) {
+	if hmacKey == nil {
+		return Load(path)
+	}
+
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		st := State{DeviceID: uuid.NewString(), AgentVersion: "0.1.0"}
+		st.ensureComponents()
+		if err := SaveSigned(path, st, hmacKey); err != nil {
+			return State{}, err
+		}
+		return st, nil
+	}
+	if err != nil {
+		return State{}, err
+	}
+
+	sidecarPath := path + ".hmac"
+	sidecarData, sidecarErr := os.ReadFile(sidecarPath)
+	if sidecarErr == nil {
+		// Sidecar exists: verify HMAC.
+		want := strings.TrimSpace(string(sidecarData))
+		got := hex.EncodeToString(computeHMAC(hmacKey, data))
+		if !hmac.Equal([]byte(want), []byte(got)) {
+			return State{}, errors.New("state file integrity check failed: HMAC mismatch")
+		}
+	}
+	// If sidecar absent: allow load without verification (migration from unsigned state).
+
+	var st State
+	if err := json.Unmarshal(data, &st); err != nil {
+		return State{}, err
+	}
+	st.ensureComponents()
+	return st, nil
+}
+
+// SaveSigned writes state to path and writes its HMAC-SHA256 to path+".hmac".
+func SaveSigned(path string, st State, hmacKey []byte) error {
+	if hmacKey == nil {
+		return Save(path, st)
+	}
+	st.ensureComponents()
+	data, err := json.Marshal(st)
+	if err != nil {
+		return err
+	}
+	// Append newline to match json.Encoder output format.
+	data = append(data, '\n')
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	f.Close()
+
+	mac := hex.EncodeToString(computeHMAC(hmacKey, data))
+	sidecarPath := path + ".hmac"
+	return os.WriteFile(sidecarPath, []byte(mac+"\n"), 0o600)
 }

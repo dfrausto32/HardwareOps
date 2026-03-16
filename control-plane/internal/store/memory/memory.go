@@ -41,6 +41,7 @@ type Store struct {
 	serviceTokenIdx       map[string]string
 	passwordResetTokens   map[string]store.PasswordResetToken
 	passwordResetTokenIdx map[string]string
+	revokedSerials        map[string]struct{}
 }
 
 func New() *Store {
@@ -73,6 +74,7 @@ func New() *Store {
 		serviceTokenIdx:       map[string]string{},
 		passwordResetTokens:   map[string]store.PasswordResetToken{},
 		passwordResetTokenIdx: map[string]string{},
+		revokedSerials:        map[string]struct{}{},
 	}
 }
 
@@ -85,6 +87,9 @@ func (s *Store) UpsertDevice(device store.Device) error {
 	if existing, ok := s.devices[device.DeviceID]; ok {
 		if device.CertFingerprint == "" {
 			device.CertFingerprint = existing.CertFingerprint
+		}
+		if device.CertSerial == "" {
+			device.CertSerial = existing.CertSerial
 		}
 		if len(device.LabelsJSON) == 0 {
 			device.LabelsJSON = existing.LabelsJSON
@@ -262,6 +267,7 @@ func (s *Store) UpdateEnrollmentProfile(profileID string, update store.Enrollmen
 	profile.ChallengeHint = update.ChallengeHint
 	profile.ApprovalDelaySec = update.ApprovalDelaySec
 	profile.MaxUses = update.MaxUses
+	profile.CertValidityDays = update.CertValidityDays
 	profile.DefaultLabelsJSON = update.DefaultLabelsJSON
 	s.enrollmentProfiles[profileID] = profile
 	return profile, nil
@@ -734,6 +740,9 @@ func (s *Store) DeleteDevice(deviceID string) error {
 	if deviceID == "" {
 		return errors.New("device_id required")
 	}
+	if d, ok := s.devices[deviceID]; ok && d.CertSerial != "" {
+		s.revokedSerials[d.CertSerial] = struct{}{}
+	}
 	delete(s.devices, deviceID)
 	delete(s.states, deviceID)
 	delete(s.desiredDevices, deviceID)
@@ -743,6 +752,26 @@ func (s *Store) DeleteDevice(deviceID string) error {
 		}
 	}
 	return nil
+}
+
+func (s *Store) RevokeDeviceCertSerial(serial, deviceID string, at time.Time) error {
+	if serial == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.revokedSerials[serial] = struct{}{}
+	return nil
+}
+
+func (s *Store) IsCertSerialRevoked(serial string) (bool, error) {
+	if serial == "" {
+		return false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, revoked := s.revokedSerials[serial]
+	return revoked, nil
 }
 
 func (s *Store) DeleteStaleDevices(cutoff time.Time) (int, error) {

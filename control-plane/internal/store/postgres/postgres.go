@@ -27,15 +27,16 @@ func (s *Store) UpsertDevice(device store.Device) error {
 	labels := nullIfEmptyBytes(device.LabelsJSON)
 	metadata := nullIfEmptyBytes(device.MetadataJSON)
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO devices (device_id, cert_fingerprint, status, last_seen, labels, metadata)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO devices (device_id, cert_fingerprint, cert_serial, status, last_seen, labels, metadata)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (device_id) DO UPDATE SET
 			cert_fingerprint = COALESCE(EXCLUDED.cert_fingerprint, devices.cert_fingerprint),
+			cert_serial = CASE WHEN EXCLUDED.cert_serial != '' THEN EXCLUDED.cert_serial ELSE devices.cert_serial END,
 			status = COALESCE(EXCLUDED.status, devices.status),
 			last_seen = EXCLUDED.last_seen,
 			labels = COALESCE(EXCLUDED.labels, devices.labels),
 			metadata = COALESCE(EXCLUDED.metadata, devices.metadata)
-	`, device.DeviceID, cert, device.Status, device.LastSeen, labels, metadata)
+	`, device.DeviceID, cert, device.CertSerial, device.Status, device.LastSeen, labels, metadata)
 	return err
 }
 
@@ -139,9 +140,9 @@ func (s *Store) EnrollDeviceWithToken(tokenHash string, device store.Device, max
 	labels := nullIfEmptyBytes(device.LabelsJSON)
 	metadata := nullIfEmptyBytes(device.MetadataJSON)
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO devices (device_id, cert_fingerprint, status, last_seen, labels, metadata)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, device.DeviceID, cert, device.Status, device.LastSeen, labels, metadata); err != nil {
+		INSERT INTO devices (device_id, cert_fingerprint, cert_serial, status, last_seen, labels, metadata)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, device.DeviceID, cert, device.CertSerial, device.Status, device.LastSeen, labels, metadata); err != nil {
 		return err
 	}
 
@@ -167,17 +168,17 @@ func (s *Store) CreateEnrollmentProfile(profile store.EnrollmentProfile) error {
 		INSERT INTO enrollment_profiles (
 			profile_id, name, token_hash, previous_token_hash, previous_token_expires_at, token_rotated_at, require_approval, allow_untrusted_hw,
 			challenge_hash, challenge_hint, approval_delay_seconds,
-			max_uses, uses, expires_at, default_labels, created_at, created_by, disabled
+			max_uses, uses, expires_at, default_labels, created_at, created_by, disabled, cert_validity_days
 		)
 		VALUES (
 			$1::uuid, $2, $3, NULLIF($4, ''), $5, $6, $7, $8,
 			$9, $10, $11,
-			$12, $13, $14, $15, COALESCE($16, now()), $17, $18
+			$12, $13, $14, $15, COALESCE($16, now()), $17, $18, $19
 		)
 	`, profile.ProfileID, profile.Name, profile.TokenHash, nullIfEmpty(profile.PreviousTokenHash), nullIfZeroTime(profile.PreviousTokenExpiresAt), nullIfZeroTime(profile.TokenRotatedAt), profile.RequireApproval, profile.AllowUntrustedHW,
 		nullIfEmpty(profile.ChallengeHash), nullIfEmpty(profile.ChallengeHint), profile.ApprovalDelaySec,
 		profile.MaxUses, profile.Uses, nullIfZeroTime(profile.ExpiresAt), nullIfEmptyBytes(profile.DefaultLabelsJSON),
-		nullIfZeroTime(profile.CreatedAt), nullIfEmpty(profile.CreatedBy), profile.Disabled)
+		nullIfZeroTime(profile.CreatedAt), nullIfEmpty(profile.CreatedBy), profile.Disabled, profile.CertValidityDays)
 	return err
 }
 
@@ -203,7 +204,8 @@ func (s *Store) ListEnrollmentProfiles() ([]store.EnrollmentProfile, error) {
 			created_at,
 			created_by,
 			disabled,
-			default_labels
+			default_labels,
+			cert_validity_days
 		FROM enrollment_profiles
 		ORDER BY created_at DESC
 	`)
@@ -248,7 +250,8 @@ func (s *Store) GetEnrollmentProfile(profileID string) (store.EnrollmentProfile,
 			created_at,
 			created_by,
 			disabled,
-			default_labels
+			default_labels,
+			cert_validity_days
 		FROM enrollment_profiles
 		WHERE profile_id = $1::uuid
 	`, profileID)
@@ -275,7 +278,8 @@ func (s *Store) UpdateEnrollmentProfile(profileID string, update store.Enrollmen
 			challenge_hint = NULLIF($6, ''),
 			approval_delay_seconds = $7,
 			max_uses = $8,
-			default_labels = $9
+			default_labels = $9,
+			cert_validity_days = $10
 		WHERE profile_id = $1::uuid
 		RETURNING
 			profile_id::text,
@@ -295,8 +299,9 @@ func (s *Store) UpdateEnrollmentProfile(profileID string, update store.Enrollmen
 			created_at,
 			created_by,
 			disabled,
-			default_labels
-	`, profileID, update.Name, update.RequireApproval, update.AllowUntrustedHW, update.ChallengeHash, update.ChallengeHint, update.ApprovalDelaySec, update.MaxUses, nullIfEmptyBytes(update.DefaultLabelsJSON))
+			default_labels,
+			cert_validity_days
+	`, profileID, update.Name, update.RequireApproval, update.AllowUntrustedHW, update.ChallengeHash, update.ChallengeHint, update.ApprovalDelaySec, update.MaxUses, nullIfEmptyBytes(update.DefaultLabelsJSON), update.CertValidityDays)
 	profile, err := scanEnrollmentProfile(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.EnrollmentProfile{}, store.ErrEnrollmentProfileNotFound
@@ -332,7 +337,8 @@ func (s *Store) SetEnrollmentProfileDisabled(profileID string, disabled bool) (s
 			created_at,
 			created_by,
 			disabled,
-			default_labels
+			default_labels,
+			cert_validity_days
 	`, profileID, disabled)
 	profile, err := scanEnrollmentProfile(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -377,7 +383,8 @@ func (s *Store) RotateEnrollmentProfileToken(profileID, tokenHash string, previo
 			created_at,
 			created_by,
 			disabled,
-			default_labels
+			default_labels,
+			cert_validity_days
 	`, profileID, tokenHash, prevUntil)
 	profile, err := scanEnrollmentProfile(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -414,7 +421,8 @@ func (s *Store) GetEnrollmentProfileByTokenHash(profileTokenHash string) (store.
 			created_at,
 			created_by,
 			disabled,
-			default_labels
+			default_labels,
+			cert_validity_days
 		FROM enrollment_profiles
 		WHERE token_hash = $1
 			OR previous_token_hash = $1
@@ -486,7 +494,8 @@ func (s *Store) CreatePendingEnrollmentForProfileToken(profileTokenHash string, 
 			created_at,
 			created_by,
 			disabled,
-			default_labels
+			default_labels,
+			cert_validity_days
 		FROM enrollment_profiles
 		WHERE token_hash = $1
 			OR previous_token_hash = $1
@@ -1079,9 +1088,9 @@ func (s *Store) MarkPendingEnrollmentIssued(requestID, claimTokenHash string, de
 	labels := nullIfEmptyBytes(device.LabelsJSON)
 	metadata := nullIfEmptyBytes(device.MetadataJSON)
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO devices (device_id, cert_fingerprint, status, last_seen, labels, metadata)
-		VALUES ($1::uuid, $2, $3, $4, $5, $6)
-	`, device.DeviceID, cert, device.Status, device.LastSeen, labels, metadata); err != nil {
+		INSERT INTO devices (device_id, cert_fingerprint, cert_serial, status, last_seen, labels, metadata)
+		VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)
+	`, device.DeviceID, cert, device.CertSerial, device.Status, device.LastSeen, labels, metadata); err != nil {
 		return store.PendingEnrollment{}, err
 	}
 
@@ -1181,6 +1190,7 @@ func scanEnrollmentProfile(row interface {
 		&createdBy,
 		&profile.Disabled,
 		&profile.DefaultLabelsJSON,
+		&profile.CertValidityDays,
 	)
 	if err != nil {
 		return store.EnrollmentProfile{}, err
@@ -1247,9 +1257,9 @@ func (s *Store) CreateDevice(device store.Device) error {
 	labels := nullIfEmptyBytes(device.LabelsJSON)
 	metadata := nullIfEmptyBytes(device.MetadataJSON)
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO devices (device_id, cert_fingerprint, status, last_seen, labels, metadata)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, device.DeviceID, cert, device.Status, device.LastSeen, labels, metadata)
+		INSERT INTO devices (device_id, cert_fingerprint, cert_serial, status, last_seen, labels, metadata)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, device.DeviceID, cert, device.CertSerial, device.Status, device.LastSeen, labels, metadata)
 	return err
 }
 
@@ -1259,10 +1269,10 @@ func (s *Store) GetDevice(deviceID string) (store.Device, bool, error) {
 
 	var d store.Device
 	err := s.pool.QueryRow(ctx, `
-		SELECT device_id, COALESCE(cert_fingerprint, ''), status, last_seen, labels, metadata
+		SELECT device_id, COALESCE(cert_fingerprint, ''), COALESCE(cert_serial, ''), status, last_seen, labels, metadata
 		FROM devices
 		WHERE device_id = $1
-	`, deviceID).Scan(&d.DeviceID, &d.CertFingerprint, &d.Status, &d.LastSeen, &d.LabelsJSON, &d.MetadataJSON)
+	`, deviceID).Scan(&d.DeviceID, &d.CertFingerprint, &d.CertSerial, &d.Status, &d.LastSeen, &d.LabelsJSON, &d.MetadataJSON)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.Device{}, false, nil
 	}
@@ -1278,10 +1288,10 @@ func (s *Store) GetDeviceByFingerprint(fingerprint string) (store.Device, bool, 
 
 	var d store.Device
 	err := s.pool.QueryRow(ctx, `
-		SELECT device_id, COALESCE(cert_fingerprint, ''), status, last_seen, labels, metadata
+		SELECT device_id, COALESCE(cert_fingerprint, ''), COALESCE(cert_serial, ''), status, last_seen, labels, metadata
 		FROM devices
 		WHERE cert_fingerprint = $1
-	`, fingerprint).Scan(&d.DeviceID, &d.CertFingerprint, &d.Status, &d.LastSeen, &d.LabelsJSON, &d.MetadataJSON)
+	`, fingerprint).Scan(&d.DeviceID, &d.CertFingerprint, &d.CertSerial, &d.Status, &d.LastSeen, &d.LabelsJSON, &d.MetadataJSON)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.Device{}, false, nil
 	}
@@ -1300,10 +1310,10 @@ func (s *Store) GetDeviceByHardwareID(hardwareID string) (store.Device, bool, er
 
 	var d store.Device
 	err := s.pool.QueryRow(ctx, `
-		SELECT device_id, COALESCE(cert_fingerprint, ''), status, last_seen, labels, metadata
+		SELECT device_id, COALESCE(cert_fingerprint, ''), COALESCE(cert_serial, ''), status, last_seen, labels, metadata
 		FROM devices
 		WHERE metadata #>> '{hwops,identity,hardwareId}' = $1
-	`, hardwareID).Scan(&d.DeviceID, &d.CertFingerprint, &d.Status, &d.LastSeen, &d.LabelsJSON, &d.MetadataJSON)
+	`, hardwareID).Scan(&d.DeviceID, &d.CertFingerprint, &d.CertSerial, &d.Status, &d.LastSeen, &d.LabelsJSON, &d.MetadataJSON)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.Device{}, false, nil
 	}
@@ -1351,7 +1361,7 @@ func (s *Store) ListDevices(filter store.ListDevicesFilter) ([]store.Device, err
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT device_id, COALESCE(cert_fingerprint, ''), status, last_seen, labels, metadata
+		SELECT device_id, COALESCE(cert_fingerprint, ''), COALESCE(cert_serial, ''), status, last_seen, labels, metadata
 		FROM devices
 		WHERE ($1 = '' OR status = $1)
 		ORDER BY last_seen DESC NULLS LAST, device_id
@@ -1365,7 +1375,7 @@ func (s *Store) ListDevices(filter store.ListDevicesFilter) ([]store.Device, err
 	out := []store.Device{}
 	for rows.Next() {
 		var d store.Device
-		if err := rows.Scan(&d.DeviceID, &d.CertFingerprint, &d.Status, &d.LastSeen, &d.LabelsJSON, &d.MetadataJSON); err != nil {
+		if err := rows.Scan(&d.DeviceID, &d.CertFingerprint, &d.CertSerial, &d.Status, &d.LastSeen, &d.LabelsJSON, &d.MetadataJSON); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -1418,6 +1428,19 @@ func (s *Store) DeleteDevice(deviceID string) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
+
+	// Capture cert serial before deletion so we can add it to the blocklist.
+	var certSerial string
+	_ = tx.QueryRow(ctx, `SELECT COALESCE(cert_serial, '') FROM devices WHERE device_id = $1`, deviceID).Scan(&certSerial)
+	if certSerial != "" {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO cert_revoked_serials (serial, device_id, revoked_at)
+			VALUES ($1, $2, NOW())
+			ON CONFLICT (serial) DO NOTHING
+		`, certSerial, deviceID); err != nil {
+			return err
+		}
+	}
 
 	if _, err := tx.Exec(ctx, `
 		DELETE FROM desired_state_device WHERE device_id = $1
@@ -3248,4 +3271,31 @@ func ptrBool(val *bool) interface{} {
 		return nil
 	}
 	return *val
+}
+
+func (s *Store) RevokeDeviceCertSerial(serial, deviceID string, at time.Time) error {
+	if serial == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO cert_revoked_serials (serial, device_id, revoked_at)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (serial) DO NOTHING
+	`, serial, deviceID, at.UTC())
+	return err
+}
+
+func (s *Store) IsCertSerialRevoked(serial string) (bool, error) {
+	if serial == "" {
+		return false, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var exists bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM cert_revoked_serials WHERE serial = $1)
+	`, serial).Scan(&exists)
+	return exists, err
 }
