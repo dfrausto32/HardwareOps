@@ -16,7 +16,7 @@ import (
 )
 
 func TestGetPullCredentialStatus(t *testing.T) {
-	mgr, err := artifactingest.NewPullCredentialManager("", `{"repo-a":{"authorization":"Bearer test"}}`, "", "")
+	mgr, err := artifactingest.NewPullCredentialManager("", `{"repo-a":{"authorization":"Bearer test"}}`, "", "", "", "", "")
 	if err != nil {
 		t.Fatalf("new pull credential manager: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestReloadPullCredentials(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"repo-a":{"authorization":"Bearer old"}}`), 0o600); err != nil {
 		t.Fatalf("write creds file: %v", err)
 	}
-	mgr, err := artifactingest.NewPullCredentialManager(path, "", "", "")
+	mgr, err := artifactingest.NewPullCredentialManager(path, "", "", "", "", "", "")
 	if err != nil {
 		t.Fatalf("new pull credential manager: %v", err)
 	}

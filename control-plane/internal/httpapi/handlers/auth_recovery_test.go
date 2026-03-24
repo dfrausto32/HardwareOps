@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hardwareops/control-plane/internal/auth"
+	"github.com/hardwareops/control-plane/internal/mailer"
 	"github.com/hardwareops/control-plane/internal/store"
 	"github.com/hardwareops/control-plane/internal/store/memory"
 )
@@ -156,7 +157,7 @@ func TestPasswordResetTokenIssueAndComplete(t *testing.T) {
 	createReq = withURLParam(createReq, "userId", targetUser.UserID)
 	createReq.Header.Set("Authorization", "Bearer "+adminToken)
 	createRec := httptest.NewRecorder()
-	manager.Middleware(CreatePasswordResetToken(logger, manager, mem, false)).ServeHTTP(createRec, createReq)
+	manager.Middleware(CreatePasswordResetToken(logger, manager, mem, &mailer.NoopMailer{}, "", false)).ServeHTTP(createRec, createReq)
 	if createRec.Code != http.StatusOK {
 		t.Fatalf("expected 200 creating password reset token, got %d: %s", createRec.Code, createRec.Body.String())
 	}

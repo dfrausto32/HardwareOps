@@ -12,10 +12,12 @@ import (
 	"github.com/hardwareops/control-plane/internal/events"
 	"github.com/hardwareops/control-plane/internal/license"
 	"github.com/hardwareops/control-plane/internal/lifecycle"
+	"github.com/hardwareops/control-plane/internal/mailer"
 	"github.com/hardwareops/control-plane/internal/metrics"
 	"github.com/hardwareops/control-plane/internal/releaseautoupdate"
 	"github.com/hardwareops/control-plane/internal/store"
 	"github.com/hardwareops/control-plane/internal/upgrade"
+	"github.com/hardwareops/control-plane/internal/vulnscan"
 )
 
 type CertSigner interface {
@@ -74,6 +76,7 @@ type Dependencies struct {
 	Auth                            *auth.Manager
 	AuthLoginBackoff                *auth.LoginBackoff
 	OIDCProvider                    *auth.OIDCProvider
+	LDAPProvider                    *auth.LDAPProvider
 	WorkloadIdentity                auth.WorkloadIdentityExchanger
 	BootstrapToken                  string
 	License                         *license.Manager
@@ -97,4 +100,16 @@ type Dependencies struct {
 	DeviceIdentityMode              string
 	DeviceIdentityRequireOnEnroll   bool
 	DeviceIdentityRequireOnCheckin  bool
+	// Keyless cosign / Sigstore verification options.
+	ArtifactFulcioRootCert  string
+	ArtifactRekorURL        string
+	ArtifactRequireRekorLog bool
+	// Vulnerability scanning (nil when disabled).
+	ArtifactScanJob       *vulnscan.ArtifactScanJob
+	NessusSyncJob         *vulnscan.NessusSyncJob
+	VulnSkipArtifactTypes []string
+	// Email delivery.
+	Mailer       mailer.Mailer
+	AppPublicURL string
+	SMTPEnabled  bool
 }

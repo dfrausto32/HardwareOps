@@ -30,6 +30,7 @@ export default function SecurityPage({
   doLogin,
   doLogout,
   handleIssuePasswordResetToken,
+  handleSendUserInvite,
   enrollmentProfiles,
   enrollmentProfilesError,
   enrollmentProfilesLoading,
@@ -359,6 +360,11 @@ export default function SecurityPage({
                                 <button className="button ghost" onClick={() => handleIssuePasswordResetToken(user)}>
                                   Issue reset token
                                 </button>
+                                {authStatus?.smtpEnabled && canManageUsers && (
+                                  <button className="button ghost" onClick={() => handleSendUserInvite(user)} style={{ marginLeft: '0.5rem' }}>
+                                    Send invite
+                                  </button>
+                                )}
                               </td>
                             </tr>
                           ))}

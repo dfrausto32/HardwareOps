@@ -157,13 +157,66 @@ type ArtifactTrustPolicy struct {
 	VerificationMode          string
 	AllowedSigningKeyIDsJSON  []byte
 	AllowedSignatureTypesJSON []byte
+	ProvenancePolicyJSON      []byte
 	UpdatedAt                 time.Time
 	UpdatedByUserID           string
+}
+
+// ProvenancePolicy controls in-toto/SLSA attestation requirements.
+type ProvenancePolicy struct {
+	RequireProvenance     bool   `json:"requireProvenance,omitempty"`
+	RequiredPredicateType string `json:"requiredPredicateType,omitempty"`
+	RequiredBuilderID     string `json:"requiredBuilderID,omitempty"`
+	RequiredBuilderIssuer string `json:"requiredBuilderIssuer,omitempty"`
+}
+
+// AttestationRecord is an in-toto attestation attached to an artifact.
+type AttestationRecord struct {
+	AttestationID  string
+	ArtifactID     string
+	PredicateType  string
+	PayloadJSON    []byte
+	Signature      string
+	SignatureType  string
+	SignatureKeyID string
+	BuilderID      string
+	BuilderIssuer  string
+	VerifiedAt     time.Time
+	CreatedAt      time.Time
 }
 
 type ArtifactStats struct {
 	Count     int
 	SizeBytes int64
+}
+
+// ArtifactVulnerabilityScan is a scanner result attached to an artifact.
+type ArtifactVulnerabilityScan struct {
+	ScanID             string
+	ArtifactID         string
+	ScannerType        string
+	ScannerVersion     string
+	ScanStatus         string // pending | running | completed | failed | skipped
+	FindingsJSON       []byte
+	SeverityCountsJSON []byte
+	ErrorMessage       string
+	ScannedAt          time.Time
+	CreatedAt          time.Time
+}
+
+// DeviceVulnerabilityScan is a Nessus scan result mapped to a HardwareOps device.
+type DeviceVulnerabilityScan struct {
+	ScanID             string
+	DeviceID           string
+	ScannerType        string
+	ExternalScanID     string
+	ExternalHostID     string
+	ScanStatus         string // synced | failed | no_match
+	FindingsJSON       []byte
+	SeverityCountsJSON []byte
+	ScannedAt          time.Time
+	SyncedAt           time.Time
+	CreatedAt          time.Time
 }
 
 type ArtifactLifecyclePolicy struct {
@@ -323,6 +376,7 @@ type PasswordResetToken struct {
 	CreatedAt      time.Time
 	IssuedByUserID string
 	UsedAt         time.Time
+	EmailSentAt    time.Time // zero = no email sent
 }
 
 type DesiredStateGroup struct {
@@ -424,6 +478,17 @@ type Store interface {
 	RetireTrustedSigningKey(keyID string, retiredAt time.Time) (TrustedSigningKey, error)
 	GetArtifactTrustPolicy() (ArtifactTrustPolicy, bool, error)
 	SetArtifactTrustPolicy(policy ArtifactTrustPolicy) (ArtifactTrustPolicy, error)
+	CreateAttestation(record AttestationRecord) error
+	GetAttestation(attestationID string) (AttestationRecord, bool, error)
+	ListAttestations(artifactID string) ([]AttestationRecord, error)
+	DeleteAttestationsForArtifact(artifactID string) error
+	CreateArtifactVulnScan(scan ArtifactVulnerabilityScan) error
+	UpdateArtifactVulnScan(scan ArtifactVulnerabilityScan) error
+	GetLatestArtifactVulnScan(artifactID string) (ArtifactVulnerabilityScan, bool, error)
+	ListArtifactVulnScans(artifactID string) ([]ArtifactVulnerabilityScan, error)
+	UpsertDeviceVulnScan(scan DeviceVulnerabilityScan) error
+	GetLatestDeviceVulnScan(deviceID string) (DeviceVulnerabilityScan, bool, error)
+	ListDeviceVulnScans(deviceID string) ([]DeviceVulnerabilityScan, error)
 	CreateApplyResult(result ApplyResult) error
 	CreateRuntimeEvent(event RuntimeEvent) error
 	ListRuntimeEvents(filter RuntimeEventFilter) ([]RuntimeEvent, error)
@@ -450,6 +515,7 @@ type Store interface {
 	ConsumeUserRecoveryCode(email, recoveryCodeHash, passwordHash string, at time.Time) (User, bool, error)
 	CreatePasswordResetToken(token PasswordResetToken) error
 	ConsumePasswordResetToken(email, tokenHash, passwordHash string, at time.Time) (User, bool, error)
+	UpdatePasswordResetTokenEmailSent(tokenID string, sentAt time.Time) error
 	CreateAuthVoucher(voucher AuthVoucher) error
 	GetAuthVoucherByTokenHash(tokenHash string) (AuthVoucher, bool, error)
 	MarkAuthVoucherUsed(voucherID, usedBy string, at time.Time) (bool, error)

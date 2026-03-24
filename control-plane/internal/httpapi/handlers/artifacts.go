@@ -26,6 +26,22 @@ import (
 	"github.com/hardwareops/control-plane/internal/store"
 )
 
+// ArtifactVulnScanTrigger is a narrow interface so this package does not
+// directly import the vulnscan package.
+type ArtifactVulnScanTrigger interface {
+	Trigger(artifactID, objectKey, sha256 string)
+}
+
+// shouldScanArtifact returns true when the artifact type is not in skipTypes.
+func shouldScanArtifact(artifactType string, skipTypes []string) bool {
+	for _, t := range skipTypes {
+		if strings.EqualFold(t, artifactType) {
+			return false
+		}
+	}
+	return true
+}
+
 type CreateArtifactRequest struct {
 	ArtifactID     string          `json:"artifactId"`
 	Name           string          `json:"name"`
@@ -174,26 +190,26 @@ type ArtifactLifecycleStatusResponse struct {
 }
 
 func CreateArtifact(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
-	return createArtifact(logger, st, nil, "", trustProxy, sigPolicy, nil, nil)
+	return createArtifact(logger, st, nil, "", trustProxy, sigPolicy, nil, nil, nil, nil)
 }
 
 func CreateArtifactWithReleaseAuto(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger) http.HandlerFunc {
-	return createArtifact(logger, st, nil, "", trustProxy, sigPolicy, releaseAuto, nil)
+	return createArtifact(logger, st, nil, "", trustProxy, sigPolicy, releaseAuto, nil, nil, nil)
 }
 
 func CreateArtifactWithObjectStore(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
-	return createArtifact(logger, st, objStore, bucket, trustProxy, sigPolicy, nil, nil)
+	return createArtifact(logger, st, objStore, bucket, trustProxy, sigPolicy, nil, nil, nil, nil)
 }
 
 func CreateArtifactWithReleaseAutoObjectStore(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger) http.HandlerFunc {
-	return createArtifact(logger, st, objStore, bucket, trustProxy, sigPolicy, releaseAuto, nil)
+	return createArtifact(logger, st, objStore, bucket, trustProxy, sigPolicy, releaseAuto, nil, nil, nil)
 }
 
-func CreateArtifactWithRealtime(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub) http.HandlerFunc {
-	return createArtifact(logger, st, objStore, bucket, trustProxy, sigPolicy, releaseAuto, hub)
+func CreateArtifactWithRealtime(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string) http.HandlerFunc {
+	return createArtifact(logger, st, objStore, bucket, trustProxy, sigPolicy, releaseAuto, hub, vulnScan, vulnSkipTypes)
 }
 
-func createArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub) http.HandlerFunc {
+func createArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req CreateArtifactRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -304,6 +320,9 @@ func createArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 		if releaseAuto != nil {
 			releaseAuto.Trigger("artifact_create")
 		}
+		if vulnScan != nil && shouldScanArtifact(artifact.Type, vulnSkipTypes) {
+			vulnScan.Trigger(artifact.ArtifactID, artifact.ObjectKey, artifact.SHA256)
+		}
 
 		resp := artifactToResponse(artifact, 0)
 		w.Header().Set("Content-Type", "application/json")
@@ -327,18 +346,18 @@ func emitArtifactRegisteredEvent(logger *log.Logger, st store.Store, hub *events
 }
 
 func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
-	return uploadArtifact(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, nil, nil)
+	return uploadArtifact(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, nil, nil, nil, nil)
 }
 
 func UploadArtifactWithReleaseAuto(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger) http.HandlerFunc {
-	return uploadArtifact(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, releaseAuto, nil)
+	return uploadArtifact(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, releaseAuto, nil, nil, nil)
 }
 
-func UploadArtifactWithRealtime(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub) http.HandlerFunc {
-	return uploadArtifact(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, releaseAuto, hub)
+func UploadArtifactWithRealtime(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string) http.HandlerFunc {
+	return uploadArtifact(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, releaseAuto, hub, vulnScan, vulnSkipTypes)
 }
 
-func uploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub) http.HandlerFunc {
+func uploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		record := func(status string) {
 			if metricsCollector != nil {
@@ -506,6 +525,9 @@ func uploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 		if releaseAuto != nil {
 			releaseAuto.Trigger("artifact_upload")
 		}
+		if vulnScan != nil && shouldScanArtifact(atype, vulnSkipTypes) {
+			vulnScan.Trigger(artifactID, objectKey, actualSHA)
+		}
 
 		resp := UploadArtifactResponse{
 			ArtifactID: artifactID,
@@ -522,21 +544,23 @@ func uploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 }
 
 func PullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, allowedHosts []string, maxBytes int64, timeout time.Duration, allowInsecureHTTP bool, credentialResolver artifactingest.CredentialResolver, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
-	return pullArtifact(logger, st, objStore, bucket, allowedHosts, maxBytes, timeout, allowInsecureHTTP, credentialResolver, trustProxy, metricsCollector, sigPolicy, nil, nil)
+	return pullArtifact(logger, st, objStore, bucket, allowedHosts, maxBytes, timeout, allowInsecureHTTP, credentialResolver, trustProxy, metricsCollector, sigPolicy, nil, nil, nil, nil)
 }
 
 func PullArtifactWithReleaseAuto(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, allowedHosts []string, maxBytes int64, timeout time.Duration, allowInsecureHTTP bool, credentialResolver artifactingest.CredentialResolver, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger) http.HandlerFunc {
-	return pullArtifact(logger, st, objStore, bucket, allowedHosts, maxBytes, timeout, allowInsecureHTTP, credentialResolver, trustProxy, metricsCollector, sigPolicy, releaseAuto, nil)
+	return pullArtifact(logger, st, objStore, bucket, allowedHosts, maxBytes, timeout, allowInsecureHTTP, credentialResolver, trustProxy, metricsCollector, sigPolicy, releaseAuto, nil, nil, nil)
 }
 
-func PullArtifactWithRealtime(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, allowedHosts []string, maxBytes int64, timeout time.Duration, allowInsecureHTTP bool, credentialResolver artifactingest.CredentialResolver, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub) http.HandlerFunc {
-	return pullArtifact(logger, st, objStore, bucket, allowedHosts, maxBytes, timeout, allowInsecureHTTP, credentialResolver, trustProxy, metricsCollector, sigPolicy, releaseAuto, hub)
+func PullArtifactWithRealtime(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, allowedHosts []string, maxBytes int64, timeout time.Duration, allowInsecureHTTP bool, credentialResolver artifactingest.CredentialResolver, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string) http.HandlerFunc {
+	return pullArtifact(logger, st, objStore, bucket, allowedHosts, maxBytes, timeout, allowInsecureHTTP, credentialResolver, trustProxy, metricsCollector, sigPolicy, releaseAuto, hub, vulnScan, vulnSkipTypes)
 }
 
-func pullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, allowedHosts []string, maxBytes int64, timeout time.Duration, allowInsecureHTTP bool, credentialResolver artifactingest.CredentialResolver, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub) http.HandlerFunc {
+func pullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, allowedHosts []string, maxBytes int64, timeout time.Duration, allowInsecureHTTP bool, credentialResolver artifactingest.CredentialResolver, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string) http.HandlerFunc {
 	adapterRegistry := artifactingest.NewPullAdapterRegistry(
 		artifactingest.NewHTTPPullAdapter(allowedHosts, timeout, allowInsecureHTTP),
 		artifactingest.NewArtifactoryPullAdapter(allowedHosts, timeout, allowInsecureHTTP),
+		artifactingest.NewS3PullAdapter(timeout),
+		artifactingest.NewGCSPullAdapter(timeout),
 	)
 	if credentialResolver == nil {
 		credentialResolver = artifactingest.NoopCredentialResolver{}
@@ -817,6 +841,9 @@ func pullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, buck
 		if releaseAuto != nil {
 			releaseAuto.Trigger("artifact_pull")
 		}
+		if vulnScan != nil && shouldScanArtifact(atype, vulnSkipTypes) {
+			vulnScan.Trigger(artifactID, objectKey, actualSHA)
+		}
 
 		out := UploadArtifactResponse{
 			ArtifactID: artifactID,
@@ -910,18 +937,18 @@ func PresignArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectSt
 }
 
 func CompleteArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
-	return completeArtifactUpload(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, nil, nil)
+	return completeArtifactUpload(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, nil, nil, nil, nil)
 }
 
 func CompleteArtifactUploadWithReleaseAuto(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger) http.HandlerFunc {
-	return completeArtifactUpload(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, releaseAuto, nil)
+	return completeArtifactUpload(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, releaseAuto, nil, nil, nil)
 }
 
-func CompleteArtifactUploadWithRealtime(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub) http.HandlerFunc {
-	return completeArtifactUpload(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, releaseAuto, hub)
+func CompleteArtifactUploadWithRealtime(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string) http.HandlerFunc {
+	return completeArtifactUpload(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, releaseAuto, hub, vulnScan, vulnSkipTypes)
 }
 
-func completeArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub) http.HandlerFunc {
+func completeArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		record := func(status string) {
 			if metricsCollector != nil {
@@ -1101,6 +1128,9 @@ func completeArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectS
 		emitArtifactRegisteredEvent(logger, st, hub, artifact, "complete")
 		if releaseAuto != nil {
 			releaseAuto.Trigger("artifact_complete_upload")
+		}
+		if vulnScan != nil && shouldScanArtifact(atype, vulnSkipTypes) {
+			vulnScan.Trigger(req.ArtifactID, req.ObjectKey, actualSHA)
 		}
 
 		resp := UploadArtifactResponse{
@@ -1805,6 +1835,15 @@ func verifyStoredArtifact(ctx context.Context, st store.Store, objStore ObjectSt
 	signatureKeyID = strings.TrimSpace(signatureKeyID)
 	if signature == "" {
 		result, decisionErr := artifacttrust.VerificationOutcomeForIngest(globalPolicy, "", "", "", nil, nil)
+		return result, actualSHA, int64(len(body)), decisionErr
+	}
+	// Keyless cosign path: signature field contains the JSON-encoded KeylessCosignBundle.
+	if strings.ToLower(strings.TrimSpace(signatureType)) == artifacttrust.SignatureTypeKeyless {
+		_, _, verifyErr := artifacttrust.VerifyArtifactKeyless(signature, actualSHA, sigPolicy.KeylessOpts)
+		result, decisionErr := artifacttrust.VerificationOutcomeForIngest(globalPolicy, signature, signatureType, "", nil, verifyErr)
+		if verifyErr == nil {
+			result.Status = artifacttrust.VerificationStatusVerified
+		}
 		return result, actualSHA, int64(len(body)), decisionErr
 	}
 	if signatureKeyID == "" {

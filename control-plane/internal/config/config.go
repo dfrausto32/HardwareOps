@@ -65,6 +65,13 @@ type Config struct {
 	ArtifactPullCredentialsFile            string
 	ArtifactPullCredentialsAWSSecretID     string
 	ArtifactPullCredentialsAWSRegion       string
+	ArtifactPullCredentialsVaultAddr       string
+	ArtifactPullCredentialsVaultToken      string
+	ArtifactPullCredentialsVaultPath       string
+	ArtifactPullCredentialsVaultRole       string
+	ArtifactFulcioRootCert                 string
+	ArtifactRekorURL                       string
+	ArtifactRequireRekorLog                bool
 	ReleaseAutoUpdateInterval              time.Duration
 	MaintenanceEnabled                     bool
 	MaintenanceMessage                     string
@@ -125,6 +132,16 @@ type Config struct {
 	AuthOIDCGroupClaim                     string
 	AuthOIDCRoleMap                        string
 	AuthOIDCDefaultRole                    string
+	AuthLDAPURL                            string
+	AuthLDAPBaseDN                         string
+	AuthLDAPBindDN                         string
+	AuthLDAPBindPassword                   string
+	AuthLDAPUserFilter                     string
+	AuthLDAPMailAttr                       string
+	AuthLDAPDisplayAttr                    string
+	AuthLDAPGroupAttr                      string
+	AuthLDAPRoleMap                        string
+	AuthLDAPDefaultRole                    string
 	CIWorkloadIdentityProvidersJSON        string
 	CIWorkloadIdentityProvidersFile        string
 	CIWorkloadIdentityProvidersAWSSecretID string
@@ -143,6 +160,26 @@ type Config struct {
 	DBMaxConns                             int
 	DBMinConns                             int
 	DBMaxConnIdleTime                      time.Duration
+	// Artifact vulnerability scanning (Grype/Trivy).
+	VulnArtifactScanner    string        // "grype" | "trivy" | "disabled"
+	VulnArtifactScannerBin string        // path to binary
+	VulnArtifactSkipTypes  []string      // artifact types to skip
+	// Nessus device scanning.
+	VulnNessusURL          string
+	VulnNessusAccessKey    string
+	VulnNessusSecretKey    string
+	VulnNessusSyncInterval time.Duration
+	VulnNessusScanIDs      []string
+	// Email delivery (SMTP).
+	SMTPHost       string
+	SMTPPort       int
+	SMTPUser       string
+	SMTPPassword   string
+	SMTPFrom       string
+	SMTPTLSMode    string
+	SMTPTimeout    time.Duration
+	SMTPSkipVerify bool
+	AppPublicURL   string
 }
 
 const defaultTrustedProxyCIDRs = "127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fc00::/7,fe80::/10"
@@ -219,6 +256,13 @@ func FromEnv() Config {
 		ArtifactPullCredentialsFile:            os.Getenv("ARTIFACT_PULL_CREDENTIALS_FILE"),
 		ArtifactPullCredentialsAWSSecretID:     os.Getenv("ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID"),
 		ArtifactPullCredentialsAWSRegion:       os.Getenv("ARTIFACT_PULL_CREDENTIALS_AWS_REGION"),
+		ArtifactPullCredentialsVaultAddr:       os.Getenv("ARTIFACT_PULL_CREDENTIALS_VAULT_ADDR"),
+		ArtifactPullCredentialsVaultToken:      os.Getenv("ARTIFACT_PULL_CREDENTIALS_VAULT_TOKEN"),
+		ArtifactPullCredentialsVaultPath:       os.Getenv("ARTIFACT_PULL_CREDENTIALS_VAULT_PATH"),
+		ArtifactPullCredentialsVaultRole:       os.Getenv("ARTIFACT_PULL_CREDENTIALS_VAULT_ROLE"),
+		ArtifactFulcioRootCert:                 strings.TrimSpace(os.Getenv("ARTIFACT_FULCIO_ROOT_CERT")),
+		ArtifactRekorURL:                       getenvDefault("ARTIFACT_REKOR_URL", "https://rekor.sigstore.dev"),
+		ArtifactRequireRekorLog:                parseBoolEnvDefault("ARTIFACT_REQUIRE_REKOR_LOG", false),
 		ReleaseAutoUpdateInterval:              parseDurationDefault(getenvDefault("RELEASE_AUTO_UPDATE_INTERVAL", "60s"), 60*time.Second),
 		MaintenanceEnabled:                     parseBoolEnv("MAINTENANCE_MODE"),
 		MaintenanceMessage:                     getenvDefault("MAINTENANCE_MESSAGE", ""),
@@ -279,6 +323,16 @@ func FromEnv() Config {
 		AuthOIDCGroupClaim:                     getenvDefault("AUTH_OIDC_GROUP_CLAIM", "groups"),
 		AuthOIDCRoleMap:                        os.Getenv("AUTH_OIDC_ROLE_MAP"),
 		AuthOIDCDefaultRole:                    getenvDefault("AUTH_OIDC_DEFAULT_ROLE", "viewer"),
+		AuthLDAPURL:                            os.Getenv("AUTH_LDAP_URL"),
+		AuthLDAPBaseDN:                         os.Getenv("AUTH_LDAP_BASE_DN"),
+		AuthLDAPBindDN:                         os.Getenv("AUTH_LDAP_BIND_DN"),
+		AuthLDAPBindPassword:                   os.Getenv("AUTH_LDAP_BIND_PASSWORD"),
+		AuthLDAPUserFilter:                     getenvDefault("AUTH_LDAP_USER_FILTER", "(uid=%s)"),
+		AuthLDAPMailAttr:                       getenvDefault("AUTH_LDAP_MAIL_ATTR", "mail"),
+		AuthLDAPDisplayAttr:                    getenvDefault("AUTH_LDAP_DISPLAY_ATTR", "displayName"),
+		AuthLDAPGroupAttr:                      getenvDefault("AUTH_LDAP_GROUP_ATTR", "memberOf"),
+		AuthLDAPRoleMap:                        os.Getenv("AUTH_LDAP_ROLE_MAP"),
+		AuthLDAPDefaultRole:                    getenvDefault("AUTH_LDAP_DEFAULT_ROLE", "viewer"),
 		CIWorkloadIdentityProvidersJSON:        os.Getenv("CI_WORKLOAD_IDENTITY_PROVIDERS_JSON"),
 		CIWorkloadIdentityProvidersFile:        os.Getenv("CI_WORKLOAD_IDENTITY_PROVIDERS_FILE"),
 		CIWorkloadIdentityProvidersAWSSecretID: os.Getenv("CI_WORKLOAD_IDENTITY_PROVIDERS_AWS_SECRET_ID"),
@@ -297,6 +351,23 @@ func FromEnv() Config {
 		DBMaxConns:                             getenvInt("DB_MAX_CONNS", 50),
 		DBMinConns:                             getenvInt("DB_MIN_CONNS", 5),
 		DBMaxConnIdleTime:                      parseDurationDefault(getenvDefault("DB_MAX_CONN_IDLE_TIME", "10m"), 10*time.Minute),
+		VulnArtifactScanner:                    getenvDefault("VULN_ARTIFACT_SCANNER", "disabled"),
+		VulnArtifactScannerBin:                 getenvDefault("VULN_ARTIFACT_SCANNER_BIN", ""),
+		VulnArtifactSkipTypes:                  parseCSV(getenvDefault("VULN_ARTIFACT_SKIP_TYPES", "")),
+		VulnNessusURL:                          strings.TrimSpace(os.Getenv("VULN_NESSUS_URL")),
+		VulnNessusAccessKey:                    os.Getenv("VULN_NESSUS_ACCESS_KEY"),
+		VulnNessusSecretKey:                    os.Getenv("VULN_NESSUS_SECRET_KEY"),
+		VulnNessusSyncInterval:                 parseDurationDefault(getenvDefault("VULN_NESSUS_SYNC_INTERVAL", "1h"), time.Hour),
+		VulnNessusScanIDs:                      parseCSV(getenvDefault("VULN_NESSUS_SCAN_IDS", "")),
+		SMTPHost:                               strings.TrimSpace(os.Getenv("SMTP_HOST")),
+		SMTPPort:                               getenvInt("SMTP_PORT", 587),
+		SMTPUser:                               os.Getenv("SMTP_USER"),
+		SMTPPassword:                           os.Getenv("SMTP_PASSWORD"),
+		SMTPFrom:                               getenvDefault("SMTP_FROM", "HardwareOps <noreply@example.com>"),
+		SMTPTLSMode:                            getenvDefault("SMTP_TLS_MODE", "starttls"),
+		SMTPTimeout:                            parseDurationDefault(getenvDefault("SMTP_TIMEOUT", "10s"), 10*time.Second),
+		SMTPSkipVerify:                         parseBoolEnvDefault("SMTP_SKIP_VERIFY", false),
+		AppPublicURL:                           strings.TrimSpace(os.Getenv("APP_PUBLIC_URL")),
 	}
 }
 
@@ -393,6 +464,16 @@ func parseBoolEnvDefault(key string, def bool) bool {
 // OIDCEnabled returns true when OIDC SSO is configured.
 func (c *Config) OIDCEnabled() bool {
 	return strings.TrimSpace(c.AuthOIDCIssuer) != ""
+}
+
+// LDAPEnabled returns true when LDAP authentication is configured.
+func (c *Config) LDAPEnabled() bool {
+	return strings.TrimSpace(c.AuthLDAPURL) != ""
+}
+
+// SMTPEnabled returns true when an SMTP host is configured.
+func (c *Config) SMTPEnabled() bool {
+	return strings.TrimSpace(c.SMTPHost) != ""
 }
 
 // WorkloadIdentityEnabled returns true when CI workload identity providers are configured.

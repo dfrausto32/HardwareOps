@@ -71,6 +71,46 @@ Then restart:
 docker compose -f docker-compose.onprem.bundle.yml --env-file .env.onprem up -d
 ```
 
+#### Optional: LDAP / Active Directory
+
+To enable directory authentication, add to `.env.onprem`:
+
+```env
+AUTH_LDAP_URL=ldaps://ad.corp.example.com:636
+AUTH_LDAP_BASE_DN=ou=Employees,dc=corp,dc=example,dc=com
+AUTH_LDAP_BIND_DN=CN=hardwareops-svc,OU=ServiceAccounts,DC=corp,DC=example,DC=com
+AUTH_LDAP_BIND_PASSWORD=<service-account-password>
+AUTH_LDAP_USER_FILTER=(sAMAccountName=%s)
+AUTH_LDAP_ROLE_MAP={"CN=HW-Admins,DC=corp,DC=example,DC=com":"admin"}
+AUTH_LDAP_DEFAULT_ROLE=viewer
+```
+
+Leave `AUTH_LDAP_URL` blank to keep LDAP disabled. See `docs/ldap-auth.md` for full configuration reference.
+
+#### Optional: Vault pull-credential backend
+
+To load artifact pull credentials from HashiCorp Vault KV v2 instead of static files or AWS Secrets Manager:
+
+```env
+ARTIFACT_PULL_CREDENTIALS_VAULT_ADDR=https://vault.internal:8200
+ARTIFACT_PULL_CREDENTIALS_VAULT_TOKEN=<vault-token>
+ARTIFACT_PULL_CREDENTIALS_VAULT_PATH=secret/data/hardwareops/pull-creds
+```
+
+See `docs/cloud-pull-adapters.md` for the expected secret format and rotation runbook.
+
+#### Optional: Keyless cosign / supply-chain provenance
+
+Leave unset to use the public Sigstore roots. For a private Fulcio deployment:
+
+```env
+ARTIFACT_FULCIO_ROOT_CERT=<PEM-encoded Fulcio root CA>
+ARTIFACT_REKOR_URL=https://rekor.internal
+ARTIFACT_REQUIRE_REKOR_LOG=1
+```
+
+See `docs/artifact-provenance.md` for provenance policy configuration.
+
 ### 2.4 Verify control-plane and UI
 
 ```bash

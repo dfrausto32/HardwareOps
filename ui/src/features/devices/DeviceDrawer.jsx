@@ -39,6 +39,8 @@ export default function DeviceDrawer({
   trustPolicySummary,
   updateDeviceComponent,
   verificationPillLabel,
+  deviceVulnScan,
+  onLoadDeviceVulnScan,
 }) {
   return (
     <>
@@ -381,6 +383,57 @@ export default function DeviceDrawer({
                     </div>
                   </fieldset>
                 </form>
+
+                <fieldset>
+                  <legend>Vulnerability Posture</legend>
+                  {!deviceVulnScan ? (
+                    <div>
+                      <button className="button ghost" onClick={() => onLoadDeviceVulnScan && onLoadDeviceVulnScan(selectedDeviceId)}>
+                        Load Nessus scan
+                      </button>
+                    </div>
+                  ) : deviceVulnScan === 'loading' ? (
+                    <div>Loading…</div>
+                  ) : (
+                    <div>
+                      <div style={{ marginBottom: 6 }}>
+                        <strong>Status:</strong> {deviceVulnScan.scanStatus}
+                        {deviceVulnScan.syncedAt && (
+                          <span style={{ marginLeft: 8, fontSize: '0.8em', color: 'var(--text-muted)' }}>
+                            Synced {deviceVulnScan.syncedAt}
+                          </span>
+                        )}
+                      </div>
+                      {deviceVulnScan.severityCounts && (
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+                          {['critical','high','medium','low','unknown'].map((sev) => {
+                            const n = deviceVulnScan.severityCounts[sev] || 0
+                            if (n === 0) return null
+                            return <span key={sev} className={`pill pill-${sev}`}>{n} {sev}</span>
+                          })}
+                        </div>
+                      )}
+                      {deviceVulnScan.findings && deviceVulnScan.findings.length > 0 && (
+                        <div style={{ maxHeight: 200, overflowY: 'auto', fontSize: '0.8em' }}>
+                          <table style={{ width: '100%' }}>
+                            <thead>
+                              <tr><th>ID</th><th>Severity</th><th>Package</th></tr>
+                            </thead>
+                            <tbody>
+                              {deviceVulnScan.findings.map((f, i) => (
+                                <tr key={i}>
+                                  <td className="mono">{f.id}</td>
+                                  <td>{f.severity}</td>
+                                  <td>{f.package}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </fieldset>
 
                 <div className="inline-row">
                   <button className="button ghost" onClick={() => downloadLogs(selectedDeviceId)}>

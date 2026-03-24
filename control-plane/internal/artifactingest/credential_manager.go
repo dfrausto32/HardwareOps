@@ -12,11 +12,15 @@ type PullCredentialStatus struct {
 	Configured           bool      `json:"configured"`
 	StaticConfigured     bool      `json:"staticConfigured"`
 	AWSSecretConfigured  bool      `json:"awsSecretConfigured"`
+	VaultBacked          bool      `json:"vault_backed"`
+	VaultAddr            string    `json:"vault_addr,omitempty"`
+	VaultPath            string    `json:"vault_path,omitempty"`
 	ResolverAvailable    bool      `json:"resolverAvailable"`
 	CredentialRefCount   int       `json:"credentialRefCount"`
 	CredentialRefs       []string  `json:"credentialRefs,omitempty"`
 	StaticCredentialRefs int       `json:"staticCredentialRefs"`
 	AWSCredentialRefs    int       `json:"awsCredentialRefs"`
+	VaultCredentialRefs  int       `json:"vaultCredentialRefs"`
 	LastLoadedAt         time.Time `json:"lastLoadedAt,omitempty"`
 }
 
@@ -25,23 +29,31 @@ type PullCredentialManager struct {
 	inlineJSON  string
 	awsSecretID string
 	awsRegion   string
+	vaultAddr   string
+	vaultToken  string
+	vaultPath   string
 
 	loadStatic func(filePath, inlineJSON string) (map[string]map[string]string, error)
 	loadAWS    func(ctx context.Context, secretID, region string) (map[string]map[string]string, error)
+	loadVault  func(ctx context.Context, addr, token, path string) (map[string]map[string]string, error)
 
 	mu       sync.RWMutex
 	resolver CredentialResolver
 	status   PullCredentialStatus
 }
 
-func NewPullCredentialManager(filePath, inlineJSON, awsSecretID, awsRegion string) (*PullCredentialManager, error) {
+func NewPullCredentialManager(filePath, inlineJSON, awsSecretID, awsRegion, vaultAddr, vaultToken, vaultPath string) (*PullCredentialManager, error) {
 	mgr := &PullCredentialManager{
 		filePath:    strings.TrimSpace(filePath),
 		inlineJSON:  strings.TrimSpace(inlineJSON),
 		awsSecretID: strings.TrimSpace(awsSecretID),
 		awsRegion:   strings.TrimSpace(awsRegion),
+		vaultAddr:   strings.TrimSpace(vaultAddr),
+		vaultToken:  strings.TrimSpace(vaultToken),
+		vaultPath:   strings.TrimSpace(vaultPath),
 		loadStatic:  LoadStaticCredentials,
 		loadAWS:     LoadStaticCredentialsFromAWSSecretManager,
+		loadVault:   LoadStaticCredentialsFromVault,
 		resolver:    NoopCredentialResolver{},
 	}
 	if _, err := mgr.Reload(context.Background()); err != nil {
@@ -68,13 +80,19 @@ func (m *PullCredentialManager) Reload(ctx context.Context) (PullCredentialStatu
 		return PullCredentialStatus{}, ErrCredentialResolverUnavailable
 	}
 
+	vaultConfigured := m.vaultAddr != "" && m.vaultToken != "" && m.vaultPath != ""
 	status := PullCredentialStatus{
 		StaticConfigured:    m.filePath != "" || m.inlineJSON != "",
 		AWSSecretConfigured: m.awsSecretID != "",
+		VaultBacked:         vaultConfigured,
 	}
-	status.Configured = status.StaticConfigured || status.AWSSecretConfigured
+	if vaultConfigured {
+		status.VaultAddr = m.vaultAddr
+		status.VaultPath = m.vaultPath
+	}
+	status.Configured = status.StaticConfigured || status.AWSSecretConfigured || vaultConfigured
 
-	sets := make([]map[string]map[string]string, 0, 2)
+	sets := make([]map[string]map[string]string, 0, 3)
 	if status.StaticConfigured {
 		values, err := m.loadStatic(m.filePath, m.inlineJSON)
 		if err != nil {
@@ -91,6 +109,16 @@ func (m *PullCredentialManager) Reload(ctx context.Context) (PullCredentialStatu
 			return PullCredentialStatus{}, err
 		}
 		status.AWSCredentialRefs = len(values)
+		if len(values) > 0 {
+			sets = append(sets, values)
+		}
+	}
+	if vaultConfigured {
+		values, err := m.loadVault(ctx, m.vaultAddr, m.vaultToken, m.vaultPath)
+		if err != nil {
+			return PullCredentialStatus{}, err
+		}
+		status.VaultCredentialRefs = len(values)
 		if len(values) > 0 {
 			sets = append(sets, values)
 		}

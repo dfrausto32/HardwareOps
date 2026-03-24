@@ -37,18 +37,27 @@ type updateTrustedSigningKeyRequest struct {
 	Notes       string `json:"notes"`
 }
 
+type provenancePolicyRequest struct {
+	RequireProvenance     bool   `json:"requireProvenance"`
+	RequiredPredicateType string `json:"requiredPredicateType,omitempty"`
+	RequiredBuilderID     string `json:"requiredBuilderId,omitempty"`
+	RequiredBuilderIssuer string `json:"requiredBuilderIssuer,omitempty"`
+}
+
 type artifactTrustPolicyRequest struct {
-	VerificationMode      string   `json:"verificationMode"`
-	AllowedSigningKeyIDs  []string `json:"allowedSigningKeyIds,omitempty"`
-	AllowedSignatureTypes []string `json:"allowedSignatureTypes,omitempty"`
+	VerificationMode      string                  `json:"verificationMode"`
+	AllowedSigningKeyIDs  []string                `json:"allowedSigningKeyIds,omitempty"`
+	AllowedSignatureTypes []string                `json:"allowedSignatureTypes,omitempty"`
+	Provenance            *provenancePolicyRequest `json:"provenance,omitempty"`
 }
 
 type artifactTrustPolicyResponse struct {
-	VerificationMode      string    `json:"verificationMode"`
-	AllowedSigningKeyIDs  []string  `json:"allowedSigningKeyIds,omitempty"`
-	AllowedSignatureTypes []string  `json:"allowedSignatureTypes,omitempty"`
-	UpdatedAt             time.Time `json:"updatedAt"`
-	UpdatedByUserID       string    `json:"updatedByUserId,omitempty"`
+	VerificationMode      string                  `json:"verificationMode"`
+	AllowedSigningKeyIDs  []string                `json:"allowedSigningKeyIds,omitempty"`
+	AllowedSignatureTypes []string                `json:"allowedSignatureTypes,omitempty"`
+	Provenance            *provenancePolicyRequest `json:"provenance,omitempty"`
+	UpdatedAt             time.Time               `json:"updatedAt"`
+	UpdatedByUserID       string                  `json:"updatedByUserId,omitempty"`
 }
 
 func ListTrustedSigningKeys(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
@@ -224,10 +233,20 @@ func PutArtifactTrustPolicy(logger *log.Logger, st store.Store, trustProxy bool,
 			}
 			types = append(types, norm)
 		}
+		var provJSON []byte
+		if req.Provenance != nil {
+			provJSON = artifacttrust.EncodeProvenancePolicy(store.ProvenancePolicy{
+				RequireProvenance:     req.Provenance.RequireProvenance,
+				RequiredPredicateType: req.Provenance.RequiredPredicateType,
+				RequiredBuilderID:     req.Provenance.RequiredBuilderID,
+				RequiredBuilderIssuer: req.Provenance.RequiredBuilderIssuer,
+			})
+		}
 		policy, err := artifacttrust.EnforcePolicyFloor(store.ArtifactTrustPolicy{
 			VerificationMode:          mode,
 			AllowedSigningKeyIDsJSON:  keyIDs,
 			AllowedSignatureTypesJSON: artifacttrust.MustEncodeStringArray(types),
+			ProvenancePolicyJSON:      provJSON,
 			UpdatedByUserID:           currentUserID(r),
 		}, sigPolicy.Hardened)
 		if err != nil {
@@ -261,13 +280,26 @@ func artifactTrustPolicyToResponse(policy store.ArtifactTrustPolicy) (artifactTr
 	if err != nil {
 		return artifactTrustPolicyResponse{}, err
 	}
-	return artifactTrustPolicyResponse{
+	resp := artifactTrustPolicyResponse{
 		VerificationMode:      policy.VerificationMode,
 		AllowedSigningKeyIDs:  keyIDs,
 		AllowedSignatureTypes: types,
 		UpdatedAt:             policy.UpdatedAt,
 		UpdatedByUserID:       policy.UpdatedByUserID,
-	}, nil
+	}
+	if len(policy.ProvenancePolicyJSON) > 0 {
+		prov, err := artifacttrust.DecodeProvenancePolicy(policy.ProvenancePolicyJSON)
+		if err != nil {
+			return artifactTrustPolicyResponse{}, err
+		}
+		resp.Provenance = &provenancePolicyRequest{
+			RequireProvenance:     prov.RequireProvenance,
+			RequiredPredicateType: prov.RequiredPredicateType,
+			RequiredBuilderID:     prov.RequiredBuilderID,
+			RequiredBuilderIssuer: prov.RequiredBuilderIssuer,
+		}
+	}
+	return resp, nil
 }
 
 func trustedSigningKeyToResponse(key store.TrustedSigningKey) trustedSigningKeyResponse {

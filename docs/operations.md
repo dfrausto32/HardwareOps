@@ -116,6 +116,7 @@ Use this when rotating repository credentials used by pull ingest (`source.crede
 
 - Static file/json mode: update `ARTIFACT_PULL_CREDENTIALS_FILE` content (or `ARTIFACT_PULL_CREDENTIALS_JSON` value).
 - AWS mode: update the Secrets Manager secret value referenced by `ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID`.
+- Vault mode: update the KV v2 secret at `ARTIFACT_PULL_CREDENTIALS_VAULT_PATH`, then trigger a reload (step 4.2). To rotate the Vault token itself, update `ARTIFACT_PULL_CREDENTIALS_VAULT_TOKEN` in `.env.onprem` and restart the control-plane container. Rotate Vault tokens before their TTL expires — there is no automatic renewal.
 
 ### 4.2 Reload in control-plane (no restart)
 
@@ -181,3 +182,6 @@ For metric definitions and dashboard details:
 - CA and TLS rotation details: `certs.md`
 - Upgrade design and contract: `development/upgrade-strategy.md`
 - Deployment hardening controls: `deployment-hardening.md`
+- Pull credential backends (S3, GCS, Vault): `cloud-pull-adapters.md`
+- LDAP/AD authentication: `ldap-auth.md`
+- Keyless signing and attestations: `artifact-provenance.md`

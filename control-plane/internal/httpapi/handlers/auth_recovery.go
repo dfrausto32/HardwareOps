@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/hardwareops/control-plane/internal/auth"
+	"github.com/hardwareops/control-plane/internal/mailer"
 	"github.com/hardwareops/control-plane/internal/store"
 )
 
@@ -34,6 +35,18 @@ type RecoveryCodeResetResponse struct {
 type CreatePasswordResetTokenRequest struct {
 	TTLMinutes int    `json:"ttlMinutes"`
 	Reason     string `json:"reason"`
+	SendEmail  bool   `json:"sendEmail"`
+}
+
+type ForgotPasswordRequest struct {
+	Email string `json:"email"`
+}
+
+type SendUserInviteResponse struct {
+	TokenID   string    `json:"tokenId"`
+	UserID    string    `json:"userId"`
+	Email     string    `json:"email"`
+	ExpiresAt time.Time `json:"expiresAt"`
 }
 
 type CreatePasswordResetTokenResponse struct {
@@ -171,7 +184,7 @@ func ResetPasswordWithRecoveryCode(logger *log.Logger, manager *auth.Manager, st
 	}
 }
 
-func CreatePasswordResetToken(logger *log.Logger, manager *auth.Manager, st store.Store, trustProxy bool) http.HandlerFunc {
+func CreatePasswordResetToken(logger *log.Logger, manager *auth.Manager, st store.Store, m mailer.Mailer, appPublicURL string, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if manager == nil || !manager.Enabled() || manager.Mode() != auth.ModeLocal {
 			http.Error(w, "auth disabled", http.StatusNotFound)
@@ -234,6 +247,15 @@ func CreatePasswordResetToken(logger *log.Logger, manager *auth.Manager, st stor
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+		if req.SendEmail && m != nil {
+			if err := m.SendPasswordReset(user.Email, tokenValue, resetToken.ExpiresAt, appPublicURL); err != nil {
+				logger.Printf("send password reset email: %v", err)
+				// non-fatal — token is still returned in response as admin backup
+			} else {
+				resetToken.DeliveryMode = "email"
+				_ = st.UpdatePasswordResetTokenEmailSent(resetToken.TokenID, time.Now().UTC())
+			}
+		}
 		event := buildAuditEvent(r, trustProxy, actorUser(manager.Mode()), "auth.password_reset_token.issue", "user", userID)
 		event.AfterJSON = auditJSON(map[string]any{
 			"expiresAt": resetToken.ExpiresAt,
@@ -248,6 +270,158 @@ func CreatePasswordResetToken(logger *log.Logger, manager *auth.Manager, st stor
 			Email:     user.Email,
 			ExpiresAt: resetToken.ExpiresAt,
 			Token:     tokenValue,
+		})
+	}
+}
+
+func ForgotPassword(logger *log.Logger, manager *auth.Manager, st store.Store, m mailer.Mailer, appPublicURL string, trustProxy bool) http.HandlerFunc {
+	const genericMsg = "If that address is registered, a reset link has been sent."
+	return func(w http.ResponseWriter, r *http.Request) {
+		if manager == nil || !manager.Enabled() || manager.Mode() != auth.ModeLocal {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		var req ForgotPasswordRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+		if req.Email == "" {
+			http.Error(w, "email required", http.StatusBadRequest)
+			return
+		}
+
+		// Always return the same response — never reveal whether the email exists.
+		respond := func() {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{"message": genericMsg})
+		}
+
+		user, found, err := st.GetUserByEmail(req.Email)
+		if err != nil {
+			logger.Printf("forgot password lookup error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy,
+				AuditActor{Type: "anonymous", Email: req.Email, AuthMethod: "forgot_password"},
+				"auth.forgot_password.requested", "user", ""),
+				err)
+			respond()
+			return
+		}
+
+		emailSent := false
+		if found && !user.Disabled && user.AuthProvider == "local" {
+			tokenValue, tokenHash, err := auth.GenerateVoucherToken()
+			if err == nil {
+				now := time.Now().UTC()
+				resetToken := store.PasswordResetToken{
+					TokenID:      uuid.NewString(),
+					UserID:       user.UserID,
+					TokenHash:    tokenHash,
+					DeliveryMode: "email",
+					ExpiresAt:    now.Add(30 * time.Minute),
+					CreatedAt:    now,
+				}
+				if storeErr := st.CreatePasswordResetToken(resetToken); storeErr != nil {
+					logger.Printf("forgot password create token error: %v", storeErr)
+				} else if sendErr := m.SendPasswordReset(user.Email, tokenValue, resetToken.ExpiresAt, appPublicURL); sendErr != nil {
+					logger.Printf("forgot password send email error: %v", sendErr)
+				} else {
+					emailSent = true
+					_ = st.UpdatePasswordResetTokenEmailSent(resetToken.TokenID, time.Now().UTC())
+				}
+			}
+		}
+
+		// Audit includes whether email was found + sent, but NOT the user ID (prevents log enumeration).
+		event := buildAuditEvent(r, trustProxy,
+			AuditActor{Type: "anonymous", Email: req.Email, AuthMethod: "forgot_password"},
+			"auth.forgot_password.requested", "user", "")
+		event.AfterJSON = auditJSON(map[string]any{
+			"emailFound": found,
+			"emailSent":  emailSent,
+		})
+		writeAudit(logger, st, event, nil)
+		respond()
+	}
+}
+
+func SendUserInvite(logger *log.Logger, manager *auth.Manager, st store.Store, m mailer.Mailer, appPublicURL string, trustProxy bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if manager == nil || !manager.Enabled() || manager.Mode() != auth.ModeLocal {
+			http.Error(w, "auth disabled", http.StatusNotFound)
+			return
+		}
+		if m == nil {
+			http.Error(w, "SMTP not configured", http.StatusServiceUnavailable)
+			return
+		}
+		// NoopMailer — check via interface whether it's the no-op implementation.
+		if _, isNoop := m.(*mailer.NoopMailer); isNoop {
+			http.Error(w, "SMTP not configured", http.StatusServiceUnavailable)
+			return
+		}
+		userID := strings.TrimSpace(chi.URLParam(r, "userId"))
+		if userID == "" {
+			http.Error(w, "userId required", http.StatusBadRequest)
+			return
+		}
+		if _, err := uuid.Parse(userID); err != nil {
+			http.Error(w, "userId must be uuid", http.StatusBadRequest)
+			return
+		}
+		user, found, err := st.GetUser(userID)
+		if err != nil {
+			logger.Printf("get user for invite error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser(manager.Mode()), "auth.user_invite.sent", "user", userID), err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		if !found {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		tokenValue, tokenHash, err := auth.GenerateVoucherToken()
+		if err != nil {
+			http.Error(w, "token generation error", http.StatusInternalServerError)
+			return
+		}
+		now := time.Now().UTC()
+		resetToken := store.PasswordResetToken{
+			TokenID:      uuid.NewString(),
+			UserID:       user.UserID,
+			TokenHash:    tokenHash,
+			DeliveryMode: "invite",
+			ExpiresAt:    now.Add(72 * time.Hour),
+			CreatedAt:    now,
+		}
+		if currentUser, ok := auth.UserFromContext(r.Context()); ok {
+			resetToken.IssuedByUserID = currentUser.UserID
+		}
+		if err := st.CreatePasswordResetToken(resetToken); err != nil {
+			logger.Printf("create invite token error: %v", err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser(manager.Mode()), "auth.user_invite.sent", "user", userID), err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		if sendErr := m.SendInvite(user.Email, tokenValue, resetToken.ExpiresAt, appPublicURL); sendErr != nil {
+			logger.Printf("send invite email error: %v", sendErr)
+			// Non-fatal: token is stored. Log and continue.
+		} else {
+			_ = st.UpdatePasswordResetTokenEmailSent(resetToken.TokenID, time.Now().UTC())
+		}
+		event := buildAuditEvent(r, trustProxy, actorUser(manager.Mode()), "auth.user_invite.sent", "user", userID)
+		event.AfterJSON = auditJSON(map[string]any{
+			"email":     user.Email,
+			"expiresAt": resetToken.ExpiresAt,
+		})
+		writeAudit(logger, st, event, nil)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(SendUserInviteResponse{
+			TokenID:   resetToken.TokenID,
+			UserID:    user.UserID,
+			Email:     user.Email,
+			ExpiresAt: resetToken.ExpiresAt,
 		})
 	}
 }

@@ -23,6 +23,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Operational Hardening (between B and C) | 🟢 Complete | Pull-boundary, token exposure, startup guardrails, break-glass backend, proxy trust policy, and abuse controls are all shipped. |
 | Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, artifact tracking policies, the local-auth recovery stack (recovery codes, reset tokens, break-glass CLI), and CI workload identity federation are shipped. Remaining Phase C work is provenance policy, LDAP, and broader secrets integration. |
 | Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Remaining Phase D work is live-deployment acceptance gate execution, connected email delivery for auth recovery/setup, and custom RBAC policy delegation. |
+| Phase E — Federated Multi-Region | ⬜ Planned | Hub-and-spoke federation layer: global management plane above regional control planes. Agents unchanged. |
 
 ### Active work queue (what is still to do)
 
@@ -507,44 +508,59 @@ Confirm priorities with the team before mapping to agents.
 - **Notes:** Generic workload identity exchange is shipped for OIDC job tokens via `POST /api/v1/auth/workload-identity/exchange`, with config-driven issuer/audience/claim matching and short-lived internal bearer tokens carrying `artifact.publish`. First-class helper flows are shipped for GitHub Actions (`scripts/ci-exchange-workload-identity.sh`), GitLab (`scripts/ci-exchange-gitlab-workload-identity.sh`), and Jenkins (`scripts/ci-exchange-jenkins-workload-identity.sh`) with updated scaffold templates. Deployment wiring supports file/JSON or AWS Secrets Manager-backed provider config plus admin status visibility (`GET /api/v1/auth/workload-identity/status`) and smoke validation (`scripts/test-workload-identity.sh`). Live acceptance is now validated on AWS `parcel/dev` with a real GitHub Actions OIDC token exchange and signed artifact upload under strict trusted-key policy.
 
 #### Supply-chain provenance policy (Cosign/Sigstore)
-- **Status:** ⬜ Planned
+- **Status:** 🟢 Complete
 - **Scope:** Optional attestations/provenance verification policy in addition to Ed25519 signature checks.
 - **Dependencies:** CI provenance generation, policy model, verification pipeline.
 - **Risks:** Operational complexity and false rejects.
 - **Acceptance:** Policy can enforce trusted builder/provenance on selected artifact classes.
-- **Notes:** Phase C hardening item. Trusted-key verification is already shipped for `ed25519` and key-based `cosign`; this remaining item is specifically about provenance, attestations, Rekor/Fulcio/keyless, and builder identity policy.
+- **Notes:** Implemented in migration `0028_artifact_attestations.sql` and packages `artifacttrust/provenance.go` + `trust.go`. Keyless cosign verification uses Fulcio-issued ECDSA certs (OID extensions + URI SANs for builder identity) and optional Rekor transparency log. In-toto attestations stored in `artifact_attestations` table via `POST /api/v1/artifacts/{id}/attestations` (keyless bundle auto-verified on upload). Provenance policy enforced at desired-state set time via `CheckProvenancePolicy`. Global trust policy extended with `provenance` JSON block configurable via `PUT /api/v1/artifact-trust/policy`. Configurable via `ARTIFACT_FULCIO_ROOT_CERT`, `ARTIFACT_REKOR_URL`, `ARTIFACT_REQUIRE_REKOR_LOG`.
 
 #### Vulnerability scanning integration (optional, Tenable Nessus)
-- **Status:** ⬜ Planned
-- **Scope:** Optional integration to ingest Nessus scan results and surface vulnerability posture for deployed artifacts/devices.
-- **Dependencies:** Tenable API credentials, scan-to-asset mapping model, ingestion/sync job, UI views.
-- **Risks:** Asset identity mismatch, stale scan data, noisy findings without normalization.
-- **Acceptance:** Operators can see per-device/per-artifact vulnerability status (last scan time, severity counts, top CVEs), with no impact when feature is disabled.
-- **Notes:** Keep non-blocking for deployments; customers can enable/disable per environment. Initial cut should be read-only visibility first, policy gating later.
+- **Status:** 🟢 Complete
+- **Scope:** Two-track integration: (1) artifact-level scanning via Grype or Trivy CLI at ingest time; (2) device-level scanning via Nessus/Tenable API sync. Both are read-only visibility with full UI integration.
+- **Dependencies:** Grype/Trivy binary in PATH (artifact scanning) or Tenable API credentials (device scanning). Both are independently optional; set `VULN_ARTIFACT_SCANNER=disabled` and leave `VULN_NESSUS_URL` blank to disable entirely.
+- **Implementation:** `internal/vulnscan/` package (scanner interface, GrypeScanner, TrivyScanner, ArtifactScanJob, NessusClient, NessusSyncJob); migration 0029; 7 new API endpoints; artifact + device UI views; settings page sync controls.
+- **Notes:** Non-blocking for deployments (read-only). Device matching via `hwops.network.hostname` / `hwops.network.ip` metadata fields. See `docs/vulnerability-scanning.md`.
 
 #### Cloud-native pull adapters (S3/GCS)
-- **Status:** ⬜ Planned
-- **Scope:** Native `source.kind` adapters for S3 and GCS pull ingest.
-- **Dependencies:** IAM/Workload Identity, credential resolver policy, host/path allowlists.
-- **Risks:** Credential misconfiguration and broad bucket permissions.
-- **Acceptance:** Control-plane can ingest artifacts directly from S3/GCS sources with checksum/signature verification and audit parity.
-- **Notes:** Deferred from Phase B to Phase C; HTTP/Artifactory remain the v1 pull adapters.
+- **Status:** 🟢 Complete
+- **Scope:** Native `source.kind = "s3"` and `source.kind = "gcs"` adapters for pull ingest alongside the existing `http` and `artifactory` adapters. Both adapters integrate with the `CredentialResolver` system so credentials are resolved by ref (static file, AWS Secrets Manager, Vault) rather than being inlined in the pull request.
+- **Dependencies:** AWS SDK v2 (`aws-sdk-go-v2/service/s3`); `golang.org/x/oauth2/google` for GCS OAuth2. Both already present in go.mod. IAM role / IRSA / GKE Workload Identity credential chain supported without any credential store entry.
+- **Risks:** Credential misconfiguration could grant broad bucket access — mitigated by the existing `source.credentialRef` abstraction and audit trail. S3 bucket-policy ACLs and GCS IAM bindings remain the operator's responsibility.
+- **Acceptance:**
+  - `POST /api/v1/artifacts/pull` with `source.kind = "s3"` and `source.uri = "s3://bucket/key"` pulls the artifact bytes, verifies SHA-256 and signature, stores in MinIO, and emits audit events identically to the HTTP adapter.
+  - `POST /api/v1/artifacts/pull` with `source.kind = "gcs"` and `source.uri = "gs://bucket/object"` (or `gcs://`) behaves identically.
+  - Static AWS credentials (`access_key_id` / `secret_access_key` / `session_token`) and region override supplied via `credentialRef` entries; empty credential map falls back to the SDK default chain (IRSA / ECS task role / instance profile).
+  - GCS supports `oauth_token` (pre-obtained bearer), `service_account_json` (full SA key file), or Application Default Credentials (GKE Workload Identity / GCE instance service account / `GOOGLE_APPLICATION_CREDENTIALS`).
+  - Checksum mismatch, oversized artifacts, and S3/GCS request errors are surfaced as 400/502 with audit events.
+- **Notes:** Implemented in `internal/artifactingest/s3_pull_adapter.go` and `gcs_pull_adapter.go` following the `PullAdapter` interface pattern. Both adapters use injectable client factories for unit-testable mocking without live cloud credentials. GCS uses the XML storage API (`GET https://storage.googleapis.com/{bucket}/{object}`) with OAuth2 Bearer token, avoiding the heavyweight Google Cloud Storage SDK. S3 uses `aws-sdk-go-v2/service/s3.GetObject` with the standard credential chain. Registered alongside HTTP/Artifactory in `handlers.pullArtifact`. URI parsing is strict: non-`s3://` URIs are rejected by the S3 adapter; non-`gs://`/`gcs://` URIs are rejected by the GCS adapter.
 
 #### LDAP / AD support
-- **Status:** ⬜ Planned
-- **Scope:** LDAP/AD auth or sync.
-- **Dependencies:** Enterprise customer requirements.
-- **Risks:** Directory inconsistency.
-- **Acceptance:** Authentication works with AD/LDAP.
-- **Notes:** 
+- **Status:** 🟢 Complete
+- **Scope:** LDAP/AD authentication provider. Users authenticate with their directory username and password via a new `POST /api/v1/auth/ldap/login` endpoint. Roles mapped from LDAP group membership using a configurable group→role JSON map. User records upserted in the local store with `auth_provider = "ldap"` and `external_id = <user DN>`, enabling account linking and audit traceability. No SCIM or directory sync in this phase — auth-time upsert only.
+- **Dependencies:** Enterprise customer LDAP/AD environment. `go-ldap/ldap/v3` library (MIT).
+- **Risks:** Directory inconsistency (deprovisioned users still have cached store records); LDAP connection pooling and latency under load; AD vs. OpenLDAP filter differences; TLS cert validation for LDAPS.
+- **Acceptance:**
+  - Users can authenticate with `POST /api/v1/auth/ldap/login` using their directory credentials and receive a JWT identical to local/OIDC tokens.
+  - LDAP group membership is mapped to HardwareOps roles via `AUTH_LDAP_ROLE_MAP` (same JSON map pattern as OIDC).
+  - Failed login emits an audit event; successful login updates `last_login_at`.
+  - Disabled LDAP users (store `disabled = true`) are rejected regardless of directory state.
+  - TLS/LDAPS connections are supported; plain LDAP is supported for dev.
+  - UI shows LDAP login option when `AUTH_LDAP_URL` is configured.
+- **Notes:** Follows the OIDC provider pattern (`auth/oidc.go`): separate `LDAPProvider` struct, initialized in `main.go` when `AUTH_LDAP_URL` is set, wired into `httpapi.Dependencies`. User lookup uses `store.GetUserByExternalID("ldap", userDN)` → fall back to email → create. JWT issuance via `manager.IssueToken()`. No recovery codes issued for LDAP accounts. Directory deprovisioning not enforced at check-in time (out of scope for initial cut — covered by disabling the store record manually or via admin API).
 
 #### Secrets management integration
-- **Status:** ⬜ Planned
-- **Scope:** Vault / AWS Secrets Manager.
-- **Dependencies:** Secrets provider.
-- **Risks:** Secret sprawl.
-- **Acceptance:** No long‑lived secrets in config files.
-- **Notes:** AWS Secrets Manager-backed pull credential resolver is in place for CI pull ingest (`ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID`) from Phase B. Phase C expands this with a HashiCorp Vault resolver backend (plus auth/rotation runbook) so customers can use Vault as the source of pull credentials and related control-plane secrets.
+- **Status:** 🟢 Complete
+- **Scope:** HashiCorp Vault KV resolver backend for artifact pull credentials, extending the existing `CredentialResolver` interface. Operators configure Vault address, auth method (token or AWS IAM), and KV path; control-plane fetches pull credentials from Vault at startup and on operator-triggered reload. Reload surfaced in existing `GET /api/v1/pull-credentials/status` and `POST /api/v1/pull-credentials/reload` endpoints.
+- **Dependencies:** Vault server accessible from control-plane; `hashicorp/vault/api` Go SDK. AWS Secrets Manager resolver already in place as the pattern reference.
+- **Risks:** Vault unavailability blocks credential reload (but does not break in-flight operations already holding resolved credentials); token expiry if Vault token auth is used without renewal; secret path misconfiguration causes silent empty credential set.
+- **Acceptance:**
+  - Setting `ARTIFACT_PULL_CREDENTIALS_VAULT_ADDR` + `ARTIFACT_PULL_CREDENTIALS_VAULT_PATH` + auth method vars causes control-plane to fetch pull credentials from Vault KV on startup.
+  - `GET /api/v1/pull-credentials/status` reports `vault_backed: true` and Vault connection health.
+  - `POST /api/v1/pull-credentials/reload` triggers Vault re-fetch and returns updated status.
+  - Vault backend is mutually exclusive with AWS Secrets Manager backend (config validation enforces this).
+  - No long-lived static credentials required in environment when Vault is configured.
+- **Notes:** AWS Secrets Manager-backed pull credential resolver is in place for CI pull ingest (`ARTIFACT_PULL_CREDENTIALS_AWS_SECRET_ID`) from Phase B. Phase C adds `credentials_vault.go` implementing `CredentialResolver` using the same pattern as `credentials_aws_sm.go`. Vault token auth is the initial auth method; AWS IAM auth (Vault AWS auth backend) is a natural follow-on. KV v2 API only. Rotation runbook: operators rotate Vault secret, then call `POST /api/v1/pull-credentials/reload` — no control-plane restart required.
 
 #### Break-glass workflows
 - **Status:** 🟢 Complete
@@ -645,6 +661,93 @@ Confirm priorities with the team before mapping to agents.
 - **Risks:** Data leakage between tenants.
 - **Acceptance:** Tenant boundary enforcement + tests.
 - **Notes:** 
+
+---
+
+## Phase E — Federated Multi-Region
+**Goal:** Enable operators to manage devices across many geographic regions from a single global control plane, while keeping each regional plane fully autonomous.
+
+### Definition of Done
+- Operators can view device health, artifact inventory, and audit events across all registered regional planes from a single UI
+- Artifacts uploaded once to the global plane are replicated to and served from regional MinIO instances
+- Operators can push desired state policies globally; regional planes apply them with local-override capability
+- Regional planes continue operating fully (agent check-ins, desired state, cert rotation, enrollment) when the global plane is unreachable
+- Agents require zero changes
+
+### Architecture: Peer Coordinator Model
+
+Regional planes are first-class standalone control planes. The global plane is a coordinator and aggregator — additive, not load-bearing.
+
+```
+┌───────────────────────────────────────────────┐
+│              Global Control Plane              │
+│  - Artifact registry (canonical source)        │
+│  - Global group policies + desired state       │
+│  - Cross-region device directory (read cache)  │
+│  - Aggregated audit log, health metrics        │
+│  - User management (global operators)          │
+└──────────┬───────────────────┬─────────────────┘
+           │  service tokens   │  (async sync)
+    ┌──────▼──────┐     ┌──────▼──────┐     ...
+    │  Regional   │     │  Regional   │
+    │  Plane A    │     │  Plane B    │
+    │  (full CP)  │     │  (full CP)  │
+    └──────┬──────┘     └──────┬──────┘
+       mTLS poll           mTLS poll
+    devices/agents       devices/agents
+```
+
+Inter-plane authentication uses the existing service token mechanism (`federation.push` scope for regional→global telemetry; `federation.manage` scope for global→regional policy push). No new auth protocol required.
+
+### Feature Templates
+
+#### E1 — Global aggregation plane (read-only foundation)
+- **Status:** ⬜ Planned
+- **Scope:** New `global-plane` binary that registers regional control planes and aggregates their data via existing read-only API endpoints. Unified UI showing cross-region device list, regional health cards, artifact inventory, and aggregated audit feed.
+- **Dependencies:** Service tokens on regional planes; new `regional_planes` and `device_directory_cache` tables on global DB.
+- **Risks:** Regional plane API version skew; stale cache if sync goroutine falls behind.
+- **Acceptance:** Operator can register N regional planes and see a unified device list and health summary without opening N browser tabs. Zero changes to agents or regional control planes.
+- **Notes:** This is the foundation phase. The global plane binary can share internal packages from the control-plane Go module but runs as a separate service. Background sync goroutines poll each regional plane's `/api/v1/devices`, `/api/v1/health/summary`, `/api/v1/artifacts`. Regional plane last-seen and sync status surfaced in global UI. Build this phase first and validate value before adding write capabilities.
+
+#### E2 — Artifact federation (single upload, N regions)
+- **Status:** ⬜ Planned
+- **Scope:** Artifact uploaded once to global plane; metadata pushed to all regional planes; blobs replicated via MinIO bucket replication. Regional planes serve artifacts from local MinIO to agents (presigned URLs unchanged). Per-artifact, per-region replication status tracked and surfaced in global UI.
+- **Dependencies:** E1 (global plane registered); MinIO bucket replication configured per region; new `artifact_replication_status` table; new `POST /api/v1/federation/artifacts` endpoint on regional planes.
+- **Risks:** Replication lag — agents may be assigned an artifact on a regional plane before the blob has arrived. Fallback: presigned URL points to global MinIO if regional copy not yet available.
+- **Acceptance:** Operator uploads artifact once to global plane; artifact becomes available on all registered regional planes once replication completes. Global UI artifact detail shows "Available in X/N regions." Agents download from regional MinIO with zero changes.
+- **Notes:** MinIO bucket replication is a built-in MinIO/S3 feature. The custom work is tracking replication state in PostgreSQL and exposing it in the UI. Regional planes should not serve agents a presigned URL for an artifact until the blob is confirmed locally.
+
+#### E3 — Global desired state / policy push
+- **Status:** ⬜ Planned
+- **Scope:** Operators define global group policies from the global plane. Regional planes receive policies, cache them locally, and merge with local overrides (local override always wins). Global plane aggregates execution status across regions. If global plane is unreachable, regional planes continue applying last-cached global policies.
+- **Dependencies:** E1 (global plane); new `global_policy_cache` table and `POST /api/v1/federation/policies` endpoint on regional planes; `global_groups` + `global_desired_state` tables on global DB.
+- **Risks:** Conflict resolution confusion — operators must be able to see whether a device is running under global policy or a local override. Eventual consistency means global execution status view is delayed.
+- **Acceptance:** Operator sets a global desired state for a group; regional planes apply it to matching devices within one check-in cycle; global UI shows per-region execution status (devices updated, pending, overridden). Regional operator can set a local override that takes precedence; global UI surfaces "local override active" for affected devices.
+- **Notes:** Two-tier precedence mirrors the existing device-overrides-group model within a single control plane. Regional `desired_state_device` overrides always win over global policy. Conflict resolution must be visible in both global and regional UIs.
+
+#### E4 — Global enrollment profiles
+- **Status:** ⬜ Planned
+- **Scope:** Enrollment profiles created on the global plane and pushed to regional planes. Enrollment still happens locally (regional CA issues cert; agent connects to regional plane). Global UI shows aggregated pending enrollment queues across all regions; operators can approve/deny from the global UI via proxied API call.
+- **Dependencies:** E1 (global plane); E3 (federation push mechanism); regional planes accept enrollment profile push from global.
+- **Risks:** Profile sync lag if regional plane is offline when profile is created/rotated. Regional planes must fall back to locally cached profiles.
+- **Acceptance:** Operator creates one enrollment profile globally; it appears on all registered regional planes. Agent enrolls with regional plane (no change). Operator can see and approve pending enrollments from all regions in a single queue.
+- **Notes:** Device certs are always issued by the regional plane CA. The global plane never touches the PKI layer in this phase. Profile IDs must be globally unique (use UUID generation at global plane).
+
+#### E5 — Global PKI hierarchy (optional, advanced)
+- **Status:** ⬜ Backlog
+- **Scope:** Global root CA → regional intermediate CAs. Enables cross-region device identity verification without trusting all regional CAs independently.
+- **Dependencies:** E1–E4; existing enrolled devices require reenrollment for new cert chain.
+- **Risks:** CA migration is a breaking change for existing enrolled devices. Certificate chain complexity increases.
+- **Acceptance:** New devices receive certs chained to global root CA. Cross-region device identity verifiable from global plane.
+- **Notes:** Not required for E1–E4. Defer until there is a concrete operational need for cross-region device identity trust.
+
+#### E6 — Global aggregate licensing
+- **Status:** ⬜ Backlog
+- **Scope:** Global license covering total device count across all registered regional planes, with per-region sub-cap allocation managed by global admin.
+- **Dependencies:** E1 (global plane); license model redesign.
+- **Risks:** Regional planes need connectivity to global plane for enrollment enforcement if global license is the authority. Conflicts with full regional autonomy requirement.
+- **Acceptance:** TBD — requires product/commercial decision on license model for federated deployments.
+- **Notes:** Per-instance device caps remain in effect for regional planes operating standalone. The global license layer is additive. One option: regional planes enforce their own local cap; global admin sets per-region caps that regional planes download and cache (same pattern as global policies).
 
 ---
 

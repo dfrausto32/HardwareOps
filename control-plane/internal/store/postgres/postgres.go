@@ -2314,21 +2314,24 @@ func (s *Store) GetArtifactTrustPolicy() (store.ArtifactTrustPolicy, bool, error
 	defer cancel()
 
 	var policy store.ArtifactTrustPolicy
+	var provJSON []byte
 	err := s.pool.QueryRow(ctx, `
 		SELECT verification_mode,
 		       COALESCE(allowed_signing_key_ids, '[]'::jsonb),
 		       COALESCE(allowed_signature_types, '[]'::jsonb),
 		       updated_at,
-		       COALESCE(updated_by_user_id, '')
+		       COALESCE(updated_by_user_id, ''),
+		       provenance_policy
 		FROM artifact_trust_policy
 		WHERE policy_id = 1
-	`).Scan(&policy.VerificationMode, &policy.AllowedSigningKeyIDsJSON, &policy.AllowedSignatureTypesJSON, &policy.UpdatedAt, &policy.UpdatedByUserID)
+	`).Scan(&policy.VerificationMode, &policy.AllowedSigningKeyIDsJSON, &policy.AllowedSignatureTypesJSON, &policy.UpdatedAt, &policy.UpdatedByUserID, &provJSON)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.ArtifactTrustPolicy{}, false, nil
 	}
 	if err != nil {
 		return store.ArtifactTrustPolicy{}, false, err
 	}
+	policy.ProvenancePolicyJSON = provJSON
 	return policy, true, nil
 }
 
@@ -2337,28 +2340,32 @@ func (s *Store) SetArtifactTrustPolicy(policy store.ArtifactTrustPolicy) (store.
 	defer cancel()
 
 	var out store.ArtifactTrustPolicy
+	var provJSON []byte
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO artifact_trust_policy (
-			policy_id, verification_mode, allowed_signing_key_ids, allowed_signature_types, updated_at, updated_by_user_id
+			policy_id, verification_mode, allowed_signing_key_ids, allowed_signature_types, updated_at, updated_by_user_id, provenance_policy
 		)
-		VALUES (1, $1, COALESCE($2, '[]'::jsonb), COALESCE($3, '[]'::jsonb), now(), NULLIF($4, ''))
+		VALUES (1, $1, COALESCE($2, '[]'::jsonb), COALESCE($3, '[]'::jsonb), now(), NULLIF($4, ''), $5)
 		ON CONFLICT (policy_id) DO UPDATE SET
 			verification_mode = EXCLUDED.verification_mode,
 			allowed_signing_key_ids = EXCLUDED.allowed_signing_key_ids,
 			allowed_signature_types = EXCLUDED.allowed_signature_types,
 			updated_at = now(),
-			updated_by_user_id = EXCLUDED.updated_by_user_id
+			updated_by_user_id = EXCLUDED.updated_by_user_id,
+			provenance_policy = EXCLUDED.provenance_policy
 		RETURNING verification_mode,
 		          COALESCE(allowed_signing_key_ids, '[]'::jsonb),
 		          COALESCE(allowed_signature_types, '[]'::jsonb),
 		          updated_at,
-		          COALESCE(updated_by_user_id, '')
-	`, policy.VerificationMode, nullIfEmptyBytes(policy.AllowedSigningKeyIDsJSON), nullIfEmptyBytes(policy.AllowedSignatureTypesJSON), policy.UpdatedByUserID).Scan(
-		&out.VerificationMode, &out.AllowedSigningKeyIDsJSON, &out.AllowedSignatureTypesJSON, &out.UpdatedAt, &out.UpdatedByUserID,
+		          COALESCE(updated_by_user_id, ''),
+		          provenance_policy
+	`, policy.VerificationMode, nullIfEmptyBytes(policy.AllowedSigningKeyIDsJSON), nullIfEmptyBytes(policy.AllowedSignatureTypesJSON), policy.UpdatedByUserID, nullIfEmptyBytes(policy.ProvenancePolicyJSON)).Scan(
+		&out.VerificationMode, &out.AllowedSigningKeyIDsJSON, &out.AllowedSignatureTypesJSON, &out.UpdatedAt, &out.UpdatedByUserID, &provJSON,
 	)
 	if err != nil {
 		return store.ArtifactTrustPolicy{}, err
 	}
+	out.ProvenancePolicyJSON = provJSON
 	return out, nil
 }
 
@@ -3014,6 +3021,15 @@ func (s *Store) ConsumePasswordResetToken(email, tokenHash, passwordHash string,
 	return user, true, nil
 }
 
+func (s *Store) UpdatePasswordResetTokenEmailSent(tokenID string, sentAt time.Time) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		UPDATE password_reset_tokens SET email_sent_at = $2 WHERE token_id = $1
+	`, tokenID, sentAt)
+	return err
+}
+
 func (s *Store) CreateAuthVoucher(voucher store.AuthVoucher) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -3298,4 +3314,313 @@ func (s *Store) IsCertSerialRevoked(serial string) (bool, error) {
 		SELECT EXISTS(SELECT 1 FROM cert_revoked_serials WHERE serial = $1)
 	`, serial).Scan(&exists)
 	return exists, err
+}
+
+// --- Attestations ------------------------------------------------------------
+
+func (s *Store) CreateAttestation(rec store.AttestationRecord) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO artifact_attestations (
+			artifact_id, predicate_type, payload_json,
+			signature, signature_type, signature_key_id,
+			builder_id, builder_issuer, verified_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`,
+		rec.ArtifactID, rec.PredicateType, rec.PayloadJSON,
+		nullIfEmpty(rec.Signature), nullIfEmpty(rec.SignatureType), nullIfEmpty(rec.SignatureKeyID),
+		nullIfEmpty(rec.BuilderID), nullIfEmpty(rec.BuilderIssuer), nullIfZeroTime(rec.VerifiedAt),
+	)
+	return err
+}
+
+func (s *Store) GetAttestation(attestationID string) (store.AttestationRecord, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var out store.AttestationRecord
+	var verifiedAt *time.Time
+	err := s.pool.QueryRow(ctx, `
+		SELECT attestation_id, artifact_id, predicate_type, payload_json,
+		       COALESCE(signature, ''), COALESCE(signature_type, ''), COALESCE(signature_key_id, ''),
+		       COALESCE(builder_id, ''), COALESCE(builder_issuer, ''),
+		       verified_at, created_at
+		FROM artifact_attestations
+		WHERE attestation_id = $1
+	`, attestationID).Scan(
+		&out.AttestationID, &out.ArtifactID, &out.PredicateType, &out.PayloadJSON,
+		&out.Signature, &out.SignatureType, &out.SignatureKeyID,
+		&out.BuilderID, &out.BuilderIssuer,
+		&verifiedAt, &out.CreatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.AttestationRecord{}, false, nil
+	}
+	if err != nil {
+		return store.AttestationRecord{}, false, err
+	}
+	if verifiedAt != nil {
+		out.VerifiedAt = *verifiedAt
+	}
+	return out, true, nil
+}
+
+func (s *Store) ListAttestations(artifactID string) ([]store.AttestationRecord, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT attestation_id, artifact_id, predicate_type, payload_json,
+		       COALESCE(signature, ''), COALESCE(signature_type, ''), COALESCE(signature_key_id, ''),
+		       COALESCE(builder_id, ''), COALESCE(builder_issuer, ''),
+		       verified_at, created_at
+		FROM artifact_attestations
+		WHERE artifact_id = $1
+		ORDER BY created_at ASC
+	`, artifactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []store.AttestationRecord
+	for rows.Next() {
+		var rec store.AttestationRecord
+		var verifiedAt *time.Time
+		if err := rows.Scan(
+			&rec.AttestationID, &rec.ArtifactID, &rec.PredicateType, &rec.PayloadJSON,
+			&rec.Signature, &rec.SignatureType, &rec.SignatureKeyID,
+			&rec.BuilderID, &rec.BuilderIssuer,
+			&verifiedAt, &rec.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if verifiedAt != nil {
+			rec.VerifiedAt = *verifiedAt
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) DeleteAttestationsForArtifact(artifactID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM artifact_attestations WHERE artifact_id = $1
+	`, artifactID)
+	return err
+}
+
+// --- Vulnerability scans (artifact) ------------------------------------------
+
+func (s *Store) CreateArtifactVulnScan(scan store.ArtifactVulnerabilityScan) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO artifact_vulnerability_scans (
+			artifact_id, scanner_type, scanner_version, scan_status,
+			findings_json, severity_counts, error_message, scanned_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING scan_id, created_at
+	`,
+		scan.ArtifactID,
+		scan.ScannerType,
+		nullIfEmpty(scan.ScannerVersion),
+		scan.ScanStatus,
+		nullIfEmptyBytes(scan.FindingsJSON),
+		nullIfEmptyBytes(scan.SeverityCountsJSON),
+		nullIfEmpty(scan.ErrorMessage),
+		nullIfZeroTime(scan.ScannedAt),
+	)
+	return err
+}
+
+func (s *Store) UpdateArtifactVulnScan(scan store.ArtifactVulnerabilityScan) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		UPDATE artifact_vulnerability_scans SET
+			scan_status     = $2,
+			scanner_version = $3,
+			findings_json   = $4,
+			severity_counts = $5,
+			error_message   = $6,
+			scanned_at      = $7
+		WHERE scan_id = $1
+	`,
+		scan.ScanID,
+		scan.ScanStatus,
+		nullIfEmpty(scan.ScannerVersion),
+		nullIfEmptyBytes(scan.FindingsJSON),
+		nullIfEmptyBytes(scan.SeverityCountsJSON),
+		nullIfEmpty(scan.ErrorMessage),
+		nullIfZeroTime(scan.ScannedAt),
+	)
+	return err
+}
+
+func (s *Store) GetLatestArtifactVulnScan(artifactID string) (store.ArtifactVulnerabilityScan, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var out store.ArtifactVulnerabilityScan
+	var scannerVersion, errorMessage *string
+	var scannedAt *time.Time
+	err := s.pool.QueryRow(ctx, `
+		SELECT scan_id, artifact_id, scanner_type,
+		       COALESCE(scanner_version, ''), scan_status,
+		       findings_json, severity_counts,
+		       COALESCE(error_message, ''), scanned_at, created_at
+		FROM artifact_vulnerability_scans
+		WHERE artifact_id = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, artifactID).Scan(
+		&out.ScanID, &out.ArtifactID, &out.ScannerType,
+		&out.ScannerVersion, &out.ScanStatus,
+		&out.FindingsJSON, &out.SeverityCountsJSON,
+		&out.ErrorMessage, &scannedAt, &out.CreatedAt,
+	)
+	_ = scannerVersion
+	_ = errorMessage
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.ArtifactVulnerabilityScan{}, false, nil
+	}
+	if err != nil {
+		return store.ArtifactVulnerabilityScan{}, false, err
+	}
+	if scannedAt != nil {
+		out.ScannedAt = *scannedAt
+	}
+	return out, true, nil
+}
+
+func (s *Store) ListArtifactVulnScans(artifactID string) ([]store.ArtifactVulnerabilityScan, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `
+		SELECT scan_id, artifact_id, scanner_type,
+		       COALESCE(scanner_version, ''), scan_status,
+		       findings_json, severity_counts,
+		       COALESCE(error_message, ''), scanned_at, created_at
+		FROM artifact_vulnerability_scans
+		WHERE artifact_id = $1
+		ORDER BY created_at DESC
+	`, artifactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.ArtifactVulnerabilityScan
+	for rows.Next() {
+		var rec store.ArtifactVulnerabilityScan
+		var scannedAt *time.Time
+		if err := rows.Scan(
+			&rec.ScanID, &rec.ArtifactID, &rec.ScannerType,
+			&rec.ScannerVersion, &rec.ScanStatus,
+			&rec.FindingsJSON, &rec.SeverityCountsJSON,
+			&rec.ErrorMessage, &scannedAt, &rec.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if scannedAt != nil {
+			rec.ScannedAt = *scannedAt
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+// --- Vulnerability scans (device) --------------------------------------------
+
+func (s *Store) UpsertDeviceVulnScan(scan store.DeviceVulnerabilityScan) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO device_vulnerability_scans (
+			device_id, scanner_type, external_scan_id, external_host_id,
+			scan_status, findings_json, severity_counts, scanned_at, synced_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+		ON CONFLICT DO NOTHING
+	`,
+		scan.DeviceID,
+		scan.ScannerType,
+		nullIfEmpty(scan.ExternalScanID),
+		nullIfEmpty(scan.ExternalHostID),
+		scan.ScanStatus,
+		nullIfEmptyBytes(scan.FindingsJSON),
+		nullIfEmptyBytes(scan.SeverityCountsJSON),
+		nullIfZeroTime(scan.ScannedAt),
+	)
+	return err
+}
+
+func (s *Store) GetLatestDeviceVulnScan(deviceID string) (store.DeviceVulnerabilityScan, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var out store.DeviceVulnerabilityScan
+	var scannedAt *time.Time
+	err := s.pool.QueryRow(ctx, `
+		SELECT scan_id, device_id, scanner_type,
+		       COALESCE(external_scan_id, ''), COALESCE(external_host_id, ''),
+		       scan_status, findings_json, severity_counts,
+		       scanned_at, synced_at, created_at
+		FROM device_vulnerability_scans
+		WHERE device_id = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, deviceID).Scan(
+		&out.ScanID, &out.DeviceID, &out.ScannerType,
+		&out.ExternalScanID, &out.ExternalHostID,
+		&out.ScanStatus, &out.FindingsJSON, &out.SeverityCountsJSON,
+		&scannedAt, &out.SyncedAt, &out.CreatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.DeviceVulnerabilityScan{}, false, nil
+	}
+	if err != nil {
+		return store.DeviceVulnerabilityScan{}, false, err
+	}
+	if scannedAt != nil {
+		out.ScannedAt = *scannedAt
+	}
+	return out, true, nil
+}
+
+func (s *Store) ListDeviceVulnScans(deviceID string) ([]store.DeviceVulnerabilityScan, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `
+		SELECT scan_id, device_id, scanner_type,
+		       COALESCE(external_scan_id, ''), COALESCE(external_host_id, ''),
+		       scan_status, findings_json, severity_counts,
+		       scanned_at, synced_at, created_at
+		FROM device_vulnerability_scans
+		WHERE device_id = $1
+		ORDER BY created_at DESC
+	`, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.DeviceVulnerabilityScan
+	for rows.Next() {
+		var rec store.DeviceVulnerabilityScan
+		var scannedAt *time.Time
+		if err := rows.Scan(
+			&rec.ScanID, &rec.DeviceID, &rec.ScannerType,
+			&rec.ExternalScanID, &rec.ExternalHostID,
+			&rec.ScanStatus, &rec.FindingsJSON, &rec.SeverityCountsJSON,
+			&scannedAt, &rec.SyncedAt, &rec.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if scannedAt != nil {
+			rec.ScannedAt = *scannedAt
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
 }

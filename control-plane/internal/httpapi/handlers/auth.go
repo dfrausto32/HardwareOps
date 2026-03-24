@@ -42,6 +42,8 @@ type AuthStatusResponse struct {
 	Mode         string `json:"mode"`
 	OIDCEnabled  bool   `json:"oidcEnabled"`
 	OIDCLoginURL string `json:"oidcLoginURL,omitempty"`
+	LDAPEnabled  bool   `json:"ldapEnabled"`
+	SMTPEnabled  bool   `json:"smtpEnabled"`
 }
 
 type RegisterRequest struct {
@@ -159,7 +161,7 @@ func GetMe(st store.Store) http.HandlerFunc {
 	}
 }
 
-func AuthStatus(manager *auth.Manager, oidcLoginURL string) http.HandlerFunc {
+func AuthStatus(manager *auth.Manager, oidcLoginURL string, ldapEnabled bool, smtpEnabled bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		enabled := manager != nil && manager.Enabled()
 		mode := "disabled"
@@ -170,6 +172,8 @@ func AuthStatus(manager *auth.Manager, oidcLoginURL string) http.HandlerFunc {
 			Enabled:     enabled,
 			Mode:        mode,
 			OIDCEnabled: oidcLoginURL != "",
+			LDAPEnabled: ldapEnabled,
+			SMTPEnabled: smtpEnabled,
 		}
 		if oidcLoginURL != "" {
 			resp.OIDCLoginURL = oidcLoginURL

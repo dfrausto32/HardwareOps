@@ -1,42 +1,82 @@
 # HardwareOps
-The platform acts as a control plane for safely deploying software and configuration to autonomous devices operating in unreliable, bandwidth-constrained, and sometimes offline environments.
 
-## Documentation
-Start with:
-- `docs/deploy.md` (on-prem + AWS deployment, plus baseline hardening)
-- `docs/operations.md` (backup/restore, upgrades, cert rotation, metrics checks)
-- `docs/local-dev-wsl.md` (local development flow)
-- `docs/testing/prod-docker-lab.md` (production-like Docker validation)
-- `docs/README.md` (full documentation map)
+HardwareOps is a control-plane platform for deploying software and configuration to autonomous devices operating in unreliable, bandwidth-constrained, or offline environments. It handles device enrollment (mTLS), artifact packaging and delivery, fleet desired-state management, and audit/compliance — all from a single API and web console.
 
-## Development Roadmap
-Forward‑looking plans for deployments, ingest modes, and RBAC:
-- `docs/development/roadmap.md`
-- `docs/development/deployment-options.md`
-- `docs/development/artifact-ingest.md`
-- `docs/development/auth-secrets-v1.md`
-- `docs/development/artifact-signing.md`
-- `docs/development/upgrade-strategy.md`
+---
 
-## Local Development (WSL)
-For the clean WSL2 dev flow (control‑plane + UI + agent), see:
-`docs/local-dev-wsl.md`
+## How the repo is organized
 
-### Quickstart (WSL)
 ```
+HardwareOps/
+├── control-plane/     Go API server (PostgreSQL + MinIO)
+├── agent/             Go device agent (runs on each managed device)
+├── ui/                React 18 web console
+├── deploy/            Docker Compose, on-prem installer, AWS Terraform
+├── migrations/        Sequential SQL migrations (run at startup via AUTO_MIGRATE=1)
+├── scripts/           Dev helpers, smoke tests, build tools
+└── docs/              All documentation (start with docs/README.md for the map)
+```
+
+The three components talk to each other like this:
+
+```
+[Device running agent] <──mTLS──> [control-plane API] <──> [PostgreSQL + MinIO]
+                                          ^
+                               [UI / CI / operator curl]
+```
+
+- The **control-plane** is what you'll spend most time in when developing backend features.
+- The **agent** runs on managed devices; it enrolls, checks in, and applies desired state.
+- The **UI** is a read/write console for operators — no separate backend.
+
+---
+
+## Prerequisites
+
+- **Go 1.22+** — for the control-plane and agent
+- **Node.js 20+** — for the UI
+- **Docker + Docker Compose** — for local Postgres + MinIO
+- **WSL2** (on Windows) — the dev flow is documented for WSL2; native Linux works identically
+
+---
+
+## Step 1 — Start the backing services
+
+The control-plane needs Postgres and MinIO. Docker Compose handles both:
+
+```bash
 cp deploy/compose/.env.example deploy/compose/.env
 make dev-up
 ```
 
-Create dev CA:
+This brings up:
+- Postgres on `localhost:5432` (user/pass/db: `hardwareops`)
+- MinIO on `localhost:9000` (access: `minio` / `minio123`, console: `localhost:9001`)
+
+Verify they're running:
+```bash
+docker compose -f deploy/compose/docker-compose.yml ps
 ```
+
+---
+
+## Step 2 — Create a dev CA
+
+The control-plane signs device certificates with an internal CA. For local dev, generate a self-signed one:
+
+```bash
 openssl req -x509 -newkey rsa:2048 -nodes \
   -keyout ./dev-ca.key -out ./dev-ca.crt \
   -days 365 -subj "/CN=HardwareOps Dev CA"
 ```
 
-Run control‑plane (TLS + mTLS):
-```
+This CA cert (`dev-ca.crt`) is what agents and curl commands use to trust the server. You only need to do this once.
+
+---
+
+## Step 3 — Run the control-plane
+
+```bash
 export DATABASE_URL=postgres://hardwareops:hardwareops@localhost:5432/hardwareops?sslmode=disable
 export CA_CERT_PATH=./dev-ca.crt
 export CA_KEY_PATH=./dev-ca.key
@@ -47,585 +87,225 @@ export CORS_ALLOWED_ORIGINS=http://localhost:5173
 ENABLE_TLS=1 ./scripts/run-control-plane.sh
 ```
 
-Run UI:
+What this does on first run:
+1. Runs all SQL migrations in `control-plane/migrations/` against your local Postgres.
+2. Starts the HTTP server on `https://localhost:8080`.
+3. Maintenance mode is **on by default** — disable it from the UI or set `MAINTENANCE_MODE=0`.
+
+Verify it's up:
+```bash
+curl --cacert ./dev-ca.crt https://localhost:8080/healthz
+# → ok
 ```
-cd ui
-npm install
+
+If certs are stale from a previous run: `FORCE_DEV_CERTS=1 ENABLE_TLS=1 ./scripts/run-control-plane.sh`
+
+---
+
+## Step 4 — Run the UI
+
+```bash
+cd ui && npm install
 VITE_API_BASE_URL=https://localhost:8080 VITE_SIMULATE_PROD=1 npm run dev
 ```
 
-Open `http://localhost:5173/` and trust `dev-ca.crt` in Windows.
+Open `http://localhost:5173`. The default admin login is:
+- **Email:** `admin@example.com`
+- **Password:** `change-me`
 
-For detailed setup, advanced proxy usage, and full dev steps, see `docs/local-dev-wsl.md`.
+(Set via `AUTH_BOOTSTRAP_EMAIL` / `AUTH_BOOTSTRAP_PASSWORD` in config.)
 
-### Artifacts (v1)
-Artifacts are **tar.gz bundles** with a `manifest.json` and a `files/` directory.
-See `docs/artifact-apply-roadmap.md` for the firmware/container image apply plan and interfaces.
+The UI talks directly to the control-plane over TLS. `VITE_SIMULATE_PROD=1` disables the dev proxy so the browser uses real HTTPS — you may need to trust `dev-ca.crt` in your OS or browser.
 
-#### Artifact types (taxonomy)
-All types share the same bundle format; the `type` field is used for policy/behavior:
-- `app_bundle` (agent apply: **yes**)
-- `config_bundle` (agent apply: **yes**)
-- `data_bundle` (agent apply: **yes**)
-- `firmware` (agent apply: **no** in v1, register only)
-- `container_image` (agent apply: **no** in v1, register only)
+---
 
-If `type` is omitted, it defaults to `app_bundle`.
+## Step 5 — Enroll a device (understand the core flow)
 
-Optional `metadata` can be supplied when registering/uploading an artifact (any valid JSON).
+This is the most important concept in the platform: devices prove their identity by exchanging a CSR for a signed certificate, then use that certificate for all future communication (mTLS).
 
-Bundle layout:
-```
-manifest.json
-plan.yaml
-files/
-  <your files>
-```
+Run the automated quickstart to see the full enrollment flow:
 
-The `manifest.json` is auto-generated by the packaging script.
-`plan.yaml` is optional; if present in the input directory, the packer includes it at the bundle root and the agent validates it before apply.
-
-Plan v1 (minimal) example:
-```yaml
-version: "v1"
-health:
-  type: probe.http
-  url: http://localhost:8080/healthz
-  expectStatus: 200
-  timeoutSec: 30
-  intervalSec: 2
-steps:
-  - id: preapply
-    type: script.preApply
-    onFail: abort
-    params:
-      command: files/preapply.sh
-      timeoutSec: 120
-  - id: render-config
-    type: file.render
-    onFail: rollback
-    params:
-      template: files/config/app.tmpl
-      dest: /etc/app/config.yaml
-  - id: health
-    type: probe.http
-    onFail: abort
-    params:
-      url: http://localhost:8080/healthz
-```
-
-#### Package an artifact (local build)
-```
-./scripts/artifact-pack.py \
-  --name agent \
-  --version 1.0.0 \
-  --type app_bundle \
-  --input-dir ./build \
-  --out /tmp/agent-1.0.0.tar.gz
-```
-
-The script prints `sha256` and `sizeBytes` for the bundle.
-
-#### Upload + register (control-plane)
-Use the upload endpoint to store the artifact in MinIO and register it in the DB:
-```
-curl -s -X POST http://localhost:8080/api/v1/artifacts/upload \
-  -F "name=agent" \
-  -F "version=1.0.0" \
-  -F "type=app_bundle" \
-  -F 'metadata={"platform":"linux","arch":"amd64"}' \
-  -F "file=@/tmp/agent-1.0.0.tar.gz"
-```
-Presigned download URLs are short-lived by default (5 minutes). Adjust with `S3_PRESIGN_TTL`. Agents only receive presigned URLs (no MinIO credentials).
-
-Artifact API fields:
-- `type`: one of the taxonomy values above (defaults to `app_bundle`).
-- `metadata`: optional JSON blob with extra info (platform, hw targets, etc.).
-  - `POST /api/v1/artifacts` expects `metadata` as JSON.
-  - `POST /api/v1/artifacts/upload` expects `metadata` as a JSON string field.
-
-#### Set desired state for device/group
-```
-DEVICE_ID=$(uuidgen)
-
-curl -s -X PUT http://localhost:8080/api/v1/desired-state/devices/$DEVICE_ID \
-  -H "Content-Type: application/json" \
-  -d '{"desiredVersion":"1.0.0","artifactId":"<artifactId>"}'
-```
-
-The agent will download, verify, extract, and atomically switch `ARTIFACT_ROOT/current` to the new version.
-If apply fails, the symlink remains on the previous version. You can rollback by setting desired state to the prior version/artifact.
-
-#### End-to-end artifact test
-Assumes `/tmp/agent-0.0.1.tar.gz` exists:
-```
-./scripts/artifact-e2e.sh
-```
-Set `GENERATE_ARTIFACT=1` to build a demo artifact that includes `script.preApply` and a visible page:
-```
-GENERATE_ARTIFACT=1 ./scripts/artifact-e2e.sh
-```
-Set `ARTIFACT_TYPE=app_bundle` (or any valid type) to test type handling.
-
-#### Upload one of each artifact type
-```
-./scripts/artifact-types.sh
-```
-By default this generates two versions per type (`0.1.0-<type>` and `0.2.0-<type>`) with distinct payloads.
-Override with:
-```
-VERSIONS=0.1.0 TYPES=app_bundle,config_bundle ./scripts/artifact-types.sh
-```
-Each generated bundle includes an `index.html` so the demo agent can show a visible change when an
-apply-capable type is selected (`app_bundle`, `config_bundle`, `data_bundle`).
-
-### Logging (agent export + CSV)
-Agents can export logs to the control-plane over a lightweight TCP stream (JSON lines). The control-plane writes per-device CSV files so they can be opened in Excel.
-
-Control-plane env:
-- `LOG_INGEST_ADDR` (default `tcp://0.0.0.0:5560`)
-- `LOG_DIR` (default `./logs`)
-
-Agent env:
-- `LOG_EXPORT_ADDR` (example `tcp://localhost:5560`)
-- `LOG_LEVEL` (`debug|info|warn|error`)
-
-Download logs (CSV):
-```
-curl -s http://localhost:8080/api/v1/logs/<deviceId> -o /tmp/device-logs.csv
-```
-
-Tip: run test scripts with log export enabled:
-```
-LOG_EXPORT_ADDR=tcp://localhost:5560 ./scripts/artifact-e2e.sh
-```
-
-CSV columns:
-`timestamp, level, component, deviceId, message, fields`
-
-### Audit logging (query + CSV)
-Control-plane env:
-- `AUDIT_RETENTION_DAYS` (default `90`)
-- `AUDIT_RETENTION_CLEANUP_INTERVAL` (default `1h`)
-
-Query audit events:
-```
-curl -s "http://localhost:8080/api/v1/audit?limit=100&action=artifact.upload"
-```
-
-Export audit events (CSV):
-```
-curl -s "http://localhost:8080/api/v1/audit.csv?since=2026-02-01T00:00:00Z" -o /tmp/audit.csv
-```
-
-Get/set retention (days):
-```
-curl -s http://localhost:8080/api/v1/audit/retention
-curl -s -X PUT http://localhost:8080/api/v1/audit/retention -H "Content-Type: application/json" -d '{"days":30}'
-```
-
-### Break-glass workflows
-Emergency revoke/rotate actions now require operator-or-admin auth plus a JSON `reason`, and each action is audited with `breakGlass=true`.
-
-Service token examples:
 ```bash
-curl --cacert ./dev-ca.crt \
-  -H "Authorization: Bearer <operator-jwt>" \
-  -H "Content-Type: application/json" \
-  -X POST \
-  -d '{"reason":"credential suspected compromised"}' \
-  https://localhost:8080/api/v1/auth/service-tokens/<token-id>/revoke
-
-curl --cacert ./dev-ca.crt \
-  -H "Authorization: Bearer <operator-jwt>" \
-  -H "Content-Type: application/json" \
-  -X POST \
-  -d '{"reason":"token leaked","ttlHours":1}' \
-  https://localhost:8080/api/v1/auth/service-tokens/<token-id>/rotate
-```
-
-Certificate rotation examples:
-```bash
-curl --cacert ./dev-ca.crt \
-  -H "Authorization: Bearer <operator-jwt>" \
-  -H "Content-Type: application/json" \
-  -X POST \
-  -d '{"reason":"reload CA bundle after emergency file update"}' \
-  https://localhost:8080/api/v1/cert-rotation/reload
-
-curl --cacert ./dev-ca.crt \
-  -H "Authorization: Bearer <operator-jwt>" \
-  -H "Content-Type: application/json" \
-  -X POST \
-  -d '{"reason":"break-glass CA rotation after suspected compromise"}' \
-  https://localhost:8080/api/v1/cert-rotation/rotate
-
-curl --cacert ./dev-ca.crt \
-  -H "Authorization: Bearer <operator-jwt>" \
-  -H "Content-Type: application/json" \
-  -X POST \
-  -d '{"reason":"cleanup previous CA after rotation coverage verified"}' \
-  https://localhost:8080/api/v1/cert-rotation/cleanup
-```
-
-See `docs/operations.md`, `docs/certs.md`, and `docs/icd.md` for the canonical contract and runbook detail.
-
-### Demo: Agent Container With Live Service
-This demo runs the control-plane normally, starts an agent container that serves `index.html` from the active artifact, then updates the artifact so the page content changes.
-For a full end-to-end walkthrough (including pre-apply), see `docs/preapply-demo.md`.
-
-### On-Prem Deployment (v1)
-- `docs/deploy.md` (canonical deployment flow)
-- `docs/installers.md` (installer bundle details)
-- `docs/installer-flow.md` (fresh-machine installer flow)
-- `docs/deployment-hardening.md` (proxy trust + anti-tamper controls)
-- `docs/dns-coredns.md` (local DNS)
-- `docs/certs.md` (internal CA + TLS)
-- `docs/agent-systemd.md` (agent systemd install)
-- `docs/vm-testing.md` (VM-based testing guide)
-
-Prereq for on‑prem rollout:
-```
-./scripts/build-installers.sh
-```
-
-1. Start dependencies and the control-plane:
-```
-make dev-up
-./scripts/run-control-plane.sh
-```
-
-2. Start the demo agent container (includes a small web server on port 8081):
-```
-./scripts/run-demo-agent.sh
-```
-The demo container runs with `--privileged` and as root for simplicity (demo-only).
-`run-demo-agent.sh` sets `ALLOW_UNSUPPORTED_APPLY=1` by default so you can demo
-`firmware`/`container_image` artifacts via the web page; set it to `0` to enforce
-realistic behavior.
-To run multiple demo agents, set `DEMO_COUNT` (ports auto-increment from `DEMO_HTTP_PORT`):
-```
-DEMO_COUNT=3 DEMO_HTTP_PORT=8081 ./scripts/run-demo-agent.sh
-```
-
-3. Build + upload two demo artifacts and flip desired state from v1 to v2:
-```
-./scripts/demo-artifacts.sh
-```
-
-4. Check the service output (you should see the page change after the update):
-```
-curl -s http://localhost:8081/index.html
-```
-The page now includes a **Pre-apply** line populated by `script.preApply`.
-
-Environment overrides:
-- `BASE_URL` sets the control-plane URL (default `https://localhost:8080`).
-- `AGENT_URL` sets the control-plane URL as seen from the container (default replaces localhost with host.docker.internal).
-- `CONTROL_PLANE_CA_CERT_PATH` sets the CA cert path for curl and enrollment.
-- `DEMO_HTTP_PORT` sets the demo service port (default `8081`).
-- `DATA_DIR` stores demo agent state and device ID (default `/tmp/hardwareops-demo/data`).
-- `SLEEP_BETWEEN` sets delay between v1 and v2 desired updates (default `5` seconds).
-
-To stop the demo container:
-```
-docker rm -f hardwareops-demo-agent
-```
-
-### Curl Quickstart
-These commands hit the v1 API to validate the control-plane is responding.
-Device check-in requires TLS + client certs (mTLS).
-
-1) Health check (verifies API is up):
-```
-curl -s --cacert ./dev-ca.crt https://localhost:8080/healthz
-```
-
-2) Create enrollment token (returns a one-time token used to enroll a device):
-```
-curl -s --cacert ./dev-ca.crt -X POST https://localhost:8080/api/v1/enrollments \
-  -H "Content-Type: application/json" \
-  -d '{"expiresInSec":3600}'
-```
-
-3) Generate a CSR (simulates a device keypair + CSR):
-```
-openssl req -newkey rsa:2048 -nodes \
-  -keyout /tmp/device.key -out /tmp/device.csr \
-  -subj "/CN=device-1"
-```
-
-4) Enroll device (exchanges token + CSR for device cert):
-```
-TOKEN="paste_token_here"
-CSR=$(awk 'NF {sub(/\r/, ""); printf "%s\\n",$0;}' /tmp/device.csr)
-
-curl -s --cacert ./dev-ca.crt -X POST https://localhost:8080/api/v1/devices/enroll \
-  -H "Content-Type: application/json" \
-  -d "{\"token\":\"$TOKEN\",\"csr\":\"$CSR\"}"
-```
-
-Save the returned device cert and CA for mTLS:
-```
-curl -s --cacert ./dev-ca.crt -X POST https://localhost:8080/api/v1/devices/enroll \
-  -H "Content-Type: application/json" \
-  -d "{\"token\":\"$TOKEN\",\"csr\":\"$CSR\"}" > /tmp/enroll.json
-
-python3 - <<'PY'
-import json
-data=json.load(open("/tmp/enroll.json"))
-open("/tmp/device.crt","w").write(data["certPem"])
-open("/tmp/dev-ca.crt","w").write(data["caCertPem"])
-PY
-```
-
-5) Device check-in (posts device heartbeat/state to persist):
-```
-DEVICE_ID=$(python3 - <<'PY'
-import json
-print(json.load(open("/tmp/enroll.json"))["deviceId"])
-PY
-)
-
-curl -s --cacert ./dev-ca.crt --cert /tmp/device.crt --key /tmp/device.key \
-  -X POST https://localhost:8080/api/v1/devices/checkin \
-  -H "Content-Type: application/json" \
-  -d "{\"deviceId\":\"$DEVICE_ID\",\"agentVersion\":\"0.1.0\",\"current\":{\"softwareVersion\":\"v1\",\"configRev\":\"c1\"}}"
-```
-
-Automated curl quickstart:
-```
-./scripts/curl-quickstart.sh
-```
-
-TLS-enabled quickstart:
-```
 BASE_URL=https://localhost:8080 CA_CERT_PATH=./dev-ca.crt ./scripts/curl-quickstart.sh
 ```
 
-Cleanup (delete the device created by the quickstart run):
-```
+What it does step by step:
+1. Creates an enrollment token (`POST /api/v1/enrollments`)
+2. Generates a device keypair + CSR (`openssl req`)
+3. Exchanges the token + CSR for a signed device cert (`POST /api/v1/devices/enroll`)
+4. Posts a device check-in using the issued cert over mTLS (`POST /api/v1/devices/checkin`)
+
+After the script runs, the enrolled device should appear in the UI under **Devices**.
+
+Cleanup the test device:
+```bash
 CLEANUP=1 BASE_URL=https://localhost:8080 CA_CERT_PATH=./dev-ca.crt ./scripts/curl-quickstart.sh
 ```
 
-### Desired State
-- The control-plane can set desired state via PUT endpoints.
-- If no desired state exists, the agent's check-in will set desired to its current state (source=agent).
-- Manual PUTs override agent-set desired state.
-- Group desired state applies when a device's labels match a group selector (manual device overrides group).
-- If `desiredVersion` is empty and you're not updating policy/check-in interval, `artifactId` is required.
-- Device labels for group matching can be sent in the check-in payload as `labels` or updated via `PATCH /devices/{deviceId}`.
-- Agents report apply results via `POST /api/v1/devices/{deviceId}/apply-result`.
-- You can set `checkinIntervalSec` on device or group desired state to control agent check-in cadence (device-level overrides group).
+---
 
-Examples:
+## Step 6 — Deploy an artifact to a device
+
+Artifacts are `tar.gz` bundles containing a `manifest.json` plus optional `plan.yaml` and files. The agent downloads, verifies, extracts, and atomically switches to the new version.
+
+**Package an artifact:**
+```bash
+python3 scripts/artifact-pack.py \
+  --name my-app \
+  --version 1.0.0 \
+  --type app_bundle \
+  --input-dir ./build \
+  --out /tmp/my-app-1.0.0.tar.gz
 ```
-GROUP_ID=$(uuidgen)
-DEVICE_ID=$(uuidgen)
 
-curl -s -X PUT http://localhost:8080/api/v1/groups/$GROUP_ID \
+**Upload and register it:**
+```bash
+curl --cacert ./dev-ca.crt -s -X POST https://localhost:8080/api/v1/artifacts/upload \
+  -H "Authorization: Bearer <your-jwt>" \
+  -F "name=my-app" \
+  -F "version=1.0.0" \
+  -F "type=app_bundle" \
+  -F "file=@/tmp/my-app-1.0.0.tar.gz"
+```
+
+**Set desired state for a device:**
+```bash
+curl --cacert ./dev-ca.crt -s -X PUT https://localhost:8080/api/v1/desired-state/devices/<deviceId> \
+  -H "Authorization: Bearer <your-jwt>" \
   -H "Content-Type: application/json" \
-  -d '{"name":"canary","selector":{"region":"west"}}'
-
-curl -s -X PATCH http://localhost:8080/api/v1/devices/$DEVICE_ID \
-  -H "Content-Type: application/json" \
-  -d '{"labels":{"region":"west","role":"edge"}}'
-
-curl -s -X PUT http://localhost:8080/api/v1/desired-state/groups/$GROUP_ID \
-  -H "Content-Type: application/json" \
-  -d '{"desiredVersion":"v2","desiredConfigRev":"c2","checkinIntervalSec":30}'
-
-curl -s -X PUT http://localhost:8080/api/v1/desired-state/devices/$DEVICE_ID \
-  -H "Content-Type: application/json" \
-  -d '{"desiredVersion":"v3","artifactId":"<artifactId>","checkinIntervalSec":15}'
-
-curl -s http://localhost:8080/api/v1/desired-state
+  -d '{"artifactId":"<artifactId>","desiredVersion":"1.0.0"}'
 ```
 
-### Scripts
-- `./scripts/dev-setup.sh` runs `make dev-up` and applies migrations.
-- `./scripts/migrate.sh` applies SQL migrations via `go run ./cmd/migrate`.
-- `./scripts/run-control-plane.sh` creates dev CA + CSR, auto-migrates, and runs the control-plane.
-- `./scripts/curl-quickstart.sh` runs the curl quickstart sequence (set `CLEANUP=1` to delete the created device).
-- `./scripts/dev-reset.sh` resets local dev state.
-- `./scripts/artifact-e2e.sh` runs end-to-end artifact flow (upload → register → desired → agent apply). Set `CLEANUP=1` to delete the device + artifact.
-- `./scripts/fail-artifact.sh` creates a large (>=5GB) artifact with a bad manifest, attempts an update, and verifies rollback behavior.
-- `./scripts/artifact-types.sh` builds + uploads one artifact for each supported type.
-- `./scripts/run-agents.sh` runs multiple agent containers (defaults to 3).
-- `./scripts/run-demo-agent.sh` runs a demo agent container with a live web service.
-- `./scripts/demo-artifacts.sh` builds and applies demo artifacts to show an update.
-- `./scripts/run-proxy.sh` runs the Caddy reverse proxy (HTTPS + automatic certs).
-- `./scripts/watch-events.sh` connects to the WebSocket event stream (requires `npx` or `websocat`).
+On the next check-in, the agent downloads the artifact, runs any `plan.yaml` steps, and atomically switches the active version. Apply results (success/error) are posted back to `POST /api/v1/devices/{deviceId}/apply-result`.
 
-### Recommended Local Flow (Success Path)
-1) `./scripts/dev-setup.sh`
-2) `./scripts/run-control-plane.sh`
-3) `./scripts/curl-quickstart.sh`
-
-### Agent Containers (multi-agent)
-Spin up multiple agents in isolated Docker containers:
-```
-./scripts/run-agents.sh -d
+**Run the full end-to-end flow as a smoke test:**
+```bash
+./scripts/artifact-e2e.sh
+# With a demo artifact that includes a preapply script:
+GENERATE_ARTIFACT=1 ./scripts/artifact-e2e.sh
 ```
 
-Build and run a single agent container directly:
-```
-docker build -f agent/Dockerfile -t hardwareops-agent .
-docker run --rm \
-  -e CONTROL_PLANE_URL=https://host.docker.internal:8080 \
-  -e CHECKIN_INTERVAL=30s \
-  -v agent-data:/data \
-  hardwareops-agent
+---
+
+## Step 7 — Run a demo agent
+
+To see the control-plane + agent working together without a real device:
+
+```bash
+./scripts/run-demo-agent.sh
 ```
 
-With mTLS, mount the device cert/key and control-plane CA:
-```
-docker run --rm \
-  -e CONTROL_PLANE_URL=https://host.docker.internal:8080 \
-  -e DEVICE_CERT_PATH=/certs/device.crt \
-  -e DEVICE_KEY_PATH=/certs/device.key \
-  -e CONTROL_PLANE_CA_CERT_PATH=/certs/dev-ca.crt \
-  -v /tmp/device.crt:/certs/device.crt:ro \
-  -v /tmp/device.key:/certs/device.key:ro \
-  -v /tmp/dev-ca.crt:/certs/dev-ca.crt:ro \
-  -v agent-data:/data \
-  hardwareops-agent
+This starts an agent container that auto-enrolls, runs a small web server on `http://localhost:8081`, and applies whatever desired state you set. Then push an artifact update:
+
+```bash
+./scripts/demo-artifacts.sh
+# Builds v1 and v2, sets desired state to v2
+curl -s http://localhost:8081/index.html
+# → page content reflects the new version
 ```
 
-Scale count (default 3):
-```
-AGENT_COUNT=5 ./scripts/run-agents.sh -d
-```
-
-Override the agent check-in interval:
-```
-CHECKIN_INTERVAL=10s ./scripts/run-agents.sh -d
+Run multiple agents at once:
+```bash
+DEMO_COUNT=3 ./scripts/run-demo-agent.sh
 ```
 
-Run agents with mTLS (mount device cert/key + CA):
-```
-MTLS=1 \
-DEVICE_CERT_PATH=/tmp/device.crt \
-DEVICE_KEY_PATH=/tmp/device.key \
-CONTROL_PLANE_CA_CERT_PATH=/tmp/dev-ca.crt \
-./scripts/run-agents.sh -d
+---
+
+## Codebase orientation
+
+### Control-plane packages
+
+The entry point is `control-plane/cmd/control-plane/main.go`. It wires together:
+
+| Package | What it does |
+|---|---|
+| `internal/httpapi/` | Chi v5 router + all HTTP handlers; RBAC middleware (viewer / operator / admin) |
+| `internal/store/` | Data access layer — `store.Store` interface with Postgres and in-memory implementations |
+| `internal/auth/` | JWT (local), OIDC, LDAP, service tokens, mTLS device identity |
+| `internal/artifactingest/` | Pull adapters for S3/GCS, credential manager, pull safety controls |
+| `internal/artifacttrust/` | Ed25519 signing/verification, trusted key registry, provenance policy |
+| `internal/vulnscan/` | Grype/Trivy artifact scanning, Nessus device scanning |
+| `internal/certs/` | CA management, device cert issuance, rotation |
+| `internal/events/` | WebSocket event hub (real-time device activity stream) |
+| `internal/objectstore/` | MinIO S3 wrapper |
+| `internal/config/` | All env var loading — start here to understand what's configurable |
+
+**Where to start reading:**
+- `internal/config/config.go` — all configuration in one place
+- `internal/store/store.go` — the Store interface defines every data operation
+- `internal/httpapi/router.go` — all routes in one place with their auth requirements
+- `internal/httpapi/handlers/` — one file per feature area (artifacts, devices, auth, etc.)
+
+### Agent packages
+
+The agent is minimal by design — it runs on embedded/constrained hardware.
+
+| Package | What it does |
+|---|---|
+| `bootstrap/` | First-contact enrollment: sends CSR, gets back signed cert + device ID |
+| `client/` | Control-plane API client (check-in, fetch desired state, post apply results) |
+| `plan/` + `planexec/` | Parses `plan.yaml` and executes steps (scripts, file renders, health probes, rollback) |
+| `artifacts/` | tar.gz extraction and atomic symlink switching |
+| `state/` | Local device state persisted to a JSON file |
+
+### Database migrations
+
+Migrations live in `control-plane/migrations/` and run in numeric order. `AUTO_MIGRATE=1` runs them at startup. To understand the data model, reading the migration files in order is the fastest path — they're plain SQL and heavily commented.
+
+### UI
+
+The UI is a single React 18 SPA. All API calls go through `ui/src/api.ts`. RBAC enforcement is in `ui/src/rbac.js`. Features are organized under `ui/src/features/`.
+
+---
+
+## Key concepts
+
+**Enrollment** — Devices prove identity by submitting a CSR (certificate signing request). The control-plane signs it with the internal CA and returns a device certificate. All subsequent device communication uses that cert for mTLS.
+
+**Artifacts** — Versioned software bundles (`tar.gz` with `manifest.json`). Stored in MinIO. Types: `app_bundle`, `config_bundle`, `data_bundle` (agent-applied), `firmware`, `container_image` (register only). Agents only receive short-lived presigned download URLs — never MinIO credentials.
+
+**Desired State** — Operators set a target artifact version per device or group. Agents pull desired state on each check-in and apply it. Group selectors (label matching) let you roll out to fleets; device-level overrides take precedence.
+
+**Auth layers** — The platform has four: JWT (local/LDAP/OIDC users), service tokens (CI systems), mTLS client certs (devices), and bootstrap tokens (first enrollment). All are independently optional.
+
+---
+
+## Running tests
+
+```bash
+# UI RBAC unit tests (the only automated tests in the project)
+cd ui && npm run test:rbac
+
+# API smoke test (requires running stack)
+./scripts/curl-quickstart.sh
+
+# End-to-end artifact flow (requires running stack)
+./scripts/artifact-e2e.sh
+
+# Workload identity flow
+./scripts/test-workload-identity.sh
+
+# Artifact trust/signing
+./scripts/test-artifact-trust.sh
+
+# Go unit tests
+cd control-plane && go test ./...
 ```
 
-Enable agent log export (ships logs to control-plane ingest):
-```
-LOG_EXPORT=1 ./scripts/run-agents.sh -d
-```
+---
 
-`./scripts/run-agents.sh` will auto-enroll a device and write certs to `/tmp/hardwareops/device.crt` and `/tmp/hardwareops/device.key`
-if they do not already exist.
+## Going deeper
 
-When using the Caddy reverse proxy, point agents to the proxy domain:
-```
-CONTROL_PLANE_URL=https://your-domain.example ./scripts/run-agents.sh -d
-```
-
-The agents will check in periodically, apply desired state if present, and stay running.
-`./scripts/run-agents.sh` auto-enrolls a dev device using the local control-plane and mounts the certs into the containers.
-If you previously exported `CONTROL_PLANE_URL=http://...`, unset it or set it to `https://...` before running the script.
-List device IDs from the control-plane to set desired state:
-```
-curl -s http://localhost:8080/api/v1/devices
-```
-
-If your control-plane runs elsewhere, override the URL:
-```
-CONTROL_PLANE_URL=http://host.docker.internal:8080 ./scripts/run-agents.sh -d
-```
-
-### Endpoints (v1)
-- `POST /api/v1/auth/service-tokens/{tokenId}/revoke` break-glass service token revoke (`reason` required; operator+)
-- `POST /api/v1/auth/service-tokens/{tokenId}/rotate` break-glass service token rotate (`reason` required; optional `ttlHours`; operator+)
-- `POST /api/v1/enrollments` create enrollment token
-- `POST /api/v1/devices/enroll` exchange token + CSR for device cert
-- `POST /api/v1/devices/checkin` device heartbeat + state
-- `POST /api/v1/devices/{deviceId}/apply-result` agent apply result (success/error)
-- `GET /api/v1/devices` list devices
-- `GET /api/v1/devices/{deviceId}` device detail
-- `DELETE /api/v1/devices/{deviceId}` delete device (disabled; use decommission workflow)
-- `PATCH /api/v1/devices/{deviceId}` update device labels/metadata
-- `GET /api/v1/groups` list groups
-- `PUT /api/v1/groups/{groupId}` create/update group selector
-- `GET /api/v1/desired-state` list desired state
-- `PUT /api/v1/desired-state/groups/{groupId}` set desired for group
-- `PUT /api/v1/desired-state/devices/{deviceId}` set desired for device
-- `POST /api/v1/artifacts` register artifact
-- `POST /api/v1/artifacts/upload` upload + register artifact
-- `GET /api/v1/artifacts` list artifacts
-- `GET /api/v1/artifacts/{artifactId}` artifact detail
-- `DELETE /api/v1/artifacts/{artifactId}` delete artifact
-- `POST /api/v1/artifacts/{artifactId}/presign` presigned download URL
-- `GET /api/v1/audit` list audit events (filters via query params)
-- `GET /api/v1/audit.csv` export audit events (CSV)
-- `GET /api/v1/audit/retention` get retention days
-- `PUT /api/v1/audit/retention` update retention days
-- `POST /api/v1/cert-rotation/reload` break-glass cert reload (`reason` required; operator+)
-- `POST /api/v1/cert-rotation/rotate` break-glass cert rotate (`reason` required; operator+)
-- `POST /api/v1/cert-rotation/cleanup` break-glass cert cleanup (`reason` required; operator+)
-- `GET /api/v1/logs/{deviceId}` download device logs (CSV)
-- `GET /api/v1/events` WebSocket stream of device check-ins + apply results
-- `GET /healthz`
-
-### Notes
-- `DATABASE_URL` is required for the control-plane to start.
-- If `AUTO_MIGRATE=1` is set, migrations are applied at startup.
-- If `CA_CERT_PATH` / `CA_KEY_PATH` are not set, `/api/v1/devices/enroll` returns an error.
-- Agents default to a 30s check-in interval; override with `CHECKIN_INTERVAL=15s` or `CHECKIN_INTERVAL_SEC=15`.
-- TLS is enabled when `TLS_CERT_PATH` and `TLS_KEY_PATH` are set. Client certs are verified against `TLS_CLIENT_CA_PATH` (defaults to `CA_CERT_PATH`).
-- When mTLS is enabled, device identity is derived from the client cert fingerprint; `deviceId` in the payload must match (or can be omitted).
-- If running behind the reverse proxy, set `TRUST_PROXY=1` (the proxy forwards the client cert via `X-Client-Cert`).
-- Enrollment CSR validation: CN required, no wildcard CN/SANs, DNS/IP SANs only (no URI/email SANs).
-- Rate limits (per IP, per minute): `ENROLLMENT_TOKEN_RPM`, `ENROLL_RPM`, `CHECKIN_RPM`, `APPLY_RESULT_RPM` (set to `0` to disable).
-- Enable log export by setting `LOG_EXPORT_ADDR` on agents and `LOG_INGEST_ADDR` on the control-plane.
-- Stale device cleanup: `DEVICE_STALE_TTL` (default `1h`) and `DEVICE_CLEANUP_INTERVAL` (default `5m`).
-- Cleanup uses `last_seen`; devices that never checked in are not auto-removed.
-- Audit retention cleanup: `AUDIT_RETENTION_DAYS` (default `90`) and `AUDIT_RETENTION_CLEANUP_INTERVAL` (default `1h`).
-- Break-glass revoke/rotate/reload/cleanup endpoints require a JSON `reason` and emit explicit audit metadata for success and failure paths.
-
-### Event Stream (WebSocket)
-The control-plane broadcasts device check-ins and apply results on a WebSocket stream.
-
-Note: the WebSocket handler requires HTTP/1.1. If you see `501` on connect, disable HTTP/2.
-
-Example (self-signed TLS, skip verification):
-```
-npx wscat -c wss://localhost:8080/api/v1/events --no-check
-```
-
-Example (plain HTTP for local dev):
-```
-npx wscat -c ws://localhost:8080/api/v1/events
-```
-
-Scripted helper:
-```
-BASE_URL=https://localhost:8080 INSECURE=1 ./scripts/watch-events.sh
-```
-
-### UI: Realistic Dev Mode
-To simulate production behavior, avoid the Vite proxy and use real TLS:
-1) Trust the dev CA in your OS (or use Caddy with a trusted cert).
-2) Set in `ui/.env`:
-```
-VITE_API_BASE_URL=https://localhost:8080
-VITE_SIMULATE_PROD=1
-```
-3) Ensure the control-plane allows the UI origin:
-```
-export CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
-```
-3) Run:
-```
-cd ui
-npm run dev
-```
-
-### Dev Reset
-Clean your dev setup (stops compose, removes volumes, and clears local artifacts):
-```
-./scripts/dev-reset.sh
-```
+| Topic | Where to read |
+|---|---|
+| Full API contract | `docs/icd.md` |
+| Deployment (on-prem + AWS) | `docs/deploy.md` |
+| Day-2 operations (backup, upgrade, cert rotation) | `docs/operations.md` |
+| Local dev guide (detailed WSL2 flow) | `docs/local-dev-wsl.md` |
+| Artifact signing and provenance | `docs/artifact-provenance.md` |
+| Cloud pull adapters (S3/GCS) | `docs/cloud-pull-adapters.md` |
+| LDAP/AD authentication | `docs/ldap-auth.md` |
+| Vulnerability scanning | `docs/vulnerability-scanning.md` |
+| Feature roadmap and status | `docs/development/roadmap.md` |
+| Phase C feature internals | `docs/development/phase-c-internals.md` |
+| Full documentation map | `docs/README.md` |

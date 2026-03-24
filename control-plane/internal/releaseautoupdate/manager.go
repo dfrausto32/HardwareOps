@@ -502,7 +502,7 @@ func maybeAdvanceComponent(comp componentState, defaultEnabled, allowUnsigned bo
 			blockedByPolicy = true
 			continue
 		}
-		if err := artifacttrust.ArtifactAllowedByPolicy(candidate.artifact, trustPolicy); err != nil {
+		if err := artifacttrust.ArtifactAllowedByPolicy(artifacttrust.ArtifactPolicyInput{Artifact: candidate.artifact}, trustPolicy); err != nil {
 			blockedByPolicy = true
 			continue
 		}

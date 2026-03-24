@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/hardwareops/control-plane/internal/store"
 )
 
@@ -42,6 +43,9 @@ type Store struct {
 	passwordResetTokens   map[string]store.PasswordResetToken
 	passwordResetTokenIdx map[string]string
 	revokedSerials        map[string]struct{}
+	attestations          map[string]store.AttestationRecord
+	artifactVulnScans     []store.ArtifactVulnerabilityScan
+	deviceVulnScans       []store.DeviceVulnerabilityScan
 }
 
 func New() *Store {
@@ -75,6 +79,9 @@ func New() *Store {
 		passwordResetTokens:   map[string]store.PasswordResetToken{},
 		passwordResetTokenIdx: map[string]string{},
 		revokedSerials:        map[string]struct{}{},
+		attestations:          map[string]store.AttestationRecord{},
+		artifactVulnScans:     []store.ArtifactVulnerabilityScan{},
+		deviceVulnScans:       []store.DeviceVulnerabilityScan{},
 	}
 }
 
@@ -1721,6 +1728,18 @@ func (s *Store) ConsumePasswordResetToken(email, tokenHash, passwordHash string,
 	return user, true, nil
 }
 
+func (s *Store) UpdatePasswordResetTokenEmailSent(tokenID string, sentAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	token, ok := s.passwordResetTokens[tokenID]
+	if !ok {
+		return errors.New("password reset token not found")
+	}
+	token.EmailSentAt = sentAt
+	s.passwordResetTokens[tokenID] = token
+	return nil
+}
+
 func (s *Store) CreateAuthVoucher(voucher store.AuthVoucher) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2022,4 +2041,153 @@ func selectorMatches(labels, selector map[string]interface{}) bool {
 		}
 	}
 	return true
+}
+
+// --- Attestations ------------------------------------------------------------
+
+func (s *Store) CreateAttestation(rec store.AttestationRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec.AttestationID = uuid.NewString()
+	if rec.CreatedAt.IsZero() {
+		rec.CreatedAt = time.Now().UTC()
+	}
+	s.attestations[rec.AttestationID] = rec
+	return nil
+}
+
+func (s *Store) GetAttestation(attestationID string) (store.AttestationRecord, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.attestations[attestationID]
+	return rec, ok, nil
+}
+
+func (s *Store) ListAttestations(artifactID string) ([]store.AttestationRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []store.AttestationRecord
+	for _, rec := range s.attestations {
+		if rec.ArtifactID == artifactID {
+			out = append(out, rec)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
+func (s *Store) DeleteAttestationsForArtifact(artifactID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, rec := range s.attestations {
+		if rec.ArtifactID == artifactID {
+			delete(s.attestations, id)
+		}
+	}
+	return nil
+}
+
+// --- Vulnerability scans (artifact) ------------------------------------------
+
+func (s *Store) CreateArtifactVulnScan(scan store.ArtifactVulnerabilityScan) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	scan.ScanID = uuid.NewString()
+	if scan.CreatedAt.IsZero() {
+		scan.CreatedAt = time.Now().UTC()
+	}
+	s.artifactVulnScans = append(s.artifactVulnScans, scan)
+	return nil
+}
+
+func (s *Store) UpdateArtifactVulnScan(scan store.ArtifactVulnerabilityScan) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, rec := range s.artifactVulnScans {
+		if rec.ScanID == scan.ScanID {
+			s.artifactVulnScans[i] = scan
+			return nil
+		}
+	}
+	return nil
+}
+
+func (s *Store) GetLatestArtifactVulnScan(artifactID string) (store.ArtifactVulnerabilityScan, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var latest store.ArtifactVulnerabilityScan
+	found := false
+	for _, rec := range s.artifactVulnScans {
+		if rec.ArtifactID == artifactID {
+			if !found || rec.CreatedAt.After(latest.CreatedAt) {
+				latest = rec
+				found = true
+			}
+		}
+	}
+	return latest, found, nil
+}
+
+func (s *Store) ListArtifactVulnScans(artifactID string) ([]store.ArtifactVulnerabilityScan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []store.ArtifactVulnerabilityScan
+	for _, rec := range s.artifactVulnScans {
+		if rec.ArtifactID == artifactID {
+			out = append(out, rec)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
+// --- Vulnerability scans (device) --------------------------------------------
+
+func (s *Store) UpsertDeviceVulnScan(scan store.DeviceVulnerabilityScan) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	scan.ScanID = uuid.NewString()
+	if scan.CreatedAt.IsZero() {
+		scan.CreatedAt = time.Now().UTC()
+	}
+	if scan.SyncedAt.IsZero() {
+		scan.SyncedAt = time.Now().UTC()
+	}
+	s.deviceVulnScans = append(s.deviceVulnScans, scan)
+	return nil
+}
+
+func (s *Store) GetLatestDeviceVulnScan(deviceID string) (store.DeviceVulnerabilityScan, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var latest store.DeviceVulnerabilityScan
+	found := false
+	for _, rec := range s.deviceVulnScans {
+		if rec.DeviceID == deviceID {
+			if !found || rec.CreatedAt.After(latest.CreatedAt) {
+				latest = rec
+				found = true
+			}
+		}
+	}
+	return latest, found, nil
+}
+
+func (s *Store) ListDeviceVulnScans(deviceID string) ([]store.DeviceVulnerabilityScan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []store.DeviceVulnerabilityScan
+	for _, rec := range s.deviceVulnScans {
+		if rec.DeviceID == deviceID {
+			out = append(out, rec)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out, nil
 }

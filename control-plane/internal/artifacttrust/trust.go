@@ -32,8 +32,9 @@ const (
 	VerificationStatusFailed    = "failed"
 	VerificationStatusUntrusted = "untrusted"
 
-	SignatureTypeEd25519 = "ed25519"
-	SignatureTypeCosign  = "cosign"
+	SignatureTypeEd25519  = "ed25519"
+	SignatureTypeCosign   = "cosign"
+	SignatureTypeKeyless  = "keyless"
 
 	KeyStateActive  = "active"
 	KeyStateRetired = "retired"
@@ -55,12 +56,26 @@ type PolicyOverride struct {
 	AllowedSignatureTypes []string `json:"allowedSignatureTypes,omitempty"`
 	RequireSignature      *bool    `json:"requireSignature,omitempty"`
 	SigningKeyID          string   `json:"signingKeyId,omitempty"`
+	// Provenance fields — if set, override the global provenance policy.
+	RequireProvenance      *bool  `json:"requireProvenance,omitempty"`
+	RequiredPredicateType  string `json:"requiredPredicateType,omitempty"`
+	RequiredBuilderID      string `json:"requiredBuilderId,omitempty"`
+	RequiredBuilderIssuer  string `json:"requiredBuilderIssuer,omitempty"`
 }
 
 type ResolvedPolicy struct {
 	VerificationMode      string
 	AllowedSigningKeyIDs  []string
 	AllowedSignatureTypes []string
+	Provenance            store.ProvenancePolicy
+}
+
+// ArtifactPolicyInput bundles the artifact and its attestation records for
+// policy evaluation, allowing ArtifactAllowedByPolicy to check both signature
+// and provenance constraints in a single call.
+type ArtifactPolicyInput struct {
+	Artifact     store.Artifact
+	Attestations []store.AttestationRecord
 }
 
 type SigningTrustKey struct {
@@ -155,10 +170,15 @@ func ResolvePolicy(defaults store.ArtifactTrustPolicy, raw json.RawMessage) (Res
 	if err != nil {
 		return ResolvedPolicy{}, err
 	}
+	baseProvenance, err := DecodeProvenancePolicy(defaults.ProvenancePolicyJSON)
+	if err != nil {
+		return ResolvedPolicy{}, fmt.Errorf("invalid global provenance policy: %w", err)
+	}
 	resolved := ResolvedPolicy{
 		VerificationMode:      baseMode,
 		AllowedSigningKeyIDs:  baseKeyIDs,
 		AllowedSignatureTypes: baseTypes,
+		Provenance:            baseProvenance,
 	}
 	if len(raw) == 0 || string(raw) == "null" {
 		return resolved, nil
@@ -198,6 +218,19 @@ func ResolvePolicy(defaults store.ArtifactTrustPolicy, raw json.RawMessage) (Res
 		}
 		resolved.AllowedSignatureTypes = uniqueStrings(types)
 	}
+	// Apply provenance overrides — any set field wins over the global default.
+	if override.RequireProvenance != nil {
+		resolved.Provenance.RequireProvenance = *override.RequireProvenance
+	}
+	if override.RequiredPredicateType != "" {
+		resolved.Provenance.RequiredPredicateType = override.RequiredPredicateType
+	}
+	if override.RequiredBuilderID != "" {
+		resolved.Provenance.RequiredBuilderID = override.RequiredBuilderID
+	}
+	if override.RequiredBuilderIssuer != "" {
+		resolved.Provenance.RequiredBuilderIssuer = override.RequiredBuilderIssuer
+	}
 	return resolved, nil
 }
 
@@ -225,7 +258,8 @@ func MergeApplyPolicy(defaults store.ArtifactTrustPolicy, raw json.RawMessage) (
 	return out, nil
 }
 
-func ArtifactAllowedByPolicy(artifact store.Artifact, policy ResolvedPolicy) error {
+func ArtifactAllowedByPolicy(input ArtifactPolicyInput, policy ResolvedPolicy) error {
+	artifact := input.Artifact
 	if policy.VerificationMode == VerificationModeRequire && artifact.VerificationStatus != VerificationStatusVerified {
 		return fmt.Errorf("artifact %s must be verified for strict policy", artifact.ArtifactID)
 	}
@@ -235,7 +269,21 @@ func ArtifactAllowedByPolicy(artifact store.Artifact, policy ResolvedPolicy) err
 	if len(policy.AllowedSignatureTypes) > 0 && artifact.SignatureType != "" && !slices.Contains(policy.AllowedSignatureTypes, artifact.SignatureType) {
 		return fmt.Errorf("artifact %s uses disallowed signature type", artifact.ArtifactID)
 	}
+	if err := CheckProvenancePolicy(input.Attestations, policy.Provenance); err != nil {
+		return fmt.Errorf("artifact %s: %w", artifact.ArtifactID, err)
+	}
 	return nil
+}
+
+// VerifyArtifactKeyless parses a JSON-encoded KeylessCosignBundle and verifies
+// the keyless signature using VerifyKeylessSignature. Returns the builder OIDC
+// subject and issuer on success.
+func VerifyArtifactKeyless(bundleJSON, artifactDigest string, opts KeylessVerifyOptions) (builderID, builderIssuer string, err error) {
+	var bundle KeylessCosignBundle
+	if err := json.Unmarshal([]byte(bundleJSON), &bundle); err != nil {
+		return "", "", fmt.Errorf("keyless bundle: invalid JSON: %w", err)
+	}
+	return VerifyKeylessSignature(bundle, artifactDigest, opts)
 }
 
 func NormalizeVerificationMode(val string) (string, error) {
@@ -257,6 +305,8 @@ func NormalizeSignatureType(val string) (string, error) {
 		return SignatureTypeEd25519, nil
 	case SignatureTypeCosign:
 		return SignatureTypeCosign, nil
+	case SignatureTypeKeyless:
+		return SignatureTypeKeyless, nil
 	default:
 		return "", fmt.Errorf("invalid signatureType: %s", val)
 	}
@@ -268,6 +318,8 @@ func NormalizeKeyAlgorithm(val string) (string, error) {
 		return SignatureTypeEd25519, nil
 	case SignatureTypeCosign:
 		return SignatureTypeCosign, nil
+	case SignatureTypeKeyless:
+		return SignatureTypeKeyless, nil
 	default:
 		return "", fmt.Errorf("invalid algorithm: %s", val)
 	}

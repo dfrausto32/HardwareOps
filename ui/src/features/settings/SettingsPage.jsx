@@ -47,6 +47,10 @@ export default function SettingsPage({
   upgradePreflightStatus,
   upgradeReady,
   view,
+  nessusSyncStatus,
+  nessusSyncing,
+  handleTriggerNessusSync,
+  canAdmin,
 }) {
   return (
           <section id="settings" className="card settings-card">
@@ -415,6 +419,44 @@ export default function SettingsPage({
                 )}
               </div>
             </div>
+          <div className="settings-section">
+            <h3>Vulnerability Scanning</h3>
+            <div className="settings-row">
+              <div>
+                <div className="detail-label">Artifact Scanner</div>
+                <div className="detail-note">Configured via <code>VULN_ARTIFACT_SCANNER</code> env var (grype | trivy | disabled).</div>
+              </div>
+            </div>
+            <div className="settings-row">
+              <div>
+                <div className="detail-label">Nessus Integration</div>
+                <div className="detail-note">Configured via <code>VULN_NESSUS_URL</code> env var.</div>
+              </div>
+            </div>
+            {nessusSyncStatus !== null && (
+              <div className="settings-row">
+                <div>
+                  <div className="detail-label">Last Nessus Sync</div>
+                  <div className="detail-value">
+                    {nessusSyncStatus.lastSyncAt ? nessusSyncStatus.lastSyncAt : 'Never'}
+                  </div>
+                  <div className="detail-note">Matched {nessusSyncStatus.matchCount || 0} device(s)</div>
+                  {nessusSyncStatus.error && <div className="error">{nessusSyncStatus.error}</div>}
+                </div>
+              </div>
+            )}
+            {canAdmin && (
+              <div className="settings-row">
+                <button
+                  className="button ghost"
+                  onClick={handleTriggerNessusSync}
+                  disabled={nessusSyncing}
+                >
+                  {nessusSyncing ? 'Syncing…' : 'Sync Nessus Now'}
+                </button>
+              </div>
+            )}
+          </div>
           </section>
   )
 }

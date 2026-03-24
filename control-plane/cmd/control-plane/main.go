@@ -24,6 +24,7 @@ import (
 	"github.com/hardwareops/control-plane/internal/license"
 	"github.com/hardwareops/control-plane/internal/lifecycle"
 	"github.com/hardwareops/control-plane/internal/logging"
+	"github.com/hardwareops/control-plane/internal/mailer"
 	"github.com/hardwareops/control-plane/internal/metrics"
 	"github.com/hardwareops/control-plane/internal/migrate"
 	"github.com/hardwareops/control-plane/internal/objectstore"
@@ -31,6 +32,7 @@ import (
 	storepkg "github.com/hardwareops/control-plane/internal/store"
 	"github.com/hardwareops/control-plane/internal/store/postgres"
 	"github.com/hardwareops/control-plane/internal/upgrade"
+	"github.com/hardwareops/control-plane/internal/vulnscan"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -269,6 +271,7 @@ func main() {
 	var authManager *auth.Manager
 	var authLoginBackoff *auth.LoginBackoff
 	var oidcProvider *auth.OIDCProvider
+	var ldapProvider *auth.LDAPProvider
 	var workloadIdentityManager *auth.WorkloadIdentityManager
 	if cfg.AuthMode != "" && cfg.AuthMode != "disabled" {
 		manager, err := auth.NewManager(cfg.AuthMode, cfg.AuthJWTSecret, cfg.AuthTokenTTL, cfg.AuthIssuer, store)
@@ -290,6 +293,17 @@ func main() {
 			MaxDelay:  cfg.AuthLoginBackoffMax,
 			Window:    cfg.AuthLoginBackoffWindow,
 		})
+	}
+	if cfg.LDAPEnabled() {
+		if authManager == nil || !authManager.Enabled() {
+			logger.Fatal("LDAP auth requires AUTH_MODE to be enabled")
+		}
+		p, err := auth.NewLDAPProvider(&cfg, store, authManager)
+		if err != nil {
+			logger.Fatalf("ldap provider init: %v", err)
+		}
+		ldapProvider = p
+		logger.Printf("ldap provider initialized url=%s baseDN=%s", cfg.AuthLDAPURL, cfg.AuthLDAPBaseDN)
 	}
 	if cfg.OIDCEnabled() {
 		if strings.TrimSpace(cfg.AuthOIDCClientSecret) == "" {
@@ -343,6 +357,9 @@ func main() {
 		cfg.ArtifactPullCredentialsJSON,
 		cfg.ArtifactPullCredentialsAWSSecretID,
 		cfg.ArtifactPullCredentialsAWSRegion,
+		cfg.ArtifactPullCredentialsVaultAddr,
+		cfg.ArtifactPullCredentialsVaultToken,
+		cfg.ArtifactPullCredentialsVaultPath,
 	)
 	if err != nil {
 		logger.Fatalf("artifact pull credentials init: %v", err)
@@ -350,12 +367,64 @@ func main() {
 	pullCredentialStatus := pullCredentialManager.Status()
 	if pullCredentialStatus.Configured {
 		logger.Printf(
-			"artifact pull credentials loaded refs=%d staticRefs=%d awsRefs=%d",
+			"artifact pull credentials loaded refs=%d staticRefs=%d awsRefs=%d vaultRefs=%d vaultBacked=%t",
 			pullCredentialStatus.CredentialRefCount,
 			pullCredentialStatus.StaticCredentialRefs,
 			pullCredentialStatus.AWSCredentialRefs,
+			pullCredentialStatus.VaultCredentialRefs,
+			pullCredentialStatus.VaultBacked,
 		)
 	}
+	// --- Vulnerability scanning -----------------------------------------------
+	var artifactScanJob *vulnscan.ArtifactScanJob
+	scannerType := strings.ToLower(strings.TrimSpace(cfg.VulnArtifactScanner))
+	if scannerType != "" && scannerType != "disabled" && objStore != nil {
+		var sc vulnscan.Scanner
+		switch scannerType {
+		case "grype":
+			sc = vulnscan.NewGrypeScanner(cfg.VulnArtifactScannerBin, objStore.(vulnscan.ObjectStore), cfg.S3Bucket)
+		case "trivy":
+			sc = vulnscan.NewTrivyScanner(cfg.VulnArtifactScannerBin, objStore.(vulnscan.ObjectStore), cfg.S3Bucket)
+		default:
+			logger.Printf("unknown VULN_ARTIFACT_SCANNER %q; artifact scanning disabled", scannerType)
+		}
+		if sc != nil {
+			artifactScanJob = vulnscan.NewArtifactScanJob(sc, store, hub, logger)
+			logger.Printf("artifact vulnerability scanning enabled scanner=%s", sc.Type())
+		}
+	}
+
+	var nessusSyncJob *vulnscan.NessusSyncJob
+	if cfg.VulnNessusURL != "" {
+		nessusClient := vulnscan.NewNessusClient(cfg.VulnNessusURL, cfg.VulnNessusAccessKey, cfg.VulnNessusSecretKey)
+		nessusSyncJob = vulnscan.NewNessusSyncJob(vulnscan.NessusSyncConfig{
+			Client:   nessusClient,
+			Store:    store,
+			Hub:      hub,
+			Logger:   logger,
+			Interval: cfg.VulnNessusSyncInterval,
+			ScanIDs:  cfg.VulnNessusScanIDs,
+		})
+		nessusSyncJob.Start(context.Background())
+		logger.Printf("nessus sync job started url=%s interval=%s", cfg.VulnNessusURL, cfg.VulnNessusSyncInterval)
+	}
+	// --------------------------------------------------------------------------
+
+	var mailSender mailer.Mailer = &mailer.NoopMailer{}
+	if cfg.SMTPEnabled() {
+		mailSender = mailer.NewSMTPMailer(mailer.SMTPConfig{
+			Host:       cfg.SMTPHost,
+			Port:       cfg.SMTPPort,
+			User:       cfg.SMTPUser,
+			Password:   cfg.SMTPPassword,
+			From:       cfg.SMTPFrom,
+			TLSMode:    cfg.SMTPTLSMode,
+			Timeout:    cfg.SMTPTimeout,
+			SkipVerify: cfg.SMTPSkipVerify,
+		})
+		logger.Printf("smtp mailer initialized host=%s port=%d tls=%s from=%s", cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPTLSMode, cfg.SMTPFrom)
+	}
+
 	deps := httpapi.Dependencies{
 		Store:             store,
 		Signer:            certManager,
@@ -393,6 +462,7 @@ func main() {
 		Auth:                            authManager,
 		AuthLoginBackoff:                authLoginBackoff,
 		OIDCProvider:                    oidcProvider,
+		LDAPProvider:                    ldapProvider,
 		WorkloadIdentity:                workloadIdentityManager,
 		BootstrapToken:                  cfg.BootstrapToken,
 		License:                         licenseManager,
@@ -416,6 +486,15 @@ func main() {
 		DeviceIdentityMode:              cfg.DeviceIdentityMode,
 		DeviceIdentityRequireOnEnroll:   cfg.DeviceIdentityRequireOnEnroll,
 		DeviceIdentityRequireOnCheckin:  cfg.DeviceIdentityRequireOnCheckin,
+		ArtifactFulcioRootCert:          cfg.ArtifactFulcioRootCert,
+		ArtifactRekorURL:                cfg.ArtifactRekorURL,
+		ArtifactRequireRekorLog:         cfg.ArtifactRequireRekorLog,
+		ArtifactScanJob:                 artifactScanJob,
+		NessusSyncJob:                   nessusSyncJob,
+		VulnSkipArtifactTypes:           cfg.VulnArtifactSkipTypes,
+		Mailer:                          mailSender,
+		AppPublicURL:                    cfg.AppPublicURL,
+		SMTPEnabled:                     cfg.SMTPEnabled(),
 	}
 
 	updateMetricsCounts := func() {

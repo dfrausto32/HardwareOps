@@ -69,6 +69,12 @@ variable "app_host" {
   type        = string
 }
 
+variable "app_public_url" {
+  description = "Public base URL of the HardwareOps UI (e.g. https://hardwareops.example.com). Used in password-reset and invite email links. Leave empty to omit."
+  type        = string
+  default     = ""
+}
+
 variable "devices_host" {
   description = "Devices host."
   type        = string
@@ -139,6 +145,48 @@ variable "control_plane_image" {
 variable "gateway_image" {
   description = "Gateway image URI in ECR."
   type        = string
+}
+
+variable "smtp_host" {
+  description = "SMTP server hostname. Leave empty to disable email delivery (NoopMailer)."
+  type        = string
+  default     = ""
+}
+
+variable "smtp_port" {
+  description = "SMTP port. 587 = STARTTLS (default), 465 = implicit TLS, 25 = plain."
+  type        = number
+  default     = 587
+}
+
+variable "smtp_user" {
+  description = "SMTP username."
+  type        = string
+  default     = ""
+}
+
+variable "smtp_from" {
+  description = "Sender address for outbound email."
+  type        = string
+  default     = "HardwareOps <noreply@example.com>"
+}
+
+variable "smtp_tls_mode" {
+  description = "SMTP TLS mode: starttls, tls, or none."
+  type        = string
+  default     = "starttls"
+}
+
+variable "smtp_timeout" {
+  description = "SMTP dial+send timeout."
+  type        = string
+  default     = "10s"
+}
+
+variable "smtp_password_secret_arn" {
+  description = "ARN of a Secrets Manager secret whose plaintext value is the SMTP password. When set, SMTP_PASSWORD is injected via ECS valueFrom. Leave empty when SMTP is not configured."
+  type        = string
+  default     = ""
 }
 
 variable "control_plane_env" {

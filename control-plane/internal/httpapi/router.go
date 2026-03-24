@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/hardwareops/control-plane/internal/artifacttrust"
 	"github.com/hardwareops/control-plane/internal/auth"
 	"github.com/hardwareops/control-plane/internal/httpapi/handlers"
 )
@@ -84,6 +85,18 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 	viewer := requireRole("viewer")
 	operator := requireRole("operator")
 	admin := requireRole("admin")
+	// vulnScanTrigger is nil-safe: when ArtifactScanJob is nil we pass nil so
+	// the handlers' nil-check works correctly.
+	var vulnScanTrigger handlers.ArtifactVulnScanTrigger
+	if deps.ArtifactScanJob != nil {
+		vulnScanTrigger = deps.ArtifactScanJob
+	}
+	// nessusTrigger follows the same nil-safety pattern.
+	var nessusTrigger handlers.NessusSyncJobTrigger
+	if deps.NessusSyncJob != nil {
+		nessusTrigger = deps.NessusSyncJob
+	}
+
 	artifactSigPolicy := handlers.ArtifactSignaturePolicy{
 		Store:                 deps.Store,
 		VerificationMode:      deps.ArtifactTrustVerificationMode,
@@ -93,6 +106,11 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		EnforceIngest:         deps.ArtifactSignatureEnforceIngest,
 		KeyID:                 deps.ArtifactSignatureKeyID,
 		Hardened:              deps.HardenedProfile,
+		KeylessOpts: artifacttrust.KeylessVerifyOptions{
+			FulcioRootCertPEM: deps.ArtifactFulcioRootCert,
+			RekorURL:          deps.ArtifactRekorURL,
+			RequireRekorLog:   deps.ArtifactRequireRekorLog,
+		},
 	}
 
 	if deps.Metrics != nil && deps.MetricsPath != "" {
@@ -109,10 +127,11 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.Get("/bootstrap", handlers.BootstrapStatus(deps.Auth != nil && deps.Auth.Enabled(), deps.BootstrapToken))
 		r.Get("/bootstrap/ca", handlers.DownloadBootstrapCA(logger, deps.Store, deps.CertManager, deps.BootstrapToken, deps.TrustProxy))
 
-		r.Get("/auth/status", handlers.AuthStatus(deps.Auth, oidcLoginURL))
+		r.Get("/auth/status", handlers.AuthStatus(deps.Auth, oidcLoginURL, deps.LDAPProvider != nil, deps.SMTPEnabled))
 		r.With(loginLimiter.Middleware).Post("/auth/login", handlers.Login(logger, deps.Auth, deps.Store, deps.TrustProxy, deps.AuthLoginBackoff))
 		r.Post("/auth/register", handlers.Register(logger, deps.Auth, deps.Store, deps.TrustProxy))
 		r.With(loginLimiter.Middleware).Post("/auth/password-reset/complete", handlers.CompletePasswordResetToken(logger, deps.Auth, deps.Store, deps.TrustProxy))
+		r.With(loginLimiter.Middleware).Post("/auth/forgot-password", handlers.ForgotPassword(logger, deps.Auth, deps.Store, deps.Mailer, deps.AppPublicURL, deps.TrustProxy))
 		if deps.WorkloadIdentity != nil {
 			r.With(loginLimiter.Middleware).Post("/auth/workload-identity/exchange", handlers.ExchangeWorkloadIdentityToken(logger, deps.Auth, deps.WorkloadIdentity, deps.Store, deps.TrustProxy))
 			if statusManager, ok := deps.WorkloadIdentity.(*auth.WorkloadIdentityManager); ok {
@@ -122,6 +141,9 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		if deps.OIDCProvider != nil {
 			r.Get("/auth/oidc/login", handlers.OIDCLogin(deps.OIDCProvider))
 			r.Get("/auth/oidc/callback", handlers.OIDCCallback(logger, deps.OIDCProvider, deps.Store, deps.TrustProxy))
+		}
+		if deps.LDAPProvider != nil {
+			r.With(loginLimiter.Middleware).Post("/auth/ldap/login", handlers.LDAPLogin(logger, deps.LDAPProvider, deps.Store, deps.TrustProxy))
 		}
 		r.With(viewer).Get("/auth/me", handlers.GetMe(deps.Store))
 		r.With(viewer).Post("/auth/recovery-codes/generate", handlers.GenerateRecoveryCodes(logger, deps.Auth, deps.Store, deps.TrustProxy))
@@ -134,7 +156,8 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(admin).Post("/users", handlers.CreateUser(logger, deps.Store, deps.TrustProxy))
 		r.With(admin).Get("/users", handlers.ListUsers(logger, deps.Store, deps.TrustProxy))
 		r.With(admin).Patch("/users/{userId}", handlers.UpdateUser(logger, deps.Store, deps.TrustProxy))
-		r.With(admin).Post("/users/{userId}/password-reset-token", handlers.CreatePasswordResetToken(logger, deps.Auth, deps.Store, deps.TrustProxy))
+		r.With(admin).Post("/users/{userId}/password-reset-token", handlers.CreatePasswordResetToken(logger, deps.Auth, deps.Store, deps.Mailer, deps.AppPublicURL, deps.TrustProxy))
+		r.With(admin).Post("/users/{userId}/invite", handlers.SendUserInvite(logger, deps.Auth, deps.Store, deps.Mailer, deps.AppPublicURL, deps.TrustProxy))
 
 		r.With(viewer).Get("/groups", handlers.ListGroups(logger, deps.Store, deps.TrustProxy))
 		r.With(operator).Post("/groups/batch", handlers.BatchGroups(logger, deps.Store, deps.TrustProxy))
@@ -151,11 +174,11 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(admin).Post("/trusted-signing-keys/{keyId}/retire", handlers.RetireTrustedSigningKey(logger, deps.Store, deps.TrustProxy))
 		r.With(operator).Get("/artifact-trust/policy", handlers.GetArtifactTrustPolicy(logger, deps.Store, deps.TrustProxy, artifactSigPolicy))
 		r.With(admin).Put("/artifact-trust/policy", handlers.PutArtifactTrustPolicy(logger, deps.Store, deps.TrustProxy, artifactSigPolicy))
-		r.With(operator).Post("/artifacts", handlers.CreateArtifactWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events))
-		r.With(operator).Post("/artifacts/upload", handlers.UploadArtifactWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, deps.Metrics, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events))
-		r.With(artifactPublisher).Post("/artifacts/pull", handlers.PullArtifactWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.ArtifactPullHosts, deps.ArtifactPullMaxBytes, deps.ArtifactPullTimeout, deps.ArtifactPullAllowInsecureHTTP, deps.ArtifactPullCreds, deps.TrustProxy, deps.Metrics, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events))
+		r.With(operator).Post("/artifacts", handlers.CreateArtifactWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events, vulnScanTrigger, deps.VulnSkipArtifactTypes))
+		r.With(operator).Post("/artifacts/upload", handlers.UploadArtifactWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, deps.Metrics, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events, vulnScanTrigger, deps.VulnSkipArtifactTypes))
+		r.With(artifactPublisher).Post("/artifacts/pull", handlers.PullArtifactWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.ArtifactPullHosts, deps.ArtifactPullMaxBytes, deps.ArtifactPullTimeout, deps.ArtifactPullAllowInsecureHTTP, deps.ArtifactPullCreds, deps.TrustProxy, deps.Metrics, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events, vulnScanTrigger, deps.VulnSkipArtifactTypes))
 		r.With(artifactPublisher).Post("/artifacts/presign-upload", handlers.PresignArtifactUpload(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.PresignExpires, deps.TrustProxy, deps.Metrics))
-		r.With(artifactPublisher).Post("/artifacts/complete", handlers.CompleteArtifactUploadWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, deps.Metrics, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events))
+		r.With(artifactPublisher).Post("/artifacts/complete", handlers.CompleteArtifactUploadWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, deps.Metrics, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events, vulnScanTrigger, deps.VulnSkipArtifactTypes))
 		r.With(admin).Get("/artifacts/pull-credentials", handlers.GetPullCredentialStatus(logger, deps.ArtifactPullCredsManager))
 		r.With(admin).Post("/artifacts/pull-credentials/reload", handlers.ReloadPullCredentials(logger, deps.Store, deps.ArtifactPullCredsManager, deps.TrustProxy))
 		r.With(viewer).Get("/artifacts/{artifactId}", handlers.GetArtifact(logger, deps.Store, deps.TrustProxy))
@@ -163,6 +186,11 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(operator).Post("/artifacts/{artifactId}/restore", handlers.RestoreArtifact(logger, deps.Store, deps.TrustProxy))
 		r.With(operator).Delete("/artifacts/{artifactId}", handlers.DeleteArtifact(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy))
 		r.With(viewer).Post("/artifacts/{artifactId}/presign", handlers.PresignArtifact(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.PresignExpires, deps.TrustProxy, deps.Metrics))
+		r.With(operator).Post("/artifacts/{artifactId}/attestations", handlers.PostArtifactAttestation(logger, deps.Store, deps.ArtifactFulcioRootCert, deps.ArtifactRekorURL, deps.ArtifactRequireRekorLog))
+		r.With(viewer).Get("/artifacts/{artifactId}/attestations", handlers.ListArtifactAttestations(logger, deps.Store))
+		r.With(viewer).Get("/artifacts/{artifactId}/vulnerability-scans", handlers.ListArtifactVulnScans(logger, deps.Store))
+		r.With(viewer).Get("/artifacts/{artifactId}/vulnerability-scans/latest", handlers.GetLatestArtifactVulnScan(logger, deps.Store))
+		r.With(operator).Post("/artifacts/{artifactId}/vulnerability-scans", handlers.TriggerArtifactVulnScan(logger, deps.Store, vulnScanTrigger))
 
 		r.With(admin).Get("/audit", handlers.ListAuditEvents(logger, deps.Store, deps.TrustProxy))
 		r.With(admin).Get("/audit.csv", handlers.ExportAuditCSV(logger, deps.Store, deps.TrustProxy))
@@ -179,6 +207,8 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 
 		r.With(viewer).Get("/devices", handlers.ListDevices(logger, deps.Store, deps.TrustProxy))
 		r.With(viewer).Get("/devices/{deviceId}", handlers.GetDevice(logger, deps.Store, deps.TrustProxy))
+		r.With(viewer).Get("/devices/{deviceId}/vulnerability-scans", handlers.ListDeviceVulnScans(logger, deps.Store))
+		r.With(viewer).Get("/devices/{deviceId}/vulnerability-scans/latest", handlers.GetLatestDeviceVulnScan(logger, deps.Store))
 		r.With(operator).Delete("/devices/{deviceId}", handlers.DeleteDevice(logger, deps.Store, deps.TrustProxy))
 		r.With(admin).Post("/devices/{deviceId}/decommission", handlers.DecommissionDevice(logger, deps.Store, deps.TrustProxy))
 		r.With(operator).Patch("/devices/{deviceId}", handlers.PatchDevice(logger, deps.Store, deps.TrustProxy))
@@ -226,6 +256,9 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(admin).Post("/maintenance/backup", handlers.StartBackup(logger, deps.Store, deps.Backup, deps.TrustProxy, deps.Metrics))
 		r.With(admin).Get("/maintenance/restore", handlers.GetRestoreStatus(deps.Restore))
 		r.With(admin).Post("/maintenance/restore", handlers.StartRestore(logger, deps.Store, deps.Restore, deps.Maintenance, deps.BackupDir, deps.TrustProxy, deps.Metrics))
+		r.With(admin).Post("/vulnerability-scans/nessus/sync", handlers.TriggerNessusSync(logger, nessusTrigger))
+		r.With(admin).Get("/vulnerability-scans/nessus/status", handlers.GetNessusSyncStatus(logger, nessusTrigger))
+
 		r.With(viewer).Get("/maintenance/upgrade/available", handlers.GetUpgradeAvailable(deps.UpgradeUpdatesDir))
 		r.With(viewer).Get("/maintenance/upgrade/preflight", handlers.GetUpgradePreflight(deps.Upgrade, deps.UpgradeUpdatesDir))
 		r.With(viewer).Get("/maintenance/upgrade", handlers.GetUpgradeStatus(deps.Upgrade))

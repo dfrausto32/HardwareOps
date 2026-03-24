@@ -2,7 +2,7 @@
 
 Status: Active (living document)  
 API namespace: `v1`  
-Last updated: 2026-03-04  
+Last updated: 2026-03-17
 Source of truth for routes: `control-plane/internal/httpapi/router.go`
 
 This is the canonical contract for integrating with HardwareOps without relying on the GUI.
@@ -76,8 +76,9 @@ All paths below are full paths.
 |---|---|---|---|
 | GET | `/api/v1/bootstrap` | public | bootstrap status |
 | GET | `/api/v1/bootstrap/ca` | public + bootstrap-token logic | downloads bootstrap CA |
-| GET | `/api/v1/auth/status` | public | auth mode and enabled state |
+| GET | `/api/v1/auth/status` | public | auth mode and enabled state; includes `ldapEnabled: bool` when LDAP is configured |
 | POST | `/api/v1/auth/login` | public | rate limited, returns JWT |
+| POST | `/api/v1/auth/ldap/login` | public | rate limited; LDAP/AD credential exchange, returns JWT identical to local login |
 | POST | `/api/v1/auth/register` | public | voucher/bootstrap-driven local registration |
 | GET | `/api/v1/auth/me` | viewer | caller identity |
 | GET | `/api/v1/auth/workload-identity/status` | admin | configured workload identity providers |
@@ -117,6 +118,8 @@ All paths below are full paths.
 | POST | `/api/v1/devices/{deviceId}/apply-result` | device path | rate limited |
 | POST | `/api/v1/devices/checkin` | device path | rate limited |
 | POST | `/api/v1/devices/reenroll` | device path | rate limited |
+| GET | `/api/v1/devices/{deviceId}/vulnerability-scans` | viewer | list vulnerability scans for a device (Nessus-sourced) |
+| GET | `/api/v1/devices/{deviceId}/vulnerability-scans/latest` | viewer | most recent vulnerability scan for a device |
 
 ### 5.4 Enrollment (legacy + first-contact)
 
@@ -148,6 +151,8 @@ All paths below are full paths.
 | POST | `/api/v1/artifacts/pull` | operator or service token (`artifact.publish`) | control-plane pull ingest |
 | POST | `/api/v1/artifacts/presign-upload` | operator or service token (`artifact.publish`) | presigned upload init |
 | POST | `/api/v1/artifacts/complete` | operator or service token (`artifact.publish`) | finalize presigned upload |
+| POST | `/api/v1/artifacts/{artifactId}/attestations` | operator | submit in-toto / SLSA attestation; keyless bundles verified at upload |
+| GET | `/api/v1/artifacts/{artifactId}/attestations` | viewer | list attestations for an artifact |
 | POST | `/api/v1/artifacts/{artifactId}/deprecate` | operator | deprecate artifact |
 | POST | `/api/v1/artifacts/{artifactId}/restore` | operator | restore deprecated artifact |
 | DELETE | `/api/v1/artifacts/{artifactId}` | operator | hard delete (guarded by refs/policy) |
@@ -156,13 +161,23 @@ All paths below are full paths.
 | PUT | `/api/v1/artifacts/lifecycle/policy` | admin | set lifecycle policy |
 | GET | `/api/v1/artifacts/lifecycle/status` | viewer | lifecycle status summary |
 | POST | `/api/v1/artifacts/lifecycle/prune` | admin | immediate prune run |
-| GET | `/api/v1/artifacts/pull-credentials` | admin | credential resolver status |
-| POST | `/api/v1/artifacts/pull-credentials/reload` | admin | reload resolver configuration |
+| GET | `/api/v1/artifacts/pull-credentials` | admin | credential resolver status; includes `vault_backed`, `vault_addr`, `vault_path`, `vaultCredentialRefs` when Vault is configured |
+| POST | `/api/v1/artifacts/pull-credentials/reload` | admin | reload resolver configuration; re-fetches from all configured backends (file, AWS SM, Vault) |
+| GET | `/api/v1/artifacts/{artifactId}/vulnerability-scans` | viewer | list vulnerability scans for an artifact |
+| GET | `/api/v1/artifacts/{artifactId}/vulnerability-scans/latest` | viewer | most recent vulnerability scan for an artifact |
+| POST | `/api/v1/artifacts/{artifactId}/vulnerability-scans` | operator | trigger manual rescan for an artifact |
+| POST | `/api/v1/vulnerability-scans/nessus/sync` | admin | trigger immediate Nessus sync |
+| GET | `/api/v1/vulnerability-scans/nessus/status` | admin | Nessus sync status (last sync time, device match count) |
 
 ### 5.6 Security, Audit, Events, Health
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
+| GET | `/api/v1/artifact-trust/policy` | viewer | global artifact trust policy; includes optional `provenance` object (Phase C) |
+| PUT | `/api/v1/artifact-trust/policy` | admin | set global artifact trust policy; accepts optional `provenance` object |
+| GET | `/api/v1/artifact-trust/keys` | viewer | list trusted signing keys |
+| POST | `/api/v1/artifact-trust/keys` | admin | register trusted signing key |
+| DELETE | `/api/v1/artifact-trust/keys/{keyId}` | admin | remove trusted signing key |
 | GET | `/api/v1/license` | admin | license/device-cap state |
 | GET | `/api/v1/release-auto-update` | viewer | release auto-update settings |
 | PUT | `/api/v1/release-auto-update` | admin | update auto-update policy |
@@ -261,6 +276,138 @@ Supported integration patterns:
 3. Agents consume desired state through `/api/v1/devices/checkin`.
 4. Agents report execution via `/api/v1/devices/{deviceId}/apply-result`.
 
+### 6.5 LDAP/AD login
+
+Only available when `AUTH_LDAP_URL` is configured. Confirm availability first:
+
+```bash
+curl -s /api/v1/auth/status | jq .ldapEnabled   # true when available
+```
+
+Request:
+```json
+POST /api/v1/auth/ldap/login
+{
+  "username": "alice",
+  "password": "her-directory-password"
+}
+```
+
+Response (same shape as local login):
+```json
+{
+  "token": "eyJhbGciOi...",
+  "expiresAt": "2026-03-18T12:00:00Z",
+  "user": {
+    "id": "usr_01HZ...",
+    "email": "alice@example.com",
+    "role": "operator",
+    "authProvider": "ldap"
+  }
+}
+```
+
+The returned `token` is used identically to a local or OIDC JWT. See `docs/ldap-auth.md` for configuration and role mapping details.
+
+### 6.6 Keyless artifact ingest and attestations
+
+Register an artifact with a keyless cosign signature:
+
+```json
+POST /api/v1/artifacts/pull
+{
+  "name": "firmware",
+  "version": "2.0.0",
+  "signatureType": "keyless",
+  "signature": "<JSON-encoded cosign bundle>",
+  "source": { "kind": "s3", "uri": "s3://bucket/firmware.tar.gz" }
+}
+```
+
+Upload an in-toto / SLSA attestation after ingest:
+
+```json
+POST /api/v1/artifacts/{artifactId}/attestations
+{
+  "predicateType": "https://slsa.dev/provenance/v1",
+  "payload": { ... },
+  "signatureType": "keyless",
+  "keylessBundle": "<JSON-encoded cosign bundle>"
+}
+```
+
+List attestations:
+
+```
+GET /api/v1/artifacts/{artifactId}/attestations
+```
+
+See `docs/artifact-provenance.md` for the full workflow including provenance policy configuration.
+
+### 6.7 Vulnerability scan lifecycle
+
+Only available when `VULN_ARTIFACT_SCANNER` is set to `grype` or `trivy` (artifact scanning) or `VULN_NESSUS_URL` is configured (device scanning).
+
+**Artifact scan (auto-triggered at ingest):**
+
+```
+POST /api/v1/artifacts/upload   → scan triggered automatically in background
+```
+
+**Manual artifact rescan:**
+
+```json
+POST /api/v1/artifacts/{artifactId}/vulnerability-scans
+```
+
+Response: `{"scanId": "uuid", "status": "pending", "message": "scan triggered"}`
+
+**Poll for result:**
+
+```
+GET /api/v1/artifacts/{artifactId}/vulnerability-scans/latest
+```
+
+Response:
+```json
+{
+  "scanId": "uuid",
+  "artifactId": "uuid",
+  "scannerType": "grype",
+  "scannerVersion": "0.74.0",
+  "scanStatus": "completed",
+  "scannedAt": "2026-03-17T10:00:00Z",
+  "severityCounts": {"critical": 1, "high": 4, "medium": 12, "low": 3, "unknown": 0},
+  "findings": [
+    {"id": "CVE-2023-12345", "severity": "critical", "package": "openssl", "version": "3.0.1", "fixedIn": "3.0.2", "description": "..."}
+  ]
+}
+```
+
+`scanStatus` values: `pending` | `running` | `completed` | `failed` | `skipped`
+
+**Device vulnerability scan (Nessus-sourced):**
+
+```
+GET /api/v1/devices/{deviceId}/vulnerability-scans/latest
+```
+
+Response mirrors the artifact scan shape; `scannerType` is `nessus`.
+
+**Trigger immediate Nessus sync (admin only):**
+
+```
+POST /api/v1/vulnerability-scans/nessus/sync
+```
+
+**Check sync status:**
+
+```
+GET /api/v1/vulnerability-scans/nessus/status
+```
+
+See `docs/vulnerability-scanning.md` for configuration details and device-matching setup.
+
 ## 7) Guardrails and Security-Relevant Behavior
 
 - Auth login is rate-limited and subject to backoff controls.
@@ -288,3 +435,7 @@ Integrations must handle:
 - Artifact ingest deep dive: `docs/development/artifact-ingest.md`
 - Push vs pull guidance: `docs/development/artifact-ingest.md`
 - First-contact onboarding deep dive: `docs/development/agent-first-contact-onboarding.md`
+- LDAP/AD authentication: `docs/ldap-auth.md`
+- Keyless signing and attestations: `docs/artifact-provenance.md`
+- S3/GCS pull adapters and Vault credentials: `docs/cloud-pull-adapters.md`
+- Phase C developer internals: `docs/development/phase-c-internals.md`

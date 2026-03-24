@@ -197,6 +197,10 @@ func ValidateHardening(cfg Config) error {
 		}
 	}
 
+	if cfg.SMTPSkipVerify {
+		return fmt.Errorf("HARDENED_PROFILE requires SMTP_SKIP_VERIFY=0")
+	}
+
 	return nil
 }
 

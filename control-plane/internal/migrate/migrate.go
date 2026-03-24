@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -33,6 +34,25 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, dir string) error {
 		content, err := os.ReadFile(filepath.Join(dir, file))
 		if err != nil {
 			return err
+		}
+
+		if requiresNoTransaction(string(content)) {
+			conn, err := pool.Acquire(ctx)
+			if err != nil {
+				return err
+			}
+			for _, stmt := range splitStatements(string(content)) {
+				if _, err := conn.Exec(ctx, stmt, pgx.QueryExecModeSimpleProtocol); err != nil {
+					conn.Release()
+					return fmt.Errorf("apply %s: %w", file, err)
+				}
+			}
+			if _, err := conn.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ($1)`, pgx.QueryExecModeSimpleProtocol, file); err != nil {
+				conn.Release()
+				return err
+			}
+			conn.Release()
+			continue
 		}
 
 		tx, err := pool.Begin(ctx)
@@ -106,4 +126,21 @@ func loadApplied(ctx context.Context, pool *pgxpool.Pool) (map[string]bool, erro
 		return nil, rows.Err()
 	}
 	return applied, nil
+}
+
+func requiresNoTransaction(content string) bool {
+	return strings.Contains(strings.ToUpper(content), "CONCURRENTLY")
+}
+
+func splitStatements(content string) []string {
+	parts := strings.Split(content, ";")
+	stmts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		stmt := strings.TrimSpace(part)
+		if stmt == "" {
+			continue
+		}
+		stmts = append(stmts, stmt)
+	}
+	return stmts
 }

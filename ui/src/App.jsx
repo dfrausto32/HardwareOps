@@ -57,6 +57,7 @@ import {
   setEventRetention,
   getMetricsText,
   login as apiLogin,
+  ldapLogin as apiLdapLogin,
   generateRecoveryCodes as apiGenerateRecoveryCodes,
   resetPasswordWithRecoveryCode as apiResetPasswordWithRecoveryCode,
   createPasswordResetToken as apiCreatePasswordResetToken,
@@ -69,6 +70,13 @@ import {
   createVoucher,
   listUsers,
   createUser,
+  listArtifactVulnScans,
+  getLatestArtifactVulnScan,
+  triggerArtifactScan,
+  getLatestDeviceVulnScan,
+  listDeviceVulnScans,
+  triggerNessusSync,
+  getNessusSyncStatus,
   listEnrollmentProfiles,
   createEnrollmentProfile,
   updateEnrollmentProfile,
@@ -82,6 +90,8 @@ import {
   getAuthToken,
   setAuthToken as persistAuthToken,
   subscribeAuthExpired,
+  forgotPassword as apiForgotPassword,
+  sendUserInvite as apiSendUserInvite,
 } from './api'
 import { buildPermissionState, firstAllowedKey } from './rbac'
 import ArtifactPickerModal from './components/modals/ArtifactPickerModal'
@@ -236,6 +246,8 @@ export default function App() {
   const [authError, setAuthError] = useState('')
   const [loginForm, setLoginForm] = useState({ email: '', password: '' })
   const [loginStatus, setLoginStatus] = useState('')
+  const [ldapForm, setLdapForm] = useState({ username: '', password: '' })
+  const [ldapStatus, setLdapStatus] = useState('')
   const [bootstrapState, setBootstrapState] = useState({
     enabled: false,
     authEnabled: false,
@@ -270,6 +282,8 @@ export default function App() {
     newPassword: '',
   })
   const [resetTokenStatus, setResetTokenStatus] = useState('')
+  const [forgotPasswordForm, setForgotPasswordForm] = useState({ email: '' })
+  const [forgotPasswordStatus, setForgotPasswordStatus] = useState('')
   const [recoveryCodes, setRecoveryCodes] = useState([])
   const [recoveryCodesGeneratedAt, setRecoveryCodesGeneratedAt] = useState('')
   const [recoveryCodesStatus, setRecoveryCodesStatus] = useState('')
@@ -338,6 +352,29 @@ export default function App() {
       setAuthToken(oidcToken)
       // Remove oidc_token from the URL without triggering a reload.
       params.delete('oidc_token')
+      const newSearch = params.toString()
+      const newUrl = window.location.pathname + (newSearch ? '?' + newSearch : '') + window.location.hash
+      window.history.replaceState({}, '', newUrl)
+    }
+  }, [])
+
+  useEffect(() => {
+    // Pre-fill the reset-token form from URL params (e.g. email links from ForgotPassword / SendUserInvite).
+    const params = new URLSearchParams(window.location.search)
+    const view = params.get('view')
+    const email = params.get('email')
+    const token = params.get('token')
+    if (view === 'reset-token' && (email || token)) {
+      setAuthView('reset-token')
+      setResetTokenForm((prev) => ({
+        ...prev,
+        email: email || prev.email,
+        resetToken: token || prev.resetToken,
+      }))
+      // Clean up URL params without reloading.
+      params.delete('view')
+      params.delete('email')
+      params.delete('token')
       const newSearch = params.toString()
       const newUrl = window.location.pathname + (newSearch ? '?' + newSearch : '') + window.location.hash
       window.history.replaceState({}, '', newUrl)
@@ -513,6 +550,12 @@ export default function App() {
   const [selectedArtifactIds, setSelectedArtifactIds] = useState([])
   const [artifactTrackingDetailKey, setArtifactTrackingDetailKey] = useState('')
   const [artifactsError, setArtifactsError] = useState('')
+  // artifactVulnScans: { [artifactId]: scan | null | 'loading' }
+  const [artifactVulnScans, setArtifactVulnScans] = useState({})
+  const [artifactVulnPanelId, setArtifactVulnPanelId] = useState('')
+  // nessusSyncStatus: { lastSyncAt, matchCount, error }
+  const [nessusSyncStatus, setNessusSyncStatus] = useState(null)
+  const [nessusSyncing, setNessusSyncing] = useState(false)
   const [artifactsStatus, setArtifactsStatus] = useState('')
   const artifactByID = useMemo(() => {
     const map = {}
@@ -1479,6 +1522,28 @@ export default function App() {
     }
   }
 
+  async function doLdapLogin() {
+    setLdapStatus('Signing in...')
+    setAuthError('')
+    try {
+      const res = await apiLdapLogin(ldapForm.username, ldapForm.password)
+      if (!res?.token) {
+        throw new Error('No token returned')
+      }
+      persistAuthToken(res.token)
+      setAuthToken(res.token)
+      setLdapStatus('Signed in')
+      setLdapForm((prev) => ({ ...prev, password: '' }))
+      setAuthUser(res.user || null)
+      setAuthUserLoaded(true)
+      setAuthView('login')
+      loadUsers()
+    } catch (err) {
+      setLdapStatus('')
+      setAuthError(err.message || String(err))
+    }
+  }
+
   async function doRegister() {
     setRegisterStatus('Creating account...')
     setAuthError('')
@@ -1580,6 +1645,18 @@ export default function App() {
     }
   }
 
+  async function doForgotPassword() {
+    setForgotPasswordStatus('Sending...')
+    const msg = 'If that address is registered, a reset link has been sent.'
+    try {
+      await apiForgotPassword(forgotPasswordForm.email)
+      setForgotPasswordStatus(msg)
+    } catch {
+      // Always show the same message — no enumeration.
+      setForgotPasswordStatus(msg)
+    }
+  }
+
   async function handleIssuePasswordResetToken(user) {
     setPasswordResetTokenStatus(`Issuing reset token for ${user.email}...`)
     setPasswordResetTokenError('')
@@ -1596,6 +1673,20 @@ export default function App() {
         expiresAt: res?.expiresAt || '',
       })
       setPasswordResetTokenStatus(`Reset token issued for ${user.email}. Store it now; it is only shown once.`)
+    } catch (err) {
+      setPasswordResetTokenStatus('')
+      setPasswordResetTokenError(err.message || String(err))
+    }
+  }
+
+  async function handleSendUserInvite(user) {
+    setPasswordResetTokenStatus(`Sending invite to ${user.email}...`)
+    setPasswordResetTokenError('')
+    try {
+      await apiSendUserInvite(user.userId)
+      setPasswordResetTokenStatus(`Invite sent to ${user.email}.`)
+      setPasswordResetTokenValue('')
+      setPasswordResetTokenTarget(null)
     } catch (err) {
       setPasswordResetTokenStatus('')
       setPasswordResetTokenError(err.message || String(err))
@@ -2401,6 +2492,47 @@ export default function App() {
       loadArtifacts()
     } catch (err) {
       setArtifactsError(err.message || String(err))
+    }
+  }
+
+  async function loadArtifactVulnScan(artifactId) {
+    setArtifactVulnScans((prev) => ({ ...prev, [artifactId]: 'loading' }))
+    try {
+      const scan = await getLatestArtifactVulnScan(artifactId)
+      setArtifactVulnScans((prev) => ({ ...prev, [artifactId]: scan }))
+    } catch (err) {
+      if (err.status === 404) {
+        setArtifactVulnScans((prev) => ({ ...prev, [artifactId]: null }))
+      } else {
+        setArtifactVulnScans((prev) => ({ ...prev, [artifactId]: null }))
+      }
+    }
+  }
+
+  async function handleTriggerArtifactScan(artifactId) {
+    try {
+      await triggerArtifactScan(artifactId)
+      setArtifactVulnScans((prev) => ({ ...prev, [artifactId]: 'loading' }))
+      setTimeout(() => loadArtifactVulnScan(artifactId), 2000)
+    } catch (err) {
+      setArtifactsError(err.message || 'Failed to trigger scan')
+    }
+  }
+
+  async function handleTriggerNessusSync() {
+    setNessusSyncing(true)
+    try {
+      await triggerNessusSync()
+      setTimeout(async () => {
+        try {
+          const status = await getNessusSyncStatus()
+          setNessusSyncStatus(status)
+        } catch (_) {}
+        setNessusSyncing(false)
+      }, 3000)
+    } catch (err) {
+      setNessusSyncing(false)
+      setArtifactsError(err.message || 'Nessus sync failed')
     }
   }
 
@@ -4439,14 +4571,51 @@ export default function App() {
                 Reset token
               </button>
             )}
+            {authStatus.mode === 'local' && authStatus.smtpEnabled && (
+              <button
+                className={`tab ${authView === 'forgot-password' ? 'active' : ''}`}
+                onClick={() => setAuthView('forgot-password')}
+              >
+                Forgot password
+              </button>
+            )}
             <button
               className={`tab ${authView === 'register' ? 'active' : ''}`}
               onClick={() => setAuthView('register')}
             >
               Use voucher
             </button>
+            {authStatus.ldapEnabled && (
+              <button
+                className={`tab ${authView === 'ldap' ? 'active' : ''}`}
+                onClick={() => setAuthView('ldap')}
+              >
+                LDAP / AD
+              </button>
+            )}
           </div>
-          {authView === 'login' ? (
+          {authView === 'ldap' ? (
+            <div className="form">
+              <label>Username</label>
+              <input
+                value={ldapForm.username}
+                onChange={(e) => setLdapForm((prev) => ({ ...prev, username: e.target.value }))}
+                placeholder="alice"
+                autoComplete="username"
+              />
+              <label>Password</label>
+              <input
+                type="password"
+                value={ldapForm.password}
+                onChange={(e) => setLdapForm((prev) => ({ ...prev, password: e.target.value }))}
+                autoComplete="current-password"
+              />
+              <button className="button" onClick={doLdapLogin}>
+                Sign in with LDAP
+              </button>
+              {ldapStatus && <div className="status">{ldapStatus}</div>}
+            </div>
+          ) : authView === 'login' ? (
             <div className="form">
               {authStatus.oidcEnabled && (
                 <a className="button" href={authStatus.oidcLoginURL} style={{ textAlign: 'center', marginBottom: '0.5rem' }}>
@@ -4516,6 +4685,20 @@ export default function App() {
               <button className="button" onClick={doResetWithPasswordResetToken}>
                 Reset password
               </button>
+            </div>
+          ) : authView === 'forgot-password' ? (
+            <div className="form">
+              <label>Email</label>
+              <input
+                value={forgotPasswordForm.email}
+                onChange={(e) => setForgotPasswordForm((prev) => ({ ...prev, email: e.target.value }))}
+                placeholder="user@example.com"
+                autoComplete="email"
+              />
+              <button className="button" onClick={doForgotPassword}>
+                Send reset link
+              </button>
+              {forgotPasswordStatus && <div className="status">{forgotPasswordStatus}</div>}
             </div>
           ) : (
             <div className="form">
@@ -4839,6 +5022,7 @@ export default function App() {
                       <th>Trust</th>
                       <th>Tracking</th>
                       <th>Refs</th>
+                      <th>Vulns</th>
                       <th>Delete After</th>
                       <th>Created</th>
                       <th>Actions</th>
@@ -4905,6 +5089,38 @@ export default function App() {
                               ) : '—'}
                             </td>
                             <td>{refs}</td>
+                            <td>
+                              {(() => {
+                                const scan = artifactVulnScans[a.artifactId]
+                                if (!scan || scan === 'loading') {
+                                  return (
+                                    <button
+                                      className="button ghost muted"
+                                      style={{ fontSize: '0.75rem', padding: '2px 6px' }}
+                                      onClick={() => { loadArtifactVulnScan(a.artifactId); setArtifactVulnPanelId(a.artifactId) }}
+                                      title="Load vulnerability scan"
+                                    >
+                                      {scan === 'loading' ? '…' : 'scan?'}
+                                    </button>
+                                  )
+                                }
+                                const c = scan.severityCounts || {}
+                                const crit = c.critical || 0
+                                const high = c.high || 0
+                                return (
+                                  <button
+                                    className="button ghost"
+                                    style={{ fontSize: '0.75rem', padding: '2px 6px' }}
+                                    onClick={() => setArtifactVulnPanelId(artifactVulnPanelId === a.artifactId ? '' : a.artifactId)}
+                                    title="View vulnerability scan details"
+                                  >
+                                    {crit > 0 && <span className="pill pill-critical" style={{ marginRight: 2 }}>{crit}C</span>}
+                                    {high > 0 && <span className="pill pill-high" style={{ marginRight: 2 }}>{high}H</span>}
+                                    {crit === 0 && high === 0 && <span className="pill info">{scan.scanStatus || 'ok'}</span>}
+                                  </button>
+                                )
+                              })()}
+                            </td>
                             <td>{lifecycle === 'deprecated' ? formatTime(a.deleteAfter) : '—'}</td>
                             <td>{formatTime(a.createdAt)}</td>
                             <td className="artifact-actions">
@@ -4949,12 +5165,74 @@ export default function App() {
                     ))}
                     {artifactGroups.length === 0 && (
                       <tr>
-                        <td colSpan={12}>No artifacts uploaded yet.</td>
+                        <td colSpan={13}>No artifacts uploaded yet.</td>
                       </tr>
                     )}
                   </tbody>
                 </table>
               </div>
+              {artifactVulnPanelId && (() => {
+                const scan = artifactVulnScans[artifactVulnPanelId]
+                const artifact = artifacts.find((a) => a.artifactId === artifactVulnPanelId)
+                return (
+                  <div className="artifact-tracking-panel">
+                    <div className="section-header">
+                      <h3>Vulnerability Scan: {artifact?.name} {artifact?.version}</h3>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        {canManageArtifacts && (
+                          <button className="button ghost" onClick={() => handleTriggerArtifactScan(artifactVulnPanelId)}>
+                            Rescan
+                          </button>
+                        )}
+                        <button className="button ghost" onClick={() => setArtifactVulnPanelId('')}>Close</button>
+                      </div>
+                    </div>
+                    {!scan || scan === 'loading' ? (
+                      <p>Loading…</p>
+                    ) : (
+                      <div>
+                        <div style={{ marginBottom: 8 }}>
+                          <strong>Status:</strong> {scan.scanStatus}{scan.scannerType ? ` (${scan.scannerType}${scan.scannerVersion ? ' ' + scan.scannerVersion : ''})` : ''}
+                          {scan.scannedAt && <span style={{ marginLeft: 8, color: 'var(--text-muted)' }}>Scanned {formatTime(scan.scannedAt)}</span>}
+                          {scan.errorMessage && <span style={{ marginLeft: 8, color: 'var(--color-danger)' }}>{scan.errorMessage}</span>}
+                        </div>
+                        {scan.severityCounts && (
+                          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                            {['critical','high','medium','low','unknown'].map((sev) => {
+                              const n = scan.severityCounts[sev] || 0
+                              if (n === 0) return null
+                              return <span key={sev} className={`pill pill-${sev}`}>{n} {sev}</span>
+                            })}
+                          </div>
+                        )}
+                        {scan.findings && scan.findings.length > 0 ? (
+                          <div className="table-wrap">
+                            <table>
+                              <thead>
+                                <tr><th>CVE</th><th>Severity</th><th>Package</th><th>Version</th><th>Fixed In</th></tr>
+                              </thead>
+                              <tbody>
+                                {scan.findings.map((f, i) => (
+                                  <tr key={i}>
+                                    <td className="mono">{f.id}</td>
+                                    <td><span className={`pill pill-${(f.severity||'unknown').toLowerCase()}`}>{f.severity}</span></td>
+                                    <td>{f.package}</td>
+                                    <td className="mono">{f.version}</td>
+                                    <td className="mono">{f.fixedIn || '—'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <p style={{ color: 'var(--text-muted)' }}>No findings.</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+
               {artifactTrackingDetail && (
                 <div className="artifact-tracking-panel">
                   <div className="section-header">
@@ -5601,6 +5879,7 @@ export default function App() {
             doDownloadRecoveryCodes,
             doGenerateRecoveryCodes,
             handleIssuePasswordResetToken,
+            handleSendUserInvite,
             enrollmentProfiles,
             enrollmentProfilesError,
             enrollmentProfilesLoading,
@@ -5757,6 +6036,10 @@ export default function App() {
             upgradePreflightStatus,
             upgradeReady,
             view,
+            nessusSyncStatus,
+            nessusSyncing,
+            handleTriggerNessusSync,
+            canAdmin: permissions.admin,
           }}
         />
       </main>
@@ -5803,6 +6086,18 @@ export default function App() {
           trustPolicySummary,
           updateDeviceComponent,
           verificationPillLabel,
+          deviceVulnScan: selectedDeviceId ? (artifactVulnScans[selectedDeviceId] || null) : null,
+          onLoadDeviceVulnScan: async (deviceId) => {
+            setArtifactVulnScans((prev) => ({ ...prev, [deviceId]: 'loading' }))
+            try {
+              const scan = await getLatestDeviceVulnScan(deviceId)
+              setArtifactVulnScans((prev) => ({ ...prev, [deviceId]: scan }))
+            } catch (err) {
+              if (err.status === 404) {
+                setArtifactVulnScans((prev) => ({ ...prev, [deviceId]: null }))
+              }
+            }
+          },
         }}
       />
 

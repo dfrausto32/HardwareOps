@@ -457,7 +457,8 @@ func normalizeDesiredComponents(req DesiredStateRequest, source string, st store
 			if !ok {
 				return nil, fmt.Errorf("component %s: artifact not found", key)
 			}
-			if err := sigPolicy.ValidateDesiredArtifact(artifact, comp.Policy); err != nil {
+			attestations, _ := st.ListAttestations(comp.ArtifactID)
+			if err := sigPolicy.ValidateDesiredArtifactWithAttestations(artifact, attestations, comp.Policy); err != nil {
 				return nil, fmt.Errorf("component %s: %w", key, err)
 			}
 		}
@@ -484,7 +485,8 @@ func normalizeDesiredComponents(req DesiredStateRequest, source string, st store
 			if !ok {
 				return nil, fmt.Errorf("artifact not found")
 			}
-			if err := sigPolicy.ValidateDesiredArtifact(artifact, req.Policy); err != nil {
+			attestations, _ := st.ListAttestations(req.ArtifactID)
+			if err := sigPolicy.ValidateDesiredArtifactWithAttestations(artifact, attestations, req.Policy); err != nil {
 				return nil, err
 			}
 		}

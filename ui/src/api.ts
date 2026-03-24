@@ -529,6 +529,13 @@ export async function login(email: string, password: string) {
   })
 }
 
+export async function ldapLogin(username: string, password: string) {
+  return requestJson('/api/v1/auth/ldap/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  })
+}
+
 export async function generateRecoveryCodes() {
   return requestJson('/api/v1/auth/recovery-codes/generate', {
     method: 'POST',
@@ -555,6 +562,17 @@ export async function completePasswordResetToken(email: string, resetToken: stri
     method: 'POST',
     body: JSON.stringify({ email, resetToken, newPassword }),
   })
+}
+
+export async function forgotPassword(email: string) {
+  return requestJson('/api/v1/auth/forgot-password', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  })
+}
+
+export async function sendUserInvite(userId: string) {
+  return requestJson(`/api/v1/users/${userId}/invite`, { method: 'POST' })
 }
 
 export async function getMe() {
@@ -611,4 +629,36 @@ export async function createUser(payload: Record<string, unknown>) {
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+// --- Vulnerability scanning -------------------------------------------------
+
+export async function listArtifactVulnScans(artifactId: string) {
+  return requestJson(`/api/v1/artifacts/${encodeURIComponent(artifactId)}/vulnerability-scans`)
+}
+
+export async function getLatestArtifactVulnScan(artifactId: string) {
+  return requestJson(`/api/v1/artifacts/${encodeURIComponent(artifactId)}/vulnerability-scans/latest`)
+}
+
+export async function triggerArtifactScan(artifactId: string) {
+  return requestJson(`/api/v1/artifacts/${encodeURIComponent(artifactId)}/vulnerability-scans`, {
+    method: 'POST',
+  })
+}
+
+export async function getLatestDeviceVulnScan(deviceId: string) {
+  return requestJson(`/api/v1/devices/${encodeURIComponent(deviceId)}/vulnerability-scans/latest`)
+}
+
+export async function listDeviceVulnScans(deviceId: string) {
+  return requestJson(`/api/v1/devices/${encodeURIComponent(deviceId)}/vulnerability-scans`)
+}
+
+export async function triggerNessusSync() {
+  return requestJson('/api/v1/vulnerability-scans/nessus/sync', { method: 'POST' })
+}
+
+export async function getNessusSyncStatus() {
+  return requestJson('/api/v1/vulnerability-scans/nessus/status')
 }

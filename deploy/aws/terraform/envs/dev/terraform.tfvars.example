@@ -96,3 +96,13 @@ demo_bootstrap_password = "replace-with-bootstrap-password"
 # ECS Exec — disabled by default for production security.
 # Enable only for break-glass debugging sessions.
 # enable_execute_command = true
+
+# Optional SMTP/email delivery:
+# app_public_url            = "https://app.customer-a.example.com"
+# smtp_host                 = "smtp.example.com"
+# smtp_port                 = 587
+# smtp_user                 = "hardwareops"
+# smtp_from                 = "HardwareOps <noreply@example.com>"
+# smtp_tls_mode             = "starttls"
+# smtp_timeout              = "10s"
+# smtp_password_secret_arn  = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/customer-a/dev/smtp-password-AbCdEf"

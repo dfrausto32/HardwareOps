@@ -28,6 +28,7 @@ module "stack" {
   route53_zone_id                              = var.route53_zone_id
   create_dns_records                           = var.create_dns_records
   app_host                                     = var.app_host
+  app_public_url                               = var.app_public_url
   devices_host                                 = var.devices_host
   device_mtls_bucket                           = var.device_mtls_bucket
   device_mtls_key                              = var.device_mtls_key
@@ -43,6 +44,13 @@ module "stack" {
   db_manage_master_user_password               = var.db_manage_master_user_password
   control_plane_image                          = var.control_plane_image
   gateway_image                                = var.gateway_image
+  smtp_host                                    = var.smtp_host
+  smtp_port                                    = var.smtp_port
+  smtp_user                                    = var.smtp_user
+  smtp_from                                    = var.smtp_from
+  smtp_tls_mode                                = var.smtp_tls_mode
+  smtp_timeout                                 = var.smtp_timeout
+  smtp_password_secret_arn                     = var.smtp_password_secret_arn
   control_plane_desired_count                  = var.control_plane_desired_count
   gateway_desired_count                        = var.gateway_desired_count
   control_plane_env                            = var.control_plane_env

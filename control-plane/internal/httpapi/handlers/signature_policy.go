@@ -16,6 +16,7 @@ type ArtifactSignaturePolicy struct {
 	EnforceIngest         bool
 	KeyID                 string
 	Hardened              bool
+	KeylessOpts           artifacttrust.KeylessVerifyOptions
 }
 
 func (p ArtifactSignaturePolicy) EffectiveGlobalPolicy() (store.ArtifactTrustPolicy, error) {
@@ -47,9 +48,16 @@ func (p ArtifactSignaturePolicy) MergeApplyPolicy(raw json.RawMessage) (json.Raw
 }
 
 func (p ArtifactSignaturePolicy) ValidateDesiredArtifact(artifact store.Artifact, raw json.RawMessage) error {
+	return p.ValidateDesiredArtifactWithAttestations(artifact, nil, raw)
+}
+
+func (p ArtifactSignaturePolicy) ValidateDesiredArtifactWithAttestations(artifact store.Artifact, attestations []store.AttestationRecord, raw json.RawMessage) error {
 	policy, err := p.ResolvePolicy(raw)
 	if err != nil {
 		return err
 	}
-	return artifacttrust.ArtifactAllowedByPolicy(artifact, policy)
+	return artifacttrust.ArtifactAllowedByPolicy(artifacttrust.ArtifactPolicyInput{
+		Artifact:     artifact,
+		Attestations: attestations,
+	}, policy)
 }
