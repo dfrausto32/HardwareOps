@@ -364,10 +364,7 @@ func RotateServiceToken(logger *log.Logger, st store.Store, trustProxy bool) htt
 
 func normalizeServiceTokenScopes(scopes []string) ([]string, error) {
 	if len(scopes) == 0 {
-		return []string{"artifact.publish"}, nil
-	}
-	valid := map[string]struct{}{
-		"artifact.publish": {},
+		return []string{auth.ScopeArtifactPublish}, nil
 	}
 	out := make([]string, 0, len(scopes))
 	seen := map[string]struct{}{}
@@ -376,7 +373,7 @@ func normalizeServiceTokenScopes(scopes []string) ([]string, error) {
 		if scope == "" {
 			continue
 		}
-		if _, ok := valid[scope]; !ok {
+		if !auth.IsValidScope(scope) {
 			return nil, errors.New("invalid scope: " + scope)
 		}
 		if _, ok := seen[scope]; ok {
@@ -386,7 +383,7 @@ func normalizeServiceTokenScopes(scopes []string) ([]string, error) {
 		out = append(out, scope)
 	}
 	if len(out) == 0 {
-		return []string{"artifact.publish"}, nil
+		return []string{auth.ScopeArtifactPublish}, nil
 	}
 	return out, nil
 }

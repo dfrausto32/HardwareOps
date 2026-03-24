@@ -112,4 +112,10 @@ type Dependencies struct {
 	Mailer       mailer.Mailer
 	AppPublicURL string
 	SMTPEnabled  bool
+	// Webhook outbound delivery.
+	// WebhookEncryptionKey is a 32-byte AES-256 key used to encrypt webhook
+	// signing secrets at rest. If nil/empty, webhook creation is disabled.
+	WebhookEncryptionKey []byte
+	// Deploy triggers.
+	TriggerFanoutLimit int // max devices per group trigger; 0 → default 500
 }

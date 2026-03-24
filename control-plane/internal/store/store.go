@@ -408,6 +408,42 @@ type ListDevicesFilter struct {
 	Offset int
 }
 
+// Webhook is an outbound HTTP endpoint registered to receive event payloads.
+type Webhook struct {
+	ID              string
+	Name            string
+	URL             string
+	EncryptedSecret string
+	EventTypes      []string
+	Enabled         bool
+	CreatedBy       string
+	CreatedAt       time.Time
+	LastFiredAt     time.Time
+	LastStatus      int
+}
+
+// WebhookDelivery records a single outbound delivery attempt.
+type WebhookDelivery struct {
+	ID             string
+	WebhookID      string
+	EventType      string
+	PayloadJSON    []byte
+	Status         string // pending | delivered | failed
+	Attempts       int
+	LastAttemptAt  time.Time
+	ResponseStatus int
+	CreatedAt      time.Time
+}
+
+// DeployTrigger is a pending signal asking a device to apply its desired state
+// at its next check-in.
+type DeployTrigger struct {
+	DeviceID    string
+	TriggeredBy string
+	TriggeredAt time.Time
+	Reason      string
+}
+
 type Store interface {
 	UpsertDevice(device Device) error
 	UpsertDeviceState(state DeviceState) error
@@ -525,4 +561,21 @@ type Store interface {
 	ListServiceTokens(limit, offset int) ([]ServiceToken, error)
 	SetServiceTokenLastUsed(tokenID string, at time.Time) error
 	RevokeServiceToken(tokenID, revokedBy string, at time.Time) (bool, error)
+	// Group lookup (complements UpsertGroup / ListGroups / DeleteGroup).
+	GetGroup(groupID string) (Group, bool, error)
+	// Webhook registration and outbound delivery tracking.
+	CreateWebhook(webhook Webhook) error
+	GetWebhook(id string) (Webhook, bool, error)
+	ListWebhooks() ([]Webhook, error)
+	UpdateWebhook(webhook Webhook) error
+	DeleteWebhook(id string) error
+	CreateWebhookDelivery(delivery WebhookDelivery) error
+	UpdateWebhookDelivery(delivery WebhookDelivery) error
+	ListWebhookDeliveries(webhookID string, limit int) ([]WebhookDelivery, error)
+	UpdateWebhookLastFired(id string, at time.Time, status int) error
+	// Deploy triggers — one pending trigger per device, consumed on next check-in.
+	UpsertDeployTrigger(trigger DeployTrigger) error
+	ConsumeDeployTrigger(deviceID string) (DeployTrigger, bool, error)
+	// ListDevicesForGroup returns devices whose labels match the group's selector.
+	ListDevicesForGroup(groupID string, limit int) ([]Device, error)
 }

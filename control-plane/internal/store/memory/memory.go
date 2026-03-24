@@ -3,6 +3,7 @@ package memory
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -46,6 +47,9 @@ type Store struct {
 	attestations          map[string]store.AttestationRecord
 	artifactVulnScans     []store.ArtifactVulnerabilityScan
 	deviceVulnScans       []store.DeviceVulnerabilityScan
+	webhooks              map[string]store.Webhook
+	webhookDeliveries     []store.WebhookDelivery
+	deployTriggers        map[string]store.DeployTrigger
 }
 
 func New() *Store {
@@ -82,6 +86,9 @@ func New() *Store {
 		attestations:          map[string]store.AttestationRecord{},
 		artifactVulnScans:     []store.ArtifactVulnerabilityScan{},
 		deviceVulnScans:       []store.DeviceVulnerabilityScan{},
+		webhooks:              map[string]store.Webhook{},
+		webhookDeliveries:     []store.WebhookDelivery{},
+		deployTriggers:        map[string]store.DeployTrigger{},
 	}
 }
 
@@ -2190,4 +2197,196 @@ func (s *Store) ListDeviceVulnScans(deviceID string) ([]store.DeviceVulnerabilit
 		return out[i].CreatedAt.After(out[j].CreatedAt)
 	})
 	return out, nil
+}
+
+// ── Group lookup ──────────────────────────────────────────────────────────────
+
+func (s *Store) GetGroup(groupID string) (store.Group, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g, ok := s.groups[groupID]
+	return g, ok, nil
+}
+
+func (s *Store) ListDevicesForGroup(groupID string, limit int) ([]store.Device, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	grp, ok := s.groups[groupID]
+	if !ok {
+		return nil, nil
+	}
+	selector := map[string]any{}
+	if len(grp.SelectorJSON) > 0 {
+		_ = json.Unmarshal(grp.SelectorJSON, &selector)
+	}
+	if limit <= 0 {
+		limit = 1000
+	}
+	var out []store.Device
+	for _, d := range s.devices {
+		if len(out) >= limit {
+			break
+		}
+		if labelsContain(d.LabelsJSON, selector) {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
+// labelsContain returns true when all key-value pairs in selector are present
+// and equal in the device labels JSON.
+func labelsContain(labelsJSON []byte, selector map[string]any) bool {
+	if len(selector) == 0 {
+		return true
+	}
+	labels := map[string]any{}
+	if len(labelsJSON) > 0 {
+		_ = json.Unmarshal(labelsJSON, &labels)
+	}
+	for k, v := range selector {
+		lv, ok := labels[k]
+		if !ok {
+			return false
+		}
+		if fmt.Sprintf("%v", lv) != fmt.Sprintf("%v", v) {
+			return false
+		}
+	}
+	return true
+}
+
+// ── Webhooks ──────────────────────────────────────────────────────────────────
+
+func (s *Store) CreateWebhook(webhook store.Webhook) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if webhook.CreatedAt.IsZero() {
+		webhook.CreatedAt = time.Now().UTC()
+	}
+	s.webhooks[webhook.ID] = webhook
+	return nil
+}
+
+func (s *Store) GetWebhook(id string) (store.Webhook, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	wh, ok := s.webhooks[id]
+	return wh, ok, nil
+}
+
+func (s *Store) ListWebhooks() ([]store.Webhook, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]store.Webhook, 0, len(s.webhooks))
+	for _, wh := range s.webhooks {
+		out = append(out, wh)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
+func (s *Store) UpdateWebhook(webhook store.Webhook) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.webhooks[webhook.ID]
+	if !ok {
+		return errors.New("webhook not found")
+	}
+	existing.Name = webhook.Name
+	existing.URL = webhook.URL
+	existing.EventTypes = webhook.EventTypes
+	existing.Enabled = webhook.Enabled
+	s.webhooks[webhook.ID] = existing
+	return nil
+}
+
+func (s *Store) DeleteWebhook(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.webhooks, id)
+	return nil
+}
+
+func (s *Store) UpdateWebhookLastFired(id string, at time.Time, status int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	wh, ok := s.webhooks[id]
+	if !ok {
+		return nil
+	}
+	wh.LastFiredAt = at
+	wh.LastStatus = status
+	s.webhooks[id] = wh
+	return nil
+}
+
+func (s *Store) CreateWebhookDelivery(delivery store.WebhookDelivery) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if delivery.CreatedAt.IsZero() {
+		delivery.CreatedAt = time.Now().UTC()
+	}
+	s.webhookDeliveries = append(s.webhookDeliveries, delivery)
+	return nil
+}
+
+func (s *Store) UpdateWebhookDelivery(delivery store.WebhookDelivery) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, d := range s.webhookDeliveries {
+		if d.ID == delivery.ID {
+			s.webhookDeliveries[i].Status = delivery.Status
+			s.webhookDeliveries[i].Attempts = delivery.Attempts
+			s.webhookDeliveries[i].LastAttemptAt = delivery.LastAttemptAt
+			s.webhookDeliveries[i].ResponseStatus = delivery.ResponseStatus
+			return nil
+		}
+	}
+	return nil
+}
+
+func (s *Store) ListWebhookDeliveries(webhookID string, limit int) ([]store.WebhookDelivery, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if limit <= 0 {
+		limit = 50
+	}
+	var out []store.WebhookDelivery
+	for _, d := range s.webhookDeliveries {
+		if d.WebhookID == webhookID {
+			out = append(out, d)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// ── Deploy triggers ───────────────────────────────────────────────────────────
+
+func (s *Store) UpsertDeployTrigger(trigger store.DeployTrigger) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if trigger.TriggeredAt.IsZero() {
+		trigger.TriggeredAt = time.Now().UTC()
+	}
+	s.deployTriggers[trigger.DeviceID] = trigger
+	return nil
+}
+
+func (s *Store) ConsumeDeployTrigger(deviceID string) (store.DeployTrigger, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.deployTriggers[deviceID]
+	if ok {
+		delete(s.deployTriggers, deviceID)
+	}
+	return t, ok, nil
 }

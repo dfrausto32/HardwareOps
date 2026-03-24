@@ -57,31 +57,38 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		}
 		return deps.Auth.RequireRole(role)
 	}
-	artifactPublisher := func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if deps.Auth == nil || !deps.Auth.Enabled() {
-				next.ServeHTTP(w, r)
-				return
-			}
-			if user, ok := auth.UserFromContext(r.Context()); ok {
-				if auth.HasRole(user.Roles, "operator") {
+	// requireScopeOrRole allows a user with minRole OR a service token with the
+	// given scope to access the route.
+	requireScopeOrRole := func(scope, minRole string) func(http.Handler) http.Handler {
+		return func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if deps.Auth == nil || !deps.Auth.Enabled() {
 					next.ServeHTTP(w, r)
 					return
 				}
-				http.Error(w, "forbidden", http.StatusForbidden)
-				return
-			}
-			if token, ok := auth.ServiceTokenFromContext(r.Context()); ok {
-				if auth.HasScope(token.Scopes, "artifact.publish") {
-					next.ServeHTTP(w, r)
+				if user, ok := auth.UserFromContext(r.Context()); ok {
+					if auth.HasRole(user.Roles, minRole) {
+						next.ServeHTTP(w, r)
+						return
+					}
+					http.Error(w, "forbidden", http.StatusForbidden)
 					return
 				}
-				http.Error(w, "forbidden", http.StatusForbidden)
-				return
-			}
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-		})
+				if token, ok := auth.ServiceTokenFromContext(r.Context()); ok {
+					if auth.HasScope(token.Scopes, scope) {
+						next.ServeHTTP(w, r)
+						return
+					}
+					http.Error(w, "forbidden", http.StatusForbidden)
+					return
+				}
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+			})
+		}
 	}
+	artifactPublisher := requireScopeOrRole(auth.ScopeArtifactPublish, "operator")
+	deploymentTrigger := requireScopeOrRole(auth.ScopeDeploymentTrigger, "operator")
+	webhookManager := requireScopeOrRole(auth.ScopeWebhookManage, "operator")
 	viewer := requireRole("viewer")
 	operator := requireRole("operator")
 	admin := requireRole("admin")
@@ -258,6 +265,19 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(admin).Post("/maintenance/restore", handlers.StartRestore(logger, deps.Store, deps.Restore, deps.Maintenance, deps.BackupDir, deps.TrustProxy, deps.Metrics))
 		r.With(admin).Post("/vulnerability-scans/nessus/sync", handlers.TriggerNessusSync(logger, nessusTrigger))
 		r.With(admin).Get("/vulnerability-scans/nessus/status", handlers.GetNessusSyncStatus(logger, nessusTrigger))
+
+		// Webhook registration and outbound delivery.
+		r.With(webhookManager).Post("/webhooks", handlers.CreateWebhook(logger, deps.Store, deps.WebhookEncryptionKey, deps.TrustProxy))
+		r.With(webhookManager).Get("/webhooks", handlers.ListWebhooks(logger, deps.Store))
+		r.With(webhookManager).Get("/webhooks/{webhookId}", handlers.GetWebhook(logger, deps.Store))
+		r.With(webhookManager).Put("/webhooks/{webhookId}", handlers.UpdateWebhook(logger, deps.Store, deps.TrustProxy))
+		r.With(webhookManager).Delete("/webhooks/{webhookId}", handlers.DeleteWebhook(logger, deps.Store, deps.TrustProxy))
+		r.With(webhookManager).Get("/webhooks/{webhookId}/deliveries", handlers.ListWebhookDeliveries(logger, deps.Store))
+		r.With(webhookManager).Post("/webhooks/{webhookId}/test", handlers.TestWebhook(logger, deps.Store, deps.WebhookEncryptionKey))
+
+		// Deploy triggers — signal devices/groups to apply their desired state ASAP.
+		r.With(deploymentTrigger).Post("/devices/{deviceId}/trigger-apply", handlers.TriggerDeviceApply(logger, deps.Store, deps.Events, deps.TrustProxy, deps.TriggerFanoutLimit))
+		r.With(deploymentTrigger).Post("/groups/{groupId}/trigger-apply", handlers.TriggerGroupApply(logger, deps.Store, deps.Events, deps.TrustProxy, deps.TriggerFanoutLimit))
 
 		r.With(viewer).Get("/maintenance/upgrade/available", handlers.GetUpgradeAvailable(deps.UpgradeUpdatesDir))
 		r.With(viewer).Get("/maintenance/upgrade/preflight", handlers.GetUpgradePreflight(deps.Upgrade, deps.UpgradeUpdatesDir))

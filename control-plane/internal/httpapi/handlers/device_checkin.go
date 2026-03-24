@@ -64,10 +64,15 @@ type DeviceComponentState struct {
 }
 
 type DeviceCheckinResponse struct {
-	Desired        *DesiredState `json:"desired"`
-	PendingActions []Action      `json:"pendingActions"`
-	ServerTime     time.Time     `json:"serverTime"`
+	Desired        *DesiredState                    `json:"desired"`
+	PendingActions []Action                         `json:"pendingActions"`
+	ServerTime     time.Time                        `json:"serverTime"`
 	SigningTrust   *artifacttrust.SigningTrustBundle `json:"signingTrust,omitempty"`
+	// ImmediateRecheckin instructs the agent to check in again after a short
+	// delay rather than waiting for the full configured interval. Set when a
+	// deploy trigger was pending at the time of this check-in. Agent support
+	// for this field is a planned follow-up; current agents ignore it safely.
+	ImmediateRecheckin bool `json:"immediateRecheckin,omitempty"`
 }
 
 type DesiredState struct {
@@ -417,11 +422,18 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 				metricsCollector.IncPendingAction(action.Type)
 			}
 		}
+		// Consume any pending deploy trigger for this device. A trigger means
+		// a CI pipeline or operator explicitly requested a deployment. We record
+		// the consumption here; agents that understand ImmediateRecheckin will
+		// check back in sooner for a second confirmation.
+		_, hadTrigger, _ := st.ConsumeDeployTrigger(req.DeviceID)
+
 		resp := DeviceCheckinResponse{
-			Desired:        desiredResp,
-			PendingActions: pending,
-			ServerTime:     now,
-			SigningTrust:   currentSigningTrust(logger, st),
+			Desired:            desiredResp,
+			PendingActions:     pending,
+			ServerTime:         now,
+			SigningTrust:       currentSigningTrust(logger, st),
+			ImmediateRecheckin: hadTrigger,
 		}
 
 		payload, _ := json.Marshal(map[string]any{

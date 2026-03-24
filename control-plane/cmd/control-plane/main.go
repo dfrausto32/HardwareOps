@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -33,6 +34,7 @@ import (
 	"github.com/hardwareops/control-plane/internal/store/postgres"
 	"github.com/hardwareops/control-plane/internal/upgrade"
 	"github.com/hardwareops/control-plane/internal/vulnscan"
+	webhookspkg "github.com/hardwareops/control-plane/internal/webhooks"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -410,6 +412,29 @@ func main() {
 	}
 	// --------------------------------------------------------------------------
 
+	// Webhook dispatcher — wired before deps so the hub is ready before routes.
+	var webhookEncryptionKey []byte
+	if cfg.WebhookEncryptionKey != "" {
+		key, err := base64.StdEncoding.DecodeString(cfg.WebhookEncryptionKey)
+		if err != nil {
+			logger.Fatalf("WEBHOOK_ENCRYPTION_KEY: base64 decode: %v", err)
+		}
+		if len(key) != 32 {
+			logger.Fatalf("WEBHOOK_ENCRYPTION_KEY: must decode to exactly 32 bytes (got %d)", len(key))
+		}
+		webhookEncryptionKey = key
+		whDispatcher := webhookspkg.NewDispatcher(webhookspkg.Config{
+			Store:           store,
+			EncryptionKey:   key,
+			Workers:         cfg.WebhookDispatchWorkers,
+			DeliveryTimeout: cfg.WebhookDeliveryTimeout,
+			MaxRetries:      cfg.WebhookMaxRetries,
+		}, logger)
+		whDispatcher.Start(context.Background())
+		hub.SetDispatcher(whDispatcher)
+		logger.Printf("webhook dispatcher initialized workers=%d retries=%d", cfg.WebhookDispatchWorkers, cfg.WebhookMaxRetries)
+	}
+
 	var mailSender mailer.Mailer = &mailer.NoopMailer{}
 	if cfg.SMTPEnabled() {
 		mailSender = mailer.NewSMTPMailer(mailer.SMTPConfig{
@@ -495,6 +520,8 @@ func main() {
 		Mailer:                          mailSender,
 		AppPublicURL:                    cfg.AppPublicURL,
 		SMTPEnabled:                     cfg.SMTPEnabled(),
+		WebhookEncryptionKey:            webhookEncryptionKey,
+		TriggerFanoutLimit:              cfg.TriggerFanoutLimit,
 	}
 
 	updateMetricsCounts := func() {

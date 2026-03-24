@@ -180,6 +180,14 @@ type Config struct {
 	SMTPTimeout    time.Duration
 	SMTPSkipVerify bool
 	AppPublicURL   string
+	// Webhook outbound delivery.
+	// WEBHOOK_ENCRYPTION_KEY must be a base64-encoded 32-byte AES-256 key.
+	WebhookEncryptionKey    string
+	WebhookDispatchWorkers  int
+	WebhookDeliveryTimeout  time.Duration
+	WebhookMaxRetries       int
+	// Deploy trigger fan-out.
+	TriggerFanoutLimit int
 }
 
 const defaultTrustedProxyCIDRs = "127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fc00::/7,fe80::/10"
@@ -368,6 +376,11 @@ func FromEnv() Config {
 		SMTPTimeout:                            parseDurationDefault(getenvDefault("SMTP_TIMEOUT", "10s"), 10*time.Second),
 		SMTPSkipVerify:                         parseBoolEnvDefault("SMTP_SKIP_VERIFY", false),
 		AppPublicURL:                           strings.TrimSpace(os.Getenv("APP_PUBLIC_URL")),
+		WebhookEncryptionKey:                   strings.TrimSpace(os.Getenv("WEBHOOK_ENCRYPTION_KEY")),
+		WebhookDispatchWorkers:                 getenvInt("WEBHOOK_DISPATCH_WORKERS", 4),
+		WebhookDeliveryTimeout:                 parseDurationDefault(getenvDefault("WEBHOOK_DELIVERY_TIMEOUT", "10s"), 10*time.Second),
+		WebhookMaxRetries:                      getenvInt("WEBHOOK_MAX_RETRIES", 3),
+		TriggerFanoutLimit:                     getenvInt("TRIGGER_FANOUT_LIMIT", 500),
 	}
 }
 

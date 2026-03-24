@@ -3624,3 +3624,273 @@ func (s *Store) ListDeviceVulnScans(deviceID string) ([]store.DeviceVulnerabilit
 	}
 	return out, rows.Err()
 }
+
+// ── Group lookup ──────────────────────────────────────────────────────────────
+
+func (s *Store) GetGroup(groupID string) (store.Group, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var g store.Group
+	err := s.pool.QueryRow(ctx, `
+		SELECT group_id, COALESCE(name, ''), COALESCE(selector, '{}'::jsonb), created_at
+		FROM groups WHERE group_id = $1
+	`, groupID).Scan(&g.GroupID, &g.Name, &g.SelectorJSON, &g.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Group{}, false, nil
+	}
+	if err != nil {
+		return store.Group{}, false, err
+	}
+	return g, true, nil
+}
+
+func (s *Store) ListDevicesForGroup(groupID string, limit int) ([]store.Device, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if limit <= 0 {
+		limit = 1000
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT d.device_id, COALESCE(d.cert_fingerprint,''), COALESCE(d.cert_serial,''),
+		       COALESCE(d.status,''), d.last_seen,
+		       COALESCE(d.labels,'{}'), COALESCE(d.metadata,'{}')
+		FROM devices d
+		INNER JOIN groups g ON g.group_id = $1
+		WHERE COALESCE(d.labels, '{}'::jsonb) @> COALESCE(g.selector, '{}'::jsonb)
+		LIMIT $2
+	`, groupID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.Device
+	for rows.Next() {
+		var d store.Device
+		if err := rows.Scan(&d.DeviceID, &d.CertFingerprint, &d.CertSerial,
+			&d.Status, &d.LastSeen, &d.LabelsJSON, &d.MetadataJSON); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// ── Webhooks ──────────────────────────────────────────────────────────────────
+
+func (s *Store) CreateWebhook(webhook store.Webhook) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	eventTypesJSON, _ := json.Marshal(webhook.EventTypes)
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO webhooks (id, name, url, encrypted_secret, event_types, enabled, created_by, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, webhook.ID, webhook.Name, webhook.URL, webhook.EncryptedSecret,
+		eventTypesJSON, webhook.Enabled, webhook.CreatedBy,
+		coalesceTime(webhook.CreatedAt))
+	return err
+}
+
+func (s *Store) GetWebhook(id string) (store.Webhook, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var wh store.Webhook
+	var eventTypesJSON []byte
+	var lastFiredAt *time.Time
+	var lastStatus sql.NullInt32
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, name, url, encrypted_secret, event_types, enabled,
+		       COALESCE(created_by,''), created_at, last_fired_at, last_status
+		FROM webhooks WHERE id = $1
+	`, id).Scan(&wh.ID, &wh.Name, &wh.URL, &wh.EncryptedSecret, &eventTypesJSON,
+		&wh.Enabled, &wh.CreatedBy, &wh.CreatedAt, &lastFiredAt, &lastStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Webhook{}, false, nil
+	}
+	if err != nil {
+		return store.Webhook{}, false, err
+	}
+	_ = json.Unmarshal(eventTypesJSON, &wh.EventTypes)
+	if lastFiredAt != nil {
+		wh.LastFiredAt = *lastFiredAt
+	}
+	if lastStatus.Valid {
+		wh.LastStatus = int(lastStatus.Int32)
+	}
+	return wh, true, nil
+}
+
+func (s *Store) ListWebhooks() ([]store.Webhook, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, name, url, encrypted_secret, event_types, enabled,
+		       COALESCE(created_by,''), created_at, last_fired_at, last_status
+		FROM webhooks ORDER BY created_at ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.Webhook
+	for rows.Next() {
+		var wh store.Webhook
+		var eventTypesJSON []byte
+		var lastFiredAt *time.Time
+		var lastStatus sql.NullInt32
+		if err := rows.Scan(&wh.ID, &wh.Name, &wh.URL, &wh.EncryptedSecret,
+			&eventTypesJSON, &wh.Enabled, &wh.CreatedBy, &wh.CreatedAt,
+			&lastFiredAt, &lastStatus); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(eventTypesJSON, &wh.EventTypes)
+		if lastFiredAt != nil {
+			wh.LastFiredAt = *lastFiredAt
+		}
+		if lastStatus.Valid {
+			wh.LastStatus = int(lastStatus.Int32)
+		}
+		out = append(out, wh)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) UpdateWebhook(webhook store.Webhook) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	eventTypesJSON, _ := json.Marshal(webhook.EventTypes)
+	_, err := s.pool.Exec(ctx, `
+		UPDATE webhooks SET name=$2, url=$3, event_types=$4, enabled=$5
+		WHERE id = $1
+	`, webhook.ID, webhook.Name, webhook.URL, eventTypesJSON, webhook.Enabled)
+	return err
+}
+
+func (s *Store) DeleteWebhook(id string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `DELETE FROM webhooks WHERE id = $1`, id)
+	return err
+}
+
+func (s *Store) UpdateWebhookLastFired(id string, at time.Time, status int) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		UPDATE webhooks SET last_fired_at=$2, last_status=$3 WHERE id = $1
+	`, id, at, status)
+	return err
+}
+
+func (s *Store) CreateWebhookDelivery(delivery store.WebhookDelivery) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO webhook_deliveries
+		(id, webhook_id, event_type, payload, status, attempts, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, delivery.ID, delivery.WebhookID, delivery.EventType,
+		nullIfEmptyBytes(delivery.PayloadJSON), delivery.Status,
+		delivery.Attempts, coalesceTime(delivery.CreatedAt))
+	return err
+}
+
+func (s *Store) UpdateWebhookDelivery(delivery store.WebhookDelivery) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var lastAttemptAt *time.Time
+	if !delivery.LastAttemptAt.IsZero() {
+		lastAttemptAt = &delivery.LastAttemptAt
+	}
+	var responseStatus *int
+	if delivery.ResponseStatus != 0 {
+		responseStatus = &delivery.ResponseStatus
+	}
+	_, err := s.pool.Exec(ctx, `
+		UPDATE webhook_deliveries
+		SET status=$2, attempts=$3, last_attempt_at=$4, response_status=$5
+		WHERE id = $1
+	`, delivery.ID, delivery.Status, delivery.Attempts, lastAttemptAt, responseStatus)
+	return err
+}
+
+func (s *Store) ListWebhookDeliveries(webhookID string, limit int) ([]store.WebhookDelivery, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, webhook_id, event_type, COALESCE(payload,'{}'), status,
+		       attempts, last_attempt_at, response_status, created_at
+		FROM webhook_deliveries
+		WHERE webhook_id = $1
+		ORDER BY created_at DESC
+		LIMIT $2
+	`, webhookID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.WebhookDelivery
+	for rows.Next() {
+		var d store.WebhookDelivery
+		var lastAttemptAt *time.Time
+		var responseStatus sql.NullInt32
+		if err := rows.Scan(&d.ID, &d.WebhookID, &d.EventType, &d.PayloadJSON,
+			&d.Status, &d.Attempts, &lastAttemptAt, &responseStatus, &d.CreatedAt); err != nil {
+			return nil, err
+		}
+		if lastAttemptAt != nil {
+			d.LastAttemptAt = *lastAttemptAt
+		}
+		if responseStatus.Valid {
+			d.ResponseStatus = int(responseStatus.Int32)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// ── Deploy triggers ───────────────────────────────────────────────────────────
+
+func (s *Store) UpsertDeployTrigger(trigger store.DeployTrigger) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	at := trigger.TriggeredAt
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO deploy_triggers (device_id, triggered_by, triggered_at, reason)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (device_id) DO UPDATE SET
+			triggered_by = EXCLUDED.triggered_by,
+			triggered_at = EXCLUDED.triggered_at,
+			reason       = EXCLUDED.reason
+	`, trigger.DeviceID, trigger.TriggeredBy, at, trigger.Reason)
+	return err
+}
+
+func (s *Store) ConsumeDeployTrigger(deviceID string) (store.DeployTrigger, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var t store.DeployTrigger
+	err := s.pool.QueryRow(ctx, `
+		DELETE FROM deploy_triggers WHERE device_id = $1
+		RETURNING device_id, COALESCE(triggered_by,''), triggered_at, COALESCE(reason,'')
+	`, deviceID).Scan(&t.DeviceID, &t.TriggeredBy, &t.TriggeredAt, &t.Reason)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.DeployTrigger{}, false, nil
+	}
+	if err != nil {
+		return store.DeployTrigger{}, false, err
+	}
+	return t, true, nil
+}
+
+func coalesceTime(t time.Time) time.Time {
+	if t.IsZero() {
+		return time.Now().UTC()
+	}
+	return t
+}

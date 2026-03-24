@@ -6,6 +6,24 @@ import (
 	"time"
 )
 
+// Defined service token scopes. The wildcard "*" implies all scopes.
+const (
+	ScopeArtifactRead      = "artifact.read"
+	ScopeArtifactPublish   = "artifact.publish"
+	ScopeDeviceRead        = "device.read"
+	ScopeDeploymentTrigger = "deployment.trigger"
+	ScopeWebhookManage     = "webhook.manage"
+)
+
+// ValidScopes is the canonical set of allowed scope values (excluding "*").
+var ValidScopes = []string{
+	ScopeArtifactRead,
+	ScopeArtifactPublish,
+	ScopeDeviceRead,
+	ScopeDeploymentTrigger,
+	ScopeWebhookManage,
+}
+
 type ServiceToken struct {
 	TokenID    string
 	Name       string
@@ -46,6 +64,30 @@ func HasScope(scopes []string, required string) bool {
 	for _, scope := range scopes {
 		scope = strings.TrimSpace(strings.ToLower(scope))
 		if scope == "*" || scope == required {
+			return true
+		}
+	}
+	return false
+}
+
+// HasAnyScope returns true if the token has at least one of the listed scopes.
+func HasAnyScope(scopes []string, required ...string) bool {
+	for _, r := range required {
+		if HasScope(scopes, r) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsValidScope returns true for recognised scope strings (including "*").
+func IsValidScope(s string) bool {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "*" {
+		return true
+	}
+	for _, v := range ValidScopes {
+		if s == v {
 			return true
 		}
 	}
