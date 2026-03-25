@@ -69,6 +69,41 @@ type ArtifactCacheFilter struct {
 	Name    string // empty = all names
 }
 
+// GlobalArtifact is an artifact uploaded directly to the global plane.
+type GlobalArtifact struct {
+	ArtifactID      string
+	Name            string
+	Version         string
+	ArtifactType    string
+	Status          string
+	ObjectKey       string
+	SHA256          string
+	Signature       string
+	SignatureType   string
+	SignatureKeyID  string
+	SizeBytes       int64
+	MetadataJSON    []byte
+	CreatedBy       string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+// ArtifactReplicationStatus tracks per-artifact per-region blob replication state.
+// BlobStatus values: pending | replicating | confirmed | failed
+type ArtifactReplicationStatus struct {
+	ReplicationID      string
+	ArtifactID         string
+	PlaneID            string
+	PlaneName          string // populated on read by joining regional_planes
+	MetadataPushedAt   *time.Time
+	MetadataPushError  string
+	BlobStatus         string
+	BlobConfirmedAt    *time.Time
+	BlobCheckError     string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
 // Store is the data access interface for the global aggregation plane.
 type Store interface {
 	// Regional plane registry
@@ -91,4 +126,17 @@ type Store interface {
 	// Health cache
 	UpsertHealthCache(snapshot HealthSnapshot) error
 	ListHealthCache() ([]HealthSnapshot, error)
+
+	// Global artifacts (federated upload)
+	CreateGlobalArtifact(a GlobalArtifact) error
+	GetGlobalArtifact(artifactID string) (GlobalArtifact, bool, error)
+	ListGlobalArtifacts(nameFilter string) ([]GlobalArtifact, error)
+
+	// Artifact replication status
+	CreateReplicationStatusRows(artifactID string, planeIDs []string) error
+	UpdateReplicationStatusMetadataPush(artifactID, planeID string, pushedAt *time.Time, pushErr string) error
+	UpdateReplicationStatusBlobConfirmed(artifactID, planeID string, confirmedAt time.Time) error
+	UpdateReplicationStatusBlobCheckError(artifactID, planeID, checkErr string) error
+	ListReplicationStatus(artifactID string) ([]ArtifactReplicationStatus, error)
+	ListPendingReplicationRows() ([]ArtifactReplicationStatus, error)
 }

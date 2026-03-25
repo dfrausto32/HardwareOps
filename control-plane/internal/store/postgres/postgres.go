@@ -3964,3 +3964,57 @@ func (s *Store) GetGroupDeploymentStatus(groupID, artifactID string) ([]store.De
 	}
 	return out, rows.Err()
 }
+
+// ── Federation ingest ──────────────────────────────────────────────────────────
+
+func (s *Store) UpsertFederationIngest(ingest store.FederationIngest) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	now := time.Now().UTC()
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO federation_artifact_ingest
+			(ingest_id, artifact_id, global_object_key, global_presign_base_url, received_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $5)
+		ON CONFLICT (artifact_id) DO UPDATE SET
+			global_object_key       = EXCLUDED.global_object_key,
+			global_presign_base_url = EXCLUDED.global_presign_base_url,
+			updated_at              = $5
+	`, ingest.IngestID, ingest.ArtifactID, ingest.GlobalObjectKey, ingest.GlobalPresignBaseURL, now)
+	return err
+}
+
+func (s *Store) GetFederationIngest(artifactID string) (store.FederationIngest, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var fi store.FederationIngest
+	var blobConfirmedAt *time.Time
+	err := s.pool.QueryRow(ctx, `
+		SELECT ingest_id, artifact_id, global_object_key, global_presign_base_url,
+		       blob_confirmed, blob_confirmed_at, received_at, updated_at
+		FROM federation_artifact_ingest WHERE artifact_id = $1
+	`, artifactID).Scan(
+		&fi.IngestID, &fi.ArtifactID, &fi.GlobalObjectKey, &fi.GlobalPresignBaseURL,
+		&fi.BlobConfirmed, &blobConfirmedAt, &fi.ReceivedAt, &fi.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.FederationIngest{}, false, nil
+	}
+	if err != nil {
+		return store.FederationIngest{}, false, err
+	}
+	if blobConfirmedAt != nil {
+		fi.BlobConfirmedAt = *blobConfirmedAt
+	}
+	return fi, true, nil
+}
+
+func (s *Store) ConfirmFederationBlobLocal(artifactID string, confirmedAt time.Time) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		UPDATE federation_artifact_ingest
+		SET blob_confirmed = TRUE, blob_confirmed_at = $2, updated_at = $2
+		WHERE artifact_id = $1
+	`, artifactID, confirmedAt)
+	return err
+}

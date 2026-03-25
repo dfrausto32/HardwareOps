@@ -50,6 +50,7 @@ type Store struct {
 	webhooks              map[string]store.Webhook
 	webhookDeliveries     []store.WebhookDelivery
 	deployTriggers        map[string]store.DeployTrigger
+	federationIngests     map[string]store.FederationIngest
 }
 
 func New() *Store {
@@ -89,6 +90,7 @@ func New() *Store {
 		webhooks:              map[string]store.Webhook{},
 		webhookDeliveries:     []store.WebhookDelivery{},
 		deployTriggers:        map[string]store.DeployTrigger{},
+		federationIngests:     map[string]store.FederationIngest{},
 	}
 }
 
@@ -2448,4 +2450,44 @@ func (s *Store) GetGroupDeploymentStatus(groupID, artifactID string) ([]store.De
 		out = append(out, ds)
 	}
 	return out, nil
+}
+
+// ── Federation ingest ──────────────────────────────────────────────────────────
+
+func (s *Store) UpsertFederationIngest(ingest store.FederationIngest) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	if existing, ok := s.federationIngests[ingest.ArtifactID]; ok {
+		existing.GlobalObjectKey = ingest.GlobalObjectKey
+		existing.GlobalPresignBaseURL = ingest.GlobalPresignBaseURL
+		existing.UpdatedAt = now
+		s.federationIngests[ingest.ArtifactID] = existing
+	} else {
+		ingest.ReceivedAt = now
+		ingest.UpdatedAt = now
+		s.federationIngests[ingest.ArtifactID] = ingest
+	}
+	return nil
+}
+
+func (s *Store) GetFederationIngest(artifactID string) (store.FederationIngest, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fi, ok := s.federationIngests[artifactID]
+	return fi, ok, nil
+}
+
+func (s *Store) ConfirmFederationBlobLocal(artifactID string, confirmedAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fi, ok := s.federationIngests[artifactID]
+	if !ok {
+		return nil
+	}
+	fi.BlobConfirmed = true
+	fi.BlobConfirmedAt = confirmedAt
+	fi.UpdatedAt = confirmedAt
+	s.federationIngests[artifactID] = fi
+	return nil
 }

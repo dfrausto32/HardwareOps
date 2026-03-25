@@ -1,10 +1,21 @@
 package httpapi
 
 import (
+	"context"
+	"io"
+	"time"
+
 	"github.com/hardwareops/control-plane/internal/auth"
 	"github.com/hardwareops/control-plane/internal/globalplane"
 	"github.com/hardwareops/control-plane/internal/globalplane/sync"
 )
+
+// ObjectStore is the subset of MinIO operations used by the global-plane.
+type ObjectStore interface {
+	PresignGet(ctx context.Context, bucket, key string, expires time.Duration) (string, error)
+	PutObject(ctx context.Context, bucket, key string, body io.Reader, size int64, contentType string) (int64, error)
+	EnsureBucket(ctx context.Context, bucket string) error
+}
 
 // Dependencies holds all runtime dependencies for the global-plane HTTP layer.
 type Dependencies struct {
@@ -13,4 +24,11 @@ type Dependencies struct {
 	Auth               *auth.Manager
 	TokenEncryptionKey []byte
 	CORSAllowedOrigins []string
+	// Artifact federation
+	ObjectStore    ObjectStore
+	S3Bucket       string
+	PresignExpires time.Duration
+	// PublicBaseURL is the externally-reachable base URL of this global-plane,
+	// used as the globalPresignBaseUrl sent in federation metadata pushes.
+	PublicBaseURL string
 }

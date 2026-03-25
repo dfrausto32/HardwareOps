@@ -6,6 +6,7 @@ import (
 	"context"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/hardwareops/control-plane/internal/globalplane"
 )
@@ -30,11 +31,14 @@ func NewManager(store globalplane.Store, encKey []byte, logger *log.Logger) *Man
 }
 
 // Start loads all enabled regional planes and launches their workers.
-// It blocks until ctx is cancelled, then stops all workers gracefully.
+// It also starts the replication reconciler. Blocks until ctx is cancelled.
 func (m *Manager) Start(ctx context.Context) error {
 	if err := m.Refresh(ctx); err != nil {
 		return err
 	}
+	// Replication reconciler runs independently on its own interval.
+	reconciler := newReplicationReconciler(m.store, m.encKey, m.logger, 60*time.Second)
+	go reconciler.run(ctx)
 	<-ctx.Done()
 	m.stopAll()
 	return nil

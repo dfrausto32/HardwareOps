@@ -41,6 +41,18 @@ type Config struct {
 	EnableTLS   bool
 	TLSCertPath string
 	TLSKeyPath  string
+
+	// MinIO (global artifact storage)
+	MinIOEndpoint  string
+	MinIOAccessKey string
+	MinIOSecretKey string
+	MinIOBucket    string
+	MinIOUseTLS    bool
+	PresignExpires time.Duration
+
+	// PublicBaseURL is the externally-reachable base URL of this global-plane,
+	// sent to regional planes as the globalPresignBaseUrl in federation metadata.
+	PublicBaseURL string
 }
 
 // FromEnv reads Config from environment variables, applying defaults.
@@ -82,6 +94,20 @@ func FromEnv() (Config, error) {
 		return Config{}, fmt.Errorf("GLOBAL_SYNC_DEFAULT_INTERVAL: must be an integer >= 10 (got %q)", intervalStr)
 	}
 	cfg.DefaultSyncInterval = time.Duration(secs) * time.Second
+
+	cfg.MinIOEndpoint = os.Getenv("GLOBAL_MINIO_ENDPOINT")
+	cfg.MinIOAccessKey = os.Getenv("GLOBAL_MINIO_ACCESS_KEY")
+	cfg.MinIOSecretKey = os.Getenv("GLOBAL_MINIO_SECRET_KEY")
+	cfg.MinIOBucket = envOr("GLOBAL_MINIO_BUCKET", "global-artifacts")
+	cfg.MinIOUseTLS = os.Getenv("GLOBAL_MINIO_USE_TLS") == "1"
+	cfg.PublicBaseURL = os.Getenv("GLOBAL_PUBLIC_BASE_URL")
+
+	presignSecs := envOr("GLOBAL_PRESIGN_EXPIRES_SECONDS", "3600")
+	ps, _ := strconv.Atoi(presignSecs)
+	if ps <= 0 {
+		ps = 3600
+	}
+	cfg.PresignExpires = time.Duration(ps) * time.Second
 
 	return cfg, nil
 }

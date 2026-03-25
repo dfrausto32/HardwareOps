@@ -453,6 +453,18 @@ type DeployTrigger struct {
 	Reason      string
 }
 
+// FederationIngest tracks artifact metadata pushed from the global plane.
+type FederationIngest struct {
+	IngestID             string
+	ArtifactID           string
+	GlobalObjectKey      string
+	GlobalPresignBaseURL string
+	BlobConfirmed        bool
+	BlobConfirmedAt      time.Time
+	ReceivedAt           time.Time
+	UpdatedAt            time.Time
+}
+
 type Store interface {
 	UpsertDevice(device Device) error
 	UpsertDeviceState(state DeviceState) error
@@ -591,4 +603,8 @@ type Store interface {
 	// GetGroupDeploymentStatus returns per-device rollout state for artifactID
 	// across every non-decommissioned device in the group.
 	GetGroupDeploymentStatus(groupID, artifactID string) ([]DeviceDeploymentStatus, error)
+	// Federation artifact ingest — regional CP side.
+	UpsertFederationIngest(ingest FederationIngest) error
+	GetFederationIngest(artifactID string) (FederationIngest, bool, error)
+	ConfirmFederationBlobLocal(artifactID string, confirmedAt time.Time) error
 }

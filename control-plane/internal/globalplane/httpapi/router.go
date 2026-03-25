@@ -99,6 +99,23 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 
 		r.With(requireScopeOrRole(auth.ScopeArtifactRead, "viewer")).
 			Get("/artifacts", handlers.ListArtifacts(deps.Store))
+
+		// Federated artifact management.
+		r.With(requireRole("operator")).
+			Post("/federation/artifacts/upload", handlers.UploadFederatedArtifact(
+				deps.Store, deps.ObjectStore, deps.S3Bucket, deps.PresignExpires,
+				deps.PublicBaseURL, deps.TokenEncryptionKey, logger,
+			))
+		r.With(requireScopeOrRole(auth.ScopeArtifactRead, "viewer")).
+			Get("/federation/artifacts", handlers.ListFederatedArtifacts(deps.Store))
+		r.Route("/federation/artifacts/{artifactId}", func(r chi.Router) {
+			r.With(requireScopeOrRole(auth.ScopeArtifactRead, "viewer")).
+				Get("/", handlers.GetFederatedArtifact(deps.Store))
+			r.With(requireScopeOrRole(auth.ScopeArtifactRead, "viewer")).
+				Get("/replication-status", handlers.GetReplicationStatus(deps.Store))
+			r.With(requireScopeOrRole(auth.ScopeArtifactRead, "viewer")).
+				Get("/presign", handlers.PresignFederatedArtifact(deps.Store, deps.ObjectStore, deps.S3Bucket, deps.PresignExpires))
+		})
 	})
 
 	_ = context.Background // satisfy import if unused elsewhere

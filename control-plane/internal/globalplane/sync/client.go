@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -20,8 +21,12 @@ type regionalClient struct {
 	httpClient   *http.Client
 }
 
-// newRegionalClient constructs a client. If tlsCAPem is non-empty it is added
+// NewRegionalClient constructs a client. If tlsCAPem is non-empty it is added
 // to the TLS trust pool, enabling self-signed regional CPs.
+func NewRegionalClient(baseURL, token, tlsCAPem string) (*regionalClient, error) {
+	return newRegionalClient(baseURL, token, tlsCAPem)
+}
+
 func newRegionalClient(baseURL, token, tlsCAPem string) (*regionalClient, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if tlsCAPem != "" {
@@ -143,6 +148,61 @@ func (c *regionalClient) FetchArtifacts(ctx context.Context) ([]globalplane.Cach
 		}
 	}
 	return out, nil
+}
+
+// FederationArtifactPayload is the metadata pushed to regional planes.
+type FederationArtifactPayload struct {
+	ArtifactID           string            `json:"artifactId"`
+	Name                 string            `json:"name"`
+	Version              string            `json:"version"`
+	Type                 string            `json:"type"`
+	ObjectKey            string            `json:"objectKey"`
+	SHA256               string            `json:"sha256"`
+	Signature            string            `json:"signature"`
+	SignatureType        string            `json:"signatureType"`
+	SignatureKeyID       string            `json:"signatureKeyId"`
+	SizeBytes            int64             `json:"sizeBytes"`
+	Metadata             map[string]string `json:"metadata,omitempty"`
+	GlobalPresignBaseURL string            `json:"globalPresignBaseUrl"`
+	GlobalObjectKey      string            `json:"globalObjectKey"`
+}
+
+// PushArtifactMetadata sends artifact metadata to a regional plane.
+// Returns nil on success or idempotent re-push (200/201).
+func (c *regionalClient) PushArtifactMetadata(ctx context.Context, payload FederationArtifactPayload) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	url := c.baseURL + "/api/v1/federation/artifacts"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(respBody), 200))
+	}
+	return nil
+}
+
+// GetBlobStatus asks a regional plane whether the blob has arrived locally.
+func (c *regionalClient) GetBlobStatus(ctx context.Context, artifactID string) (bool, error) {
+	url := fmt.Sprintf("%s/api/v1/federation/artifacts/%s/blob-status", c.baseURL, artifactID)
+	var resp struct {
+		Confirmed bool `json:"confirmed"`
+	}
+	if err := c.getJSON(ctx, url, &resp); err != nil {
+		return false, err
+	}
+	return resp.Confirmed, nil
 }
 
 func (c *regionalClient) getJSON(ctx context.Context, url string, dest any) error {

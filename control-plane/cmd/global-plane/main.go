@@ -16,6 +16,7 @@ import (
 	globalhttp "github.com/hardwareops/control-plane/internal/globalplane/httpapi"
 	"github.com/hardwareops/control-plane/internal/globalplane/sync"
 	"github.com/hardwareops/control-plane/internal/migrate"
+	"github.com/hardwareops/control-plane/internal/objectstore"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -56,6 +57,22 @@ func main() {
 	// Sync manager.
 	syncMgr := sync.NewManager(store, cfg.TokenEncryptionKey, logger)
 
+	// Object store (MinIO) for federated artifact storage.
+	var objStore globalhttp.ObjectStore
+	if cfg.MinIOEndpoint != "" {
+		ms, err := objectstore.NewMinIO(objectstore.MinIOConfig{
+			Endpoint:  cfg.MinIOEndpoint,
+			AccessKey: cfg.MinIOAccessKey,
+			SecretKey: cfg.MinIOSecretKey,
+			UseSSL:    cfg.MinIOUseTLS,
+		})
+		if err != nil {
+			logger.Fatalf("minio connect: %v", err)
+		}
+		objStore = ms
+		logger.Printf("global-plane MinIO connected (%s, bucket=%s)", cfg.MinIOEndpoint, cfg.MinIOBucket)
+	}
+
 	// Build dependencies.
 	deps := globalhttp.Dependencies{
 		Store:              store,
@@ -63,6 +80,10 @@ func main() {
 		Auth:               authMgr,
 		TokenEncryptionKey: cfg.TokenEncryptionKey,
 		CORSAllowedOrigins: splitOrigins(cfg.CORSAllowedOrigins),
+		ObjectStore:        objStore,
+		S3Bucket:           cfg.MinIOBucket,
+		PresignExpires:     cfg.PresignExpires,
+		PublicBaseURL:      cfg.PublicBaseURL,
 	}
 
 	// HTTP server.

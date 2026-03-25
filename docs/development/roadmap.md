@@ -23,14 +23,14 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Operational Hardening (between B and C) | 🟢 Complete | Pull-boundary, token exposure, startup guardrails, break-glass backend, proxy trust policy, and abuse controls are all shipped. |
 | Phase C — Enterprise Readiness | 🟢 Complete | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, artifact tracking policies, the local-auth recovery stack (recovery codes, reset tokens, break-glass CLI), CI workload identity federation, supply-chain provenance policy (Cosign/Sigstore), LDAP/AD auth, and Vault secrets integration are all shipped. |
 | Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Connected email delivery complete. Remaining Phase D work is live-deployment acceptance gate execution (operational) and full VPC reference diagram (docs). |
-| Phase E — Federated Multi-Region | 🟡 In progress | Hub-and-spoke federation layer: global management plane above regional control planes. Agents unchanged. E1 backend complete (global-plane binary, sync manager, REST API, migrations). UI and smoke test remaining. |
+| Phase E — Federated Multi-Region | 🟡 In progress | Hub-and-spoke federation layer: global management plane above regional control planes. Agents unchanged. E1 (global aggregation plane) and E2 (artifact federation) complete. E3–E6 planned. |
 
 ### Active work queue (what is still to do)
 
 No items currently in-flight. Queue is clear.
 
 ### Prepared next tasks (agent-scoped)
-- `E2-ARTIFACT-FEDERATION` — single artifact upload to global plane; metadata push to regional planes via federation endpoint; MinIO bucket replication tracking; per-artifact per-region replication status in global UI
+- `E3-GLOBAL-DESIRED-STATE` — operators define global group policies from the global plane; regional planes receive and apply them; global UI aggregates execution status across regions
 
 ---
 
@@ -698,12 +698,10 @@ Inter-plane authentication uses the existing service token mechanism (`federatio
 - **Notes:** `cmd/global-plane` binary, `internal/globalplane` package (store, config, AES-256-GCM token encryption), `internal/globalplane/sync` (Manager + PlaneWorker with exponential backoff), `internal/globalplane/httpapi` (router, planes/aggregated handlers), 5 SQL migrations (`migrations/global/`). `auth.AuthStore` interface extracted so the global-plane store satisfies it without importing the full regional store. Two new service token scopes: `federation.push` and `federation.manage`. UI: `GlobalPage.jsx` with Planes health cards, Devices table, Artifacts table, Register Plane modal, 30s auto-refresh; admin-only nav entry with RBAC test coverage. Operator runbook in `docs/global-plane.md`.
 
 #### E2 — Artifact federation (single upload, N regions)
-- **Status:** ⬜ Planned
-- **Scope:** Artifact uploaded once to global plane; metadata pushed to all regional planes; blobs replicated via MinIO bucket replication. Regional planes serve artifacts from local MinIO to agents (presigned URLs unchanged). Per-artifact, per-region replication status tracked and surfaced in global UI.
-- **Dependencies:** E1 (global plane registered); MinIO bucket replication configured per region; new `artifact_replication_status` table; new `POST /api/v1/federation/artifacts` endpoint on regional planes.
-- **Risks:** Replication lag — agents may be assigned an artifact on a regional plane before the blob has arrived. Fallback: presigned URL points to global MinIO if regional copy not yet available.
-- **Acceptance:** Operator uploads artifact once to global plane; artifact becomes available on all registered regional planes once replication completes. Global UI artifact detail shows "Available in X/N regions." Agents download from regional MinIO with zero changes.
-- **Notes:** MinIO bucket replication is a built-in MinIO/S3 feature. The custom work is tracking replication state in PostgreSQL and exposing it in the UI. Regional planes should not serve agents a presigned URL for an artifact until the blob is confirmed locally.
+- **Status:** ✅ Complete
+- **Scope:** Artifact uploaded once to global plane; metadata pushed to all regional planes; blobs replicated via MinIO bucket replication. Per-artifact, per-region replication status tracked and surfaced in global UI.
+- **Dependencies:** E1 (global plane registered); MinIO bucket replication configured per region.
+- **Notes:** `global_artifacts` + `artifact_replication_status` tables (global migration 0006); `federation_artifact_ingest` table (regional migration 0033); `store.FederationIngest` type + 3 new Store methods; `UploadFederatedArtifact`, `ListFederatedArtifacts`, `GetFederatedArtifact`, `GetReplicationStatus`, `PresignFederatedArtifact` handlers on global plane; `ReceiveFederatedArtifact` + `GetFederatedBlobStatus` handlers on regional plane under `federation.push` scope; replication reconciler polls every 60 s; Federated tab in GlobalPage.jsx with region confirmed/total chip; Upload artifact modal; `docs/artifact-federation.md` operator runbook; `deploy/global-plane.env.example`.
 
 #### E3 — Global desired state / policy push
 - **Status:** ⬜ Planned

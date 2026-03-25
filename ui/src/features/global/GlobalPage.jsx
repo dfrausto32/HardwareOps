@@ -109,11 +109,17 @@ export default function GlobalPage({
   const [error, setError] = useState(null)
   const [deviceFilter, setDeviceFilter] = useState('')
   const [artifactFilter, setArtifactFilter] = useState('')
-  const [tab, setTab] = useState('health') // health | devices | artifacts
+  const [tab, setTab] = useState('health') // health | devices | artifacts | federated
   const [registerOpen, setRegisterOpen] = useState(false)
   const [registerForm, setRegisterForm] = useState({ name: '', baseUrl: '', serviceToken: '', tlsCaPem: '', syncIntervalSeconds: '60' })
   const [registerError, setRegisterError] = useState(null)
   const [registerSaving, setRegisterSaving] = useState(false)
+  const [fedArtifacts, setFedArtifacts] = useState([])
+  const [fedFilter, setFedFilter] = useState('')
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [uploadForm, setUploadForm] = useState({ name: '', version: '', type: 'app_bundle', file: null })
+  const [uploadError, setUploadError] = useState(null)
+  const [uploading, setUploading] = useState(false)
   const pollRef = useRef(null)
 
   const effectiveUrl = globalPlaneUrl || urlInput
@@ -136,11 +142,12 @@ export default function GlobalPage({
     setLoading(true)
     setError(null)
     try {
-      const [planesData, healthData, devicesData, artifactsData] = await Promise.all([
+      const [planesData, healthData, devicesData, artifactsData, fedData] = await Promise.all([
         apiFetch('/api/v1/planes'),
         apiFetch('/api/v1/health/summary'),
         apiFetch('/api/v1/devices'),
         apiFetch('/api/v1/artifacts'),
+        apiFetch('/api/v1/federation/artifacts').catch(() => []),
       ])
       setPlanes(planesData || [])
       const hm = {}
@@ -150,6 +157,7 @@ export default function GlobalPage({
       setHealthMap(hm)
       setDevices(devicesData || [])
       setArtifacts(artifactsData || [])
+      setFedArtifacts(fedData || [])
     } catch (err) {
       setError(err.message)
     } finally {
@@ -218,9 +226,14 @@ export default function GlobalPage({
             {loading ? 'Loading…' : 'Refresh'}
           </button>
           {effectiveUrl && (
-            <button className="button" onClick={() => setRegisterOpen(true)}>
-              Register plane
-            </button>
+            <>
+              <button className="button ghost" onClick={() => setUploadOpen(true)}>
+                Upload artifact
+              </button>
+              <button className="button" onClick={() => setRegisterOpen(true)}>
+                Register plane
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -263,7 +276,7 @@ export default function GlobalPage({
         <>
           {/* Tab bar */}
           <div style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid var(--border)', paddingBottom: 0 }}>
-            {[['health', `Planes (${planes.length})`], ['devices', `Devices (${devices.length})`], ['artifacts', `Artifacts (${artifacts.length})`]].map(([id, label]) => (
+            {[['health', `Planes (${planes.length})`], ['devices', `Devices (${devices.length})`], ['artifacts', `Artifacts (${artifacts.length})`], ['federated', `Federated (${fedArtifacts.length})`]].map(([id, label]) => (
               <button
                 key={id}
                 className={`chip ${tab === id ? 'active' : ''}`}
@@ -387,7 +400,165 @@ export default function GlobalPage({
               </table>
             </>
           )}
+
+          {/* Federated artifacts tab */}
+          {tab === 'federated' && (
+            <>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+                <input
+                  className="input"
+                  placeholder="Filter by name or version…"
+                  value={fedFilter}
+                  onChange={e => setFedFilter(e.target.value)}
+                  style={{ maxWidth: 320 }}
+                />
+                <span className="muted" style={{ fontSize: 12 }}>
+                  Artifacts uploaded to the global plane and replicated to regional planes.
+                </span>
+              </div>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Version</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th>SHA-256</th>
+                    <th>Size</th>
+                    <th>Regions</th>
+                    <th>Uploaded</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fedArtifacts.filter(a => {
+                    if (!fedFilter) return true
+                    const q = fedFilter.toLowerCase()
+                    return a.name?.toLowerCase().includes(q) || a.version?.toLowerCase().includes(q)
+                  }).length === 0 ? (
+                    <tr><td colSpan={8} style={{ textAlign: 'center', padding: '24px 0' }} className="muted">
+                      No federated artifacts. Click <strong>Upload artifact</strong> to publish one to all regions.
+                    </td></tr>
+                  ) : fedArtifacts.filter(a => {
+                    if (!fedFilter) return true
+                    const q = fedFilter.toLowerCase()
+                    return a.name?.toLowerCase().includes(q) || a.version?.toLowerCase().includes(q)
+                  }).map(a => {
+                    const sizeKb = a.sizeBytes ? `${Math.round(a.sizeBytes / 1024)} KB` : '—'
+                    const sha = a.sha256 ? a.sha256.slice(0, 12) + '…' : '—'
+                    const confirmed = a.confirmedRegions ?? 0
+                    const total = a.totalRegions ?? 0
+                    const allConfirmed = total > 0 && confirmed === total
+                    return (
+                      <tr key={a.artifactId}>
+                        <td style={{ fontWeight: 500 }}>{a.name || '—'}</td>
+                        <td><code style={{ fontSize: 12 }}>{a.version || '—'}</code></td>
+                        <td className="muted" style={{ fontSize: 12 }}>{a.artifactType || '—'}</td>
+                        <td>
+                          <span className={`chip ${a.status === 'active' ? 'success' : ''}`} style={{ fontSize: 11 }}>
+                            {a.status || '—'}
+                          </span>
+                        </td>
+                        <td><code style={{ fontSize: 11 }}>{sha}</code></td>
+                        <td className="muted" style={{ fontSize: 12 }}>{sizeKb}</td>
+                        <td>
+                          <span
+                            className={`chip ${allConfirmed ? 'success' : total === 0 ? '' : 'warning'}`}
+                            style={{ fontSize: 11 }}
+                            title={`${confirmed} of ${total} regions confirmed`}
+                          >
+                            {confirmed}/{total}
+                          </span>
+                        </td>
+                        <td className="muted" style={{ fontSize: 12 }}><RelativeTime iso={a.createdAt} /></td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </>
+          )}
         </>
+      )}
+
+      {/* Upload federated artifact modal */}
+      {uploadOpen && (
+        <div className="modal-overlay" onClick={() => setUploadOpen(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 460 }}>
+            <div className="modal-header">
+              <h3>Upload federated artifact</h3>
+              <button className="modal-close" onClick={() => setUploadOpen(false)}>×</button>
+            </div>
+            <form onSubmit={async (e) => {
+              e.preventDefault()
+              setUploadError(null)
+              setUploading(true)
+              try {
+                const fd = new FormData()
+                fd.append('name', uploadForm.name)
+                fd.append('version', uploadForm.version)
+                fd.append('type', uploadForm.type)
+                fd.append('file', uploadForm.file)
+                const headers = {}
+                if (token) headers['Authorization'] = `Bearer ${token}`
+                const resp = await fetch(`${effectiveUrl}/api/v1/federation/artifacts/upload`, {
+                  method: 'POST',
+                  headers,
+                  body: fd,
+                })
+                if (!resp.ok) {
+                  const text = await resp.text()
+                  throw new Error(`${resp.status}: ${text.slice(0, 200)}`)
+                }
+                setUploadOpen(false)
+                setUploadForm({ name: '', version: '', type: 'app_bundle', file: null })
+                setTab('federated')
+                loadAll()
+              } catch (err) {
+                setUploadError(err.message)
+              } finally {
+                setUploading(false)
+              }
+            }}>
+              <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div>
+                  <label className="label">Name <span style={{ color: '#f27272' }}>*</span></label>
+                  <input className="input" required value={uploadForm.name}
+                    onChange={e => setUploadForm(f => ({ ...f, name: e.target.value }))}
+                    placeholder="my-app" />
+                </div>
+                <div>
+                  <label className="label">Version <span style={{ color: '#f27272' }}>*</span></label>
+                  <input className="input" required value={uploadForm.version}
+                    onChange={e => setUploadForm(f => ({ ...f, version: e.target.value }))}
+                    placeholder="1.0.0" />
+                </div>
+                <div>
+                  <label className="label">Type <span style={{ color: '#f27272' }}>*</span></label>
+                  <select className="input" value={uploadForm.type}
+                    onChange={e => setUploadForm(f => ({ ...f, type: e.target.value }))}>
+                    <option value="app_bundle">app_bundle</option>
+                    <option value="config_bundle">config_bundle</option>
+                    <option value="data_bundle">data_bundle</option>
+                    <option value="firmware">firmware</option>
+                    <option value="container_image">container_image</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">File (tar.gz) <span style={{ color: '#f27272' }}>*</span></label>
+                  <input className="input" required type="file" accept=".tar.gz,.tgz"
+                    onChange={e => setUploadForm(f => ({ ...f, file: e.target.files[0] || null }))} />
+                </div>
+                {uploadError && <div style={{ color: '#f27272', fontSize: 12 }}>{uploadError}</div>}
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="button ghost" onClick={() => setUploadOpen(false)}>Cancel</button>
+                <button type="submit" className="button" disabled={uploading || !uploadForm.file}>
+                  {uploading ? 'Uploading…' : 'Upload & replicate'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
 
       {/* Register plane modal */}
