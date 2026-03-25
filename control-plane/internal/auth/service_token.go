@@ -13,6 +13,13 @@ const (
 	ScopeDeviceRead        = "device.read"
 	ScopeDeploymentTrigger = "deployment.trigger"
 	ScopeWebhookManage     = "webhook.manage"
+	// Federation scopes — used by the global aggregation plane.
+	// ScopeFederationPush is granted to service tokens created on regional control
+	// planes so the global-plane sync client can read device/health/artifact data.
+	// ScopeFederationManage gates administrative operations on the global-plane itself
+	// (registering and removing regional planes).
+	ScopeFederationPush   = "federation.push"
+	ScopeFederationManage = "federation.manage"
 )
 
 // ValidScopes is the canonical set of allowed scope values (excluding "*").
@@ -22,6 +29,8 @@ var ValidScopes = []string{
 	ScopeDeviceRead,
 	ScopeDeploymentTrigger,
 	ScopeWebhookManage,
+	ScopeFederationPush,
+	ScopeFederationManage,
 }
 
 type ServiceToken struct {
