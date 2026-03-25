@@ -4,6 +4,7 @@ export const nav = [
   { id: 'logs', label: 'Logs', icon: 'icon-logs' },
   { id: 'security', label: 'Security', icon: 'icon-security' },
   { id: 'settings', label: 'Settings', icon: 'icon-settings' },
+  { id: 'global', label: 'Global Plane', icon: 'icon-global' },
 ]
 
 export const logsNav = [

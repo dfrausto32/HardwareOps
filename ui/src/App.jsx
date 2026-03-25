@@ -103,6 +103,7 @@ import EnrollmentProfileCreateModal from './components/modals/EnrollmentProfileC
 import EnrollmentProfileEditModal from './components/modals/EnrollmentProfileEditModal'
 import SecurityPage from './features/security/SecurityPage'
 import SettingsPage from './features/settings/SettingsPage'
+import GlobalPage from './features/global/GlobalPage'
 import DeviceDrawer from './features/devices/DeviceDrawer'
 import DevicesSection from './features/devices/DevicesSection'
 import GroupMultiDesiredModal from './features/groups/GroupMultiDesiredModal'
@@ -209,6 +210,14 @@ const navIcons = {
       <circle cx="10" cy="4" r="1.5" fill="currentColor" stroke="none"/>
       <circle cx="5" cy="8" r="1.5" fill="currentColor" stroke="none"/>
       <circle cx="11" cy="12" r="1.5" fill="currentColor" stroke="none"/>
+    </svg>
+  ),
+  'icon-global': (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+      <circle cx="8" cy="8" r="6.5"/>
+      <path d="M8 1.5C6.2 3.5 5 5.6 5 8s1.2 4.5 3 6.5"/>
+      <path d="M8 1.5c1.8 2 3 4.1 3 6.5s-1.2 4.5-3 6.5"/>
+      <line x1="1.5" y1="8" x2="14.5" y2="8"/>
     </svg>
   ),
 }
@@ -764,6 +773,13 @@ export default function App() {
 
   const [theme, setTheme] = useState(() => {
     return localStorage.getItem('hwops-theme') || 'dark'
+  })
+  const [globalPlaneUrl, setGlobalPlaneUrl] = useState(() => {
+    return (
+      import.meta.env.VITE_GLOBAL_PLANE_URL ||
+      (typeof localStorage !== 'undefined' && localStorage.getItem('hwops_global_plane_url')) ||
+      ''
+    )
   })
   const preflightOk = Boolean(upgradePreflight.ok)
   const upgradeReady = Boolean(preflightOk && upgradeAvailable.available)
@@ -6099,6 +6115,16 @@ export default function App() {
             }
           },
         }}
+      />
+
+      <GlobalPage
+        view={view}
+        globalPlaneUrl={globalPlaneUrl}
+        onChangeGlobalPlaneUrl={(url) => {
+          setGlobalPlaneUrl(url)
+          try { localStorage.setItem('hwops_global_plane_url', url) } catch {}
+        }}
+        formatTime={formatTime}
       />
 
       <TrustedSigningKeyModal

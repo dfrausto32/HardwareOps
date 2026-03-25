@@ -13,6 +13,17 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// AuthStore is the minimal store interface required by auth.Manager.
+// The full store.Store satisfies it, as does any lighter implementation
+// (e.g. the global-plane store).
+type AuthStore interface {
+	GetUser(userID string) (store.User, bool, error)
+	GetUserByEmail(email string) (store.User, bool, error)
+	SetUserLastLogin(userID string, at time.Time) error
+	GetServiceTokenByTokenHash(tokenHash string) (store.ServiceToken, bool, error)
+	SetServiceTokenLastUsed(tokenID string, at time.Time) error
+}
+
 type User struct {
 	UserID     string
 	Email      string
@@ -21,7 +32,7 @@ type User struct {
 }
 
 type Manager struct {
-	store     store.Store
+	store     AuthStore
 	mode      string
 	jwtSecret []byte
 	tokenTTL  time.Duration
@@ -49,7 +60,7 @@ var roleRank = map[string]int{
 	"admin":    3,
 }
 
-func NewManager(mode string, jwtSecret string, tokenTTL time.Duration, issuer string, st store.Store) (*Manager, error) {
+func NewManager(mode string, jwtSecret string, tokenTTL time.Duration, issuer string, st AuthStore) (*Manager, error) {
 	mode = strings.TrimSpace(strings.ToLower(mode))
 	if mode == "" {
 		mode = ModeDisabled

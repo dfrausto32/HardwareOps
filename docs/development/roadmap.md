@@ -23,14 +23,14 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Operational Hardening (between B and C) | 🟢 Complete | Pull-boundary, token exposure, startup guardrails, break-glass backend, proxy trust policy, and abuse controls are all shipped. |
 | Phase C — Enterprise Readiness | 🟢 Complete | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, artifact tracking policies, the local-auth recovery stack (recovery codes, reset tokens, break-glass CLI), CI workload identity federation, supply-chain provenance policy (Cosign/Sigstore), LDAP/AD auth, and Vault secrets integration are all shipped. |
 | Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Connected email delivery complete. Remaining Phase D work is live-deployment acceptance gate execution (operational) and full VPC reference diagram (docs). |
-| Phase E — Federated Multi-Region | ⬜ Planned | Hub-and-spoke federation layer: global management plane above regional control planes. Agents unchanged. |
+| Phase E — Federated Multi-Region | 🟡 In progress | Hub-and-spoke federation layer: global management plane above regional control planes. Agents unchanged. E1 backend complete (global-plane binary, sync manager, REST API, migrations). UI and smoke test remaining. |
 
 ### Active work queue (what is still to do)
 
 No items currently in-flight. Queue is clear.
 
 ### Prepared next tasks (agent-scoped)
-- `E1-GLOBAL-AGGREGATION-PLANE` — new `global-plane` binary; register regional planes, background sync, unified device/health/artifact UI
+- `E2-ARTIFACT-FEDERATION` — single artifact upload to global plane; metadata push to regional planes via federation endpoint; MinIO bucket replication tracking; per-artifact per-region replication status in global UI
 
 ---
 
@@ -690,12 +690,12 @@ Inter-plane authentication uses the existing service token mechanism (`federatio
 ### Feature Templates
 
 #### E1 — Global aggregation plane (read-only foundation)
-- **Status:** ⬜ Planned
+- **Status:** 🟢 Complete
 - **Scope:** New `global-plane` binary that registers regional control planes and aggregates their data via existing read-only API endpoints. Unified UI showing cross-region device list, regional health cards, artifact inventory, and aggregated audit feed.
 - **Dependencies:** Service tokens on regional planes; new `regional_planes` and `device_directory_cache` tables on global DB.
 - **Risks:** Regional plane API version skew; stale cache if sync goroutine falls behind.
 - **Acceptance:** Operator can register N regional planes and see a unified device list and health summary without opening N browser tabs. Zero changes to agents or regional control planes.
-- **Notes:** This is the foundation phase. The global plane binary can share internal packages from the control-plane Go module but runs as a separate service. Background sync goroutines poll each regional plane's `/api/v1/devices`, `/api/v1/health/summary`, `/api/v1/artifacts`. Regional plane last-seen and sync status surfaced in global UI. Build this phase first and validate value before adding write capabilities.
+- **Notes:** `cmd/global-plane` binary, `internal/globalplane` package (store, config, AES-256-GCM token encryption), `internal/globalplane/sync` (Manager + PlaneWorker with exponential backoff), `internal/globalplane/httpapi` (router, planes/aggregated handlers), 5 SQL migrations (`migrations/global/`). `auth.AuthStore` interface extracted so the global-plane store satisfies it without importing the full regional store. Two new service token scopes: `federation.push` and `federation.manage`. UI: `GlobalPage.jsx` with Planes health cards, Devices table, Artifacts table, Register Plane modal, 30s auto-refresh; admin-only nav entry with RBAC test coverage. Operator runbook in `docs/global-plane.md`.
 
 #### E2 — Artifact federation (single upload, N regions)
 - **Status:** ⬜ Planned

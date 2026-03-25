@@ -17,6 +17,7 @@ test('viewer is read-only', () => {
 
   assert.equal(permissions.views.dashboard, true)
   assert.equal(permissions.views.metrics, false)
+  assert.equal(permissions.views.global, false)
   assert.equal(permissions.logsTabs.audit, false)
   assert.equal(permissions.canManageArtifacts, false)
   assert.equal(permissions.canManageDesiredState, false)
@@ -33,6 +34,7 @@ test('operator gets operator writes but not admin-only actions', () => {
   const permissions = buildPermissionState({ authEnabled: true, roles: ['operator'] })
 
   assert.equal(permissions.views.metrics, false)
+  assert.equal(permissions.views.global, false)
   assert.equal(permissions.logsTabs.audit, false)
   assert.equal(permissions.canManageArtifacts, true)
   assert.equal(permissions.canManageDesiredState, true)
@@ -51,6 +53,7 @@ test('admin gets admin-only reads and writes', () => {
   const permissions = buildPermissionState({ authEnabled: true, roles: ['admin'] })
 
   assert.equal(permissions.views.metrics, true)
+  assert.equal(permissions.views.global, true)
   assert.equal(permissions.logsTabs.audit, true)
   assert.equal(permissions.canViewMetrics, true)
   assert.equal(permissions.canViewAudit, true)
