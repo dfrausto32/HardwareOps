@@ -10,6 +10,7 @@ const viewRequirements = {
   logs: 'viewer',
   security: 'viewer',
   settings: 'viewer',
+  global: 'admin',
 }
 
 const logsTabRequirements = {
