@@ -2333,6 +2333,17 @@ func (s *Store) CreateWebhookDelivery(delivery store.WebhookDelivery) error {
 	return nil
 }
 
+func (s *Store) GetWebhookDelivery(deliveryID string) (store.WebhookDelivery, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, d := range s.webhookDeliveries {
+		if d.ID == deliveryID {
+			return d, true, nil
+		}
+	}
+	return store.WebhookDelivery{}, false, nil
+}
+
 func (s *Store) UpdateWebhookDelivery(delivery store.WebhookDelivery) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2389,4 +2400,52 @@ func (s *Store) ConsumeDeployTrigger(deviceID string) (store.DeployTrigger, bool
 		delete(s.deployTriggers, deviceID)
 	}
 	return t, ok, nil
+}
+
+// ── Deployment status ─────────────────────────────────────────────────────────
+
+func (s *Store) GetGroupDeploymentStatus(groupID, artifactID string) ([]store.DeviceDeploymentStatus, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	grp, ok := s.groups[groupID]
+	if !ok {
+		return nil, nil
+	}
+	selector := map[string]any{}
+	if len(grp.SelectorJSON) > 0 {
+		_ = json.Unmarshal(grp.SelectorJSON, &selector)
+	}
+	var out []store.DeviceDeploymentStatus
+	for _, d := range s.devices {
+		if d.Status == "decommissioned" {
+			continue
+		}
+		if !labelsContain(d.LabelsJSON, selector) {
+			continue
+		}
+		ds := store.DeviceDeploymentStatus{
+			DeviceID: d.DeviceID,
+			Status:   "pending",
+		}
+		// Find the latest apply result for this device + artifact.
+		var latest store.ApplyResult
+		var found bool
+		for _, ar := range s.applyResults {
+			if ar.DeviceID != d.DeviceID || ar.ArtifactID != artifactID {
+				continue
+			}
+			if !found || ar.CreatedAt.After(latest.CreatedAt) {
+				latest = ar
+				found = true
+			}
+		}
+		if found {
+			ds.Status = latest.Status
+			ds.AppliedVersion = latest.AppliedVersion
+			ds.Error = latest.Error
+			ds.LastApplyAt = latest.CreatedAt
+		}
+		out = append(out, ds)
+	}
+	return out, nil
 }

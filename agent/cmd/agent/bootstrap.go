@@ -414,12 +414,23 @@ func buildBootstrapTLSConfig(cfg config.Config, logger *logging.Logger) *tls.Con
 		return nil
 	}
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		logger.Errorf("load system CA pool: %v", err)
+		os.Exit(1)
+	}
+	if pool == nil {
+		pool = x509.NewCertPool()
+	}
 	caPEM, err := os.ReadFile(cfg.CACertPath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			tlsConfig.RootCAs = pool
+			return tlsConfig
+		}
 		logger.Errorf("read control-plane CA: %v", err)
 		os.Exit(1)
 	}
-	pool := x509.NewCertPool()
 	if ok := pool.AppendCertsFromPEM(caPEM); !ok {
 		logger.Errorf("invalid control-plane CA cert")
 		os.Exit(1)

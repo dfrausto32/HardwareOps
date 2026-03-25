@@ -48,6 +48,7 @@ Start here. Use the canonical docs first; go to deep dives only for topic-specif
 |---|---|
 | `testing/prod-docker-lab.md` | Production-like on-prem validation stack using Docker |
 | `testing/prod-docker-test-plan.md` | Feature + edge + security validation checklist for that lab |
+| `incidents/` | Incident notes and live validation failures that need follow-up |
 
 Associated scripts: `../scripts/testing/`
 

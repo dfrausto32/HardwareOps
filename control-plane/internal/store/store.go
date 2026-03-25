@@ -435,6 +435,15 @@ type WebhookDelivery struct {
 	CreatedAt      time.Time
 }
 
+// DeviceDeploymentStatus is the per-device rollout state for a given artifact.
+type DeviceDeploymentStatus struct {
+	DeviceID       string
+	Status         string    // "pending" | "success" | "error"
+	AppliedVersion string
+	Error          string
+	LastApplyAt    time.Time // zero if no apply attempt yet
+}
+
 // DeployTrigger is a pending signal asking a device to apply its desired state
 // at its next check-in.
 type DeployTrigger struct {
@@ -570,6 +579,7 @@ type Store interface {
 	UpdateWebhook(webhook Webhook) error
 	DeleteWebhook(id string) error
 	CreateWebhookDelivery(delivery WebhookDelivery) error
+	GetWebhookDelivery(deliveryID string) (WebhookDelivery, bool, error)
 	UpdateWebhookDelivery(delivery WebhookDelivery) error
 	ListWebhookDeliveries(webhookID string, limit int) ([]WebhookDelivery, error)
 	UpdateWebhookLastFired(id string, at time.Time, status int) error
@@ -578,4 +588,7 @@ type Store interface {
 	ConsumeDeployTrigger(deviceID string) (DeployTrigger, bool, error)
 	// ListDevicesForGroup returns devices whose labels match the group's selector.
 	ListDevicesForGroup(groupID string, limit int) ([]Device, error)
+	// GetGroupDeploymentStatus returns per-device rollout state for artifactID
+	// across every non-decommissioned device in the group.
+	GetGroupDeploymentStatus(groupID, artifactID string) ([]DeviceDeploymentStatus, error)
 }

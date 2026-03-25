@@ -184,6 +184,12 @@ variable "demo_agent_env" {
   default     = {}
 }
 
+variable "demo_agent_secret_arns" {
+  description = "Secrets injected into the demo agent container (env name => secret ARN)."
+  type        = map(string)
+  default     = {}
+}
+
 variable "demo_agent_efs_file_system_id" {
   description = "EFS file system ID for demo agent persistent data."
   type        = string

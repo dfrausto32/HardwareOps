@@ -126,3 +126,15 @@ func quoteJSON(v string) string {
 	b, _ := json.Marshal(v)
 	return string(b)
 }
+
+func TestShouldImmediateRecheck(t *testing.T) {
+	if shouldImmediateRecheck(nil) {
+		t.Fatal("expected nil response to be false")
+	}
+	if shouldImmediateRecheck(&client.CheckinResponse{}) {
+		t.Fatal("expected default response to be false")
+	}
+	if !shouldImmediateRecheck(&client.CheckinResponse{ImmediateRecheckin: true}) {
+		t.Fatal("expected immediate recheck response to be true")
+	}
+}

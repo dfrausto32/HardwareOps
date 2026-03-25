@@ -2,7 +2,7 @@
 
 Status: Active (living document)  
 API namespace: `v1`  
-Last updated: 2026-03-17
+Last updated: 2026-03-24
 Source of truth for routes: `control-plane/internal/httpapi/router.go`
 
 This is the canonical contract for integrating with HardwareOps without relying on the GUI.
@@ -59,8 +59,17 @@ Auth modes:
 - service tokens: scoped machine tokens for automation
 - workload identity exchange: external CI OIDC token exchanged for short-lived HardwareOps bearer token
 
-Current scope gate:
-- `artifact.publish` allows pull/presign/complete ingest flows without user JWT
+Service token scopes — each scope grants access to a specific slice of the API without requiring a user role:
+
+| Scope | Grants access to |
+|---|---|
+| `artifact.publish` | pull ingest, presign-upload, complete; read artifact/attestation GET routes |
+| `artifact.read` | GET artifact list, detail, attestations, lifecycle status, vulnerability scan results |
+| `device.read` | GET device list, detail, group list, deployment status, vulnerability scan results |
+| `deployment.trigger` | `POST /devices/{deviceId}/trigger-apply`, `POST /groups/{groupId}/trigger-apply` |
+| `webhook.manage` | full CRUD on webhooks and deliveries |
+
+A service token may carry multiple scopes (comma-separated in the `scope` field at creation time). Scoped tokens are accepted on endpoints that also accept the corresponding role; a `device.read` token cannot write.
 
 mTLS/device identity:
 - device check-in/enroll paths rely on client cert identity when TLS/mTLS is enabled
@@ -76,10 +85,12 @@ All paths below are full paths.
 |---|---|---|---|
 | GET | `/api/v1/bootstrap` | public | bootstrap status |
 | GET | `/api/v1/bootstrap/ca` | public + bootstrap-token logic | downloads bootstrap CA |
-| GET | `/api/v1/auth/status` | public | auth mode and enabled state; includes `ldapEnabled: bool` when LDAP is configured |
+| GET | `/api/v1/auth/status` | public | auth mode and enabled state; includes `ldapEnabled: bool` when LDAP is configured; includes `smtpEnabled: bool` when SMTP is configured |
 | POST | `/api/v1/auth/login` | public | rate limited, returns JWT |
 | POST | `/api/v1/auth/ldap/login` | public | rate limited; LDAP/AD credential exchange, returns JWT identical to local login |
 | POST | `/api/v1/auth/register` | public | voucher/bootstrap-driven local registration |
+| POST | `/api/v1/auth/forgot-password` | public | rate limited; accepts `{"email":"..."}`, always returns 200 regardless of whether address is registered (no user-existence leak); sends reset link email when `SMTP_HOST` is configured |
+| POST | `/api/v1/auth/password-reset/complete` | public | rate limited; accepts `{"email":"...","token":"...","newPassword":"..."}` to redeem a reset token |
 | GET | `/api/v1/auth/me` | viewer | caller identity |
 | GET | `/api/v1/auth/workload-identity/status` | admin | configured workload identity providers |
 | POST | `/api/v1/auth/vouchers` | admin | create registration voucher |
@@ -91,12 +102,14 @@ All paths below are full paths.
 | POST | `/api/v1/users` | admin | create local user |
 | GET | `/api/v1/users` | admin | list users |
 | PATCH | `/api/v1/users/{userId}` | admin | update user |
+| POST | `/api/v1/users/{userId}/password-reset-token` | admin | issue a one-time reset token for a user; body: `{"reason":"...","ttlMinutes":15,"sendEmail":true}`; when `sendEmail: true` and SMTP is configured the token is emailed directly |
+| POST | `/api/v1/users/{userId}/invite` | admin | create a 72-hour invite token and email a setup link; requires SMTP to be configured |
 
 ### 5.2 Groups + Desired State
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| GET | `/api/v1/groups` | viewer | list group definitions |
+| GET | `/api/v1/groups` | viewer or `device.read` scope | list group definitions |
 | POST | `/api/v1/groups/batch` | operator | bulk group operations |
 | PUT | `/api/v1/groups/{groupId}` | operator | upsert group |
 | DELETE | `/api/v1/groups/{groupId}` | operator | delete group |
@@ -105,21 +118,23 @@ All paths below are full paths.
 | DELETE | `/api/v1/desired-state/groups/{groupId}` | operator | clear group desired state |
 | PUT | `/api/v1/desired-state/devices/{deviceId}` | operator | set device override |
 | DELETE | `/api/v1/desired-state/devices/{deviceId}` | operator | clear device override |
+| GET | `/api/v1/groups/{groupId}/deployment-status` | viewer or `device.read` scope | per-device rollout status for a given artifact; requires `?artifactId=<uuid>` query param |
 
 ### 5.3 Devices
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| GET | `/api/v1/devices` | viewer | list devices |
-| GET | `/api/v1/devices/{deviceId}` | viewer | device detail |
+| GET | `/api/v1/devices` | viewer or `device.read` scope | list devices |
+| GET | `/api/v1/devices/{deviceId}` | viewer or `device.read` scope | device detail |
 | PATCH | `/api/v1/devices/{deviceId}` | operator | update metadata/grouping fields |
 | DELETE | `/api/v1/devices/{deviceId}` | operator | delete device record |
 | POST | `/api/v1/devices/{deviceId}/decommission` | admin | terminal decommission |
 | POST | `/api/v1/devices/{deviceId}/apply-result` | device path | rate limited |
-| POST | `/api/v1/devices/checkin` | device path | rate limited |
+| POST | `/api/v1/devices/checkin` | device path | rate limited; response includes `immediateRecheckin: true` when a deploy trigger is pending |
 | POST | `/api/v1/devices/reenroll` | device path | rate limited |
-| GET | `/api/v1/devices/{deviceId}/vulnerability-scans` | viewer | list vulnerability scans for a device (Nessus-sourced) |
-| GET | `/api/v1/devices/{deviceId}/vulnerability-scans/latest` | viewer | most recent vulnerability scan for a device |
+| GET | `/api/v1/devices/{deviceId}/vulnerability-scans` | viewer or `device.read` scope | list vulnerability scans for a device (Nessus-sourced) |
+| GET | `/api/v1/devices/{deviceId}/vulnerability-scans/latest` | viewer or `device.read` scope | most recent vulnerability scan for a device |
+| POST | `/api/v1/devices/{deviceId}/trigger-apply` | operator or `deployment.trigger` scope | signal a specific device to re-check in immediately |
 
 ### 5.4 Enrollment (legacy + first-contact)
 
@@ -144,27 +159,27 @@ All paths below are full paths.
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
-| GET | `/api/v1/artifacts` | viewer | list artifacts |
-| GET | `/api/v1/artifacts/{artifactId}` | viewer | artifact detail |
+| GET | `/api/v1/artifacts` | viewer or `artifact.read` scope | list artifacts |
+| GET | `/api/v1/artifacts/{artifactId}` | viewer or `artifact.read` scope | artifact detail |
 | POST | `/api/v1/artifacts` | operator | register artifact metadata |
 | POST | `/api/v1/artifacts/upload` | operator | multipart upload + register |
-| POST | `/api/v1/artifacts/pull` | operator or service token (`artifact.publish`) | control-plane pull ingest |
-| POST | `/api/v1/artifacts/presign-upload` | operator or service token (`artifact.publish`) | presigned upload init |
-| POST | `/api/v1/artifacts/complete` | operator or service token (`artifact.publish`) | finalize presigned upload |
+| POST | `/api/v1/artifacts/pull` | operator or `artifact.publish` scope | control-plane pull ingest |
+| POST | `/api/v1/artifacts/presign-upload` | operator or `artifact.publish` scope | presigned upload init |
+| POST | `/api/v1/artifacts/complete` | operator or `artifact.publish` scope | finalize presigned upload |
 | POST | `/api/v1/artifacts/{artifactId}/attestations` | operator | submit in-toto / SLSA attestation; keyless bundles verified at upload |
-| GET | `/api/v1/artifacts/{artifactId}/attestations` | viewer | list attestations for an artifact |
+| GET | `/api/v1/artifacts/{artifactId}/attestations` | viewer or `artifact.read` scope | list attestations for an artifact |
 | POST | `/api/v1/artifacts/{artifactId}/deprecate` | operator | deprecate artifact |
 | POST | `/api/v1/artifacts/{artifactId}/restore` | operator | restore deprecated artifact |
 | DELETE | `/api/v1/artifacts/{artifactId}` | operator | hard delete (guarded by refs/policy) |
-| POST | `/api/v1/artifacts/{artifactId}/presign` | public route | presign download; integration should treat as sensitive |
-| GET | `/api/v1/artifacts/lifecycle/policy` | viewer | lifecycle policy |
+| POST | `/api/v1/artifacts/{artifactId}/presign` | viewer or `artifact.read` scope | presign download |
+| GET | `/api/v1/artifacts/lifecycle/policy` | viewer or `artifact.read` scope | lifecycle policy |
 | PUT | `/api/v1/artifacts/lifecycle/policy` | admin | set lifecycle policy |
-| GET | `/api/v1/artifacts/lifecycle/status` | viewer | lifecycle status summary |
+| GET | `/api/v1/artifacts/lifecycle/status` | viewer or `artifact.read` scope | lifecycle status summary |
 | POST | `/api/v1/artifacts/lifecycle/prune` | admin | immediate prune run |
 | GET | `/api/v1/artifacts/pull-credentials` | admin | credential resolver status; includes `vault_backed`, `vault_addr`, `vault_path`, `vaultCredentialRefs` when Vault is configured |
 | POST | `/api/v1/artifacts/pull-credentials/reload` | admin | reload resolver configuration; re-fetches from all configured backends (file, AWS SM, Vault) |
-| GET | `/api/v1/artifacts/{artifactId}/vulnerability-scans` | viewer | list vulnerability scans for an artifact |
-| GET | `/api/v1/artifacts/{artifactId}/vulnerability-scans/latest` | viewer | most recent vulnerability scan for an artifact |
+| GET | `/api/v1/artifacts/{artifactId}/vulnerability-scans` | viewer or `artifact.read` scope | list vulnerability scans for an artifact |
+| GET | `/api/v1/artifacts/{artifactId}/vulnerability-scans/latest` | viewer or `artifact.read` scope | most recent vulnerability scan for an artifact |
 | POST | `/api/v1/artifacts/{artifactId}/vulnerability-scans` | operator | trigger manual rescan for an artifact |
 | POST | `/api/v1/vulnerability-scans/nessus/sync` | admin | trigger immediate Nessus sync |
 | GET | `/api/v1/vulnerability-scans/nessus/status` | admin | Nessus sync status (last sync time, device match count) |
@@ -213,7 +228,73 @@ All paths below are full paths.
 | GET | `/api/v1/maintenance/upgrade` | viewer | upgrade runner status |
 | POST | `/api/v1/maintenance/upgrade` | admin | trigger upgrade |
 
-### 5.8 Metrics
+### 5.8 Webhooks
+
+Webhooks deliver real-time event payloads to an external HTTPS endpoint via POST. Each delivery is signed with HMAC-SHA256 (key = the webhook's `secret`; header: `X-HardwareOps-Signature`).
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| GET | `/api/v1/webhooks` | operator or `webhook.manage` scope | list webhooks |
+| POST | `/api/v1/webhooks` | operator or `webhook.manage` scope | create webhook |
+| GET | `/api/v1/webhooks/{webhookId}` | operator or `webhook.manage` scope | get webhook |
+| PATCH | `/api/v1/webhooks/{webhookId}` | operator or `webhook.manage` scope | update webhook |
+| DELETE | `/api/v1/webhooks/{webhookId}` | operator or `webhook.manage` scope | delete webhook |
+| POST | `/api/v1/webhooks/{webhookId}/test` | operator or `webhook.manage` scope | send a test ping payload |
+| GET | `/api/v1/webhooks/{webhookId}/deliveries` | operator or `webhook.manage` scope | list deliveries (most recent first) |
+| GET | `/api/v1/webhooks/{webhookId}/deliveries/{deliveryId}` | operator or `webhook.manage` scope | delivery detail including request/response bodies |
+| POST | `/api/v1/webhooks/{webhookId}/deliveries/{deliveryId}/redeliver` | operator or `webhook.manage` scope | re-send original payload; creates a new delivery record |
+
+**Webhook payload envelope:**
+
+```json
+{
+  "id": "uuid",
+  "eventType": "apply.result",
+  "deviceId": "uuid",
+  "firedAt": "2026-03-24T10:00:00Z",
+  "data": { ... }
+}
+```
+
+`deviceId` is present on device-scoped events (`apply.result`, `deploy.trigger`).
+
+**Supported `eventType` values:** `apply.result`, `deploy.trigger`, `ping`
+
+**Signature verification:**
+
+```bash
+# Python example
+import hmac, hashlib
+expected = hmac.new(secret.encode(), payload_bytes, hashlib.sha256).hexdigest()
+assert request.headers["X-HardwareOps-Signature"] == expected
+```
+
+### 5.9 Deploy Triggers
+
+Deploy triggers signal one or more devices to skip their normal check-in interval and re-check in immediately, consuming any pending desired-state change without waiting.
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| POST | `/api/v1/devices/{deviceId}/trigger-apply` | operator or `deployment.trigger` scope | signal one device to re-check in immediately |
+| POST | `/api/v1/groups/{groupId}/trigger-apply` | operator or `deployment.trigger` scope | signal all devices matching the group's label selector |
+
+**Request body:** empty or `{}`
+
+**Response (device trigger):**
+
+```json
+{ "deviceId": "uuid", "triggered": true }
+```
+
+**Response (group trigger):**
+
+```json
+{ "groupId": "uuid", "deviceCount": 5, "triggered": true }
+```
+
+When a trigger is pending, the device's next `POST /devices/checkin` response includes `"immediateRecheckin": true`, causing the agent to skip its sleep interval and re-check in within seconds.
+
+### 5.10 Metrics
 
 - Metrics route is configurable (`MetricsPath` in control-plane config; commonly `/metrics`)
 - Auth role when enabled: admin
@@ -408,6 +489,98 @@ GET /api/v1/vulnerability-scans/nessus/status
 
 See `docs/vulnerability-scanning.md` for configuration details and device-matching setup.
 
+### 6.8 Webhook lifecycle
+
+1. **Create a webhook** with a target URL and one or more event types:
+
+```json
+POST /api/v1/webhooks
+{
+  "name": "ci-listener",
+  "url": "https://ci.example.com/hooks/hardwareops",
+  "secret": "shared-hmac-secret",
+  "events": ["apply.result", "deploy.trigger"],
+  "active": true
+}
+```
+
+Response includes `webhookId`.
+
+2. **Test connectivity:**
+
+```bash
+POST /api/v1/webhooks/{webhookId}/test
+```
+
+Response: `{"deliveryId": "uuid", "success": true, "statusCode": 200}`
+
+3. **Check delivery history:**
+
+```bash
+GET /api/v1/webhooks/{webhookId}/deliveries
+```
+
+4. **Redeliver a failed delivery** (for example after listener downtime):
+
+```bash
+POST /api/v1/webhooks/{webhookId}/deliveries/{deliveryId}/redeliver
+```
+
+Redelivery creates a new delivery record with the original `payloadJson` and a fresh HMAC signature. The original failure record is preserved.
+
+### 6.9 CI/CD feedback loop (trigger → webhook → poll)
+
+This is the recommended pattern for CI pipelines that need fast, reliable feedback on a deployment.
+
+**Prerequisites:**
+- A service token with `artifact.publish`, `deployment.trigger`, and `artifact.read` scopes (or `webhook.manage` if self-managing the webhook)
+- A webhook registered with `apply.result` events pointing to a CI-reachable listener
+
+**Steps:**
+
+1. Publish artifact (see §6.3).
+2. Set desired state for the target group (`PUT /api/v1/desired-state/groups/{groupId}`).
+3. Trigger immediate re-check-in for all group devices:
+
+```bash
+POST /api/v1/groups/{groupId}/trigger-apply
+```
+
+4. Wait for `apply.result` webhook deliveries — each carries `deviceId`, `status` (`success`|`error`), and `appliedVersion`.
+
+5. Alternatively (or in addition), poll the deployment status endpoint:
+
+```
+GET /api/v1/groups/{groupId}/deployment-status?artifactId={artifactId}
+```
+
+Response:
+
+```json
+{
+  "groupId": "uuid",
+  "artifactId": "uuid",
+  "total": 10,
+  "pending": 2,
+  "applied": 7,
+  "failed": 1,
+  "complete": false,
+  "devices": [
+    {
+      "deviceId": "uuid",
+      "status": "success",
+      "appliedVersion": "2.1.0",
+      "error": "",
+      "lastApplyAt": "2026-03-24T10:05:00Z"
+    }
+  ]
+}
+```
+
+`complete` is `true` when `pending == 0` and `total > 0`. Poll until `complete` or a timeout, then inspect `failed`.
+
+**End-to-end script:** `scripts/test-ci-feedback-loop.sh` exercises this full flow against a running stack.
+
 ## 7) Guardrails and Security-Relevant Behavior
 
 - Auth login is rate-limited and subject to backoff controls.
@@ -439,3 +612,6 @@ Integrations must handle:
 - Keyless signing and attestations: `docs/artifact-provenance.md`
 - S3/GCS pull adapters and Vault credentials: `docs/cloud-pull-adapters.md`
 - Phase C developer internals: `docs/development/phase-c-internals.md`
+- CI/CD feedback loop smoke test: `scripts/test-ci-feedback-loop.sh`
+- Email delivery: `docs/email-delivery.md`
+- Vulnerability scanning: `docs/vulnerability-scanning.md`

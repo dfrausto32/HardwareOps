@@ -21,8 +21,8 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Phase B — Operational Maturity | 🟢 Complete | Audit/metrics/events/lifecycle/CI ingest/bulk ops shipped and operational. |
 | Phase B Extension — UX + Realtime | 🟢 Complete | Bulk actions + realtime updates + auth-session UX reset shipped. |
 | Operational Hardening (between B and C) | 🟢 Complete | Pull-boundary, token exposure, startup guardrails, break-glass backend, proxy trust policy, and abuse controls are all shipped. |
-| Phase C — Enterprise Readiness | 🟡 In progress | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, artifact tracking policies, the local-auth recovery stack (recovery codes, reset tokens, break-glass CLI), and CI workload identity federation are shipped. Remaining Phase C work is provenance policy, LDAP, and broader secrets integration. |
-| Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Remaining Phase D work is live-deployment acceptance gate execution, connected email delivery for auth recovery/setup, and custom RBAC policy delegation. |
+| Phase C — Enterprise Readiness | 🟢 Complete | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, artifact tracking policies, the local-auth recovery stack (recovery codes, reset tokens, break-glass CLI), CI workload identity federation, supply-chain provenance policy (Cosign/Sigstore), LDAP/AD auth, and Vault secrets integration are all shipped. |
+| Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Connected email delivery complete. Remaining Phase D work is live-deployment acceptance gate execution (operational) and full VPC reference diagram (docs). |
 | Phase E — Federated Multi-Region | ⬜ Planned | Hub-and-spoke federation layer: global management plane above regional control planes. Agents unchanged. |
 
 ### Active work queue (what is still to do)
@@ -30,9 +30,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 No items currently in-flight. Queue is clear.
 
 ### Prepared next tasks (agent-scoped)
-- `C-PROVENANCE-POLICY` — extend trusted-key verification into provenance / supply-chain policy
-- `D-PASSWORD-RECOVERY-EMAIL` — connected email delivery for account setup/reset plus deployment/runbook closeout
-- `D-CUSTOM-RBAC` — per-resource policy model on top of fixed roles
+- `E1-GLOBAL-AGGREGATION-PLANE` — new `global-plane` binary; register regional planes, background sync, unified device/health/artifact UI
 
 ---
 
@@ -80,6 +78,8 @@ No items currently in-flight. Queue is clear.
 - ✅ Password recovery layer 3 (host-local break-glass CLI for emergency local-admin password reset and recovery-admin creation with explicit audit reason capture).
 - ✅ CI workload identity federation (GitHub/GitLab/Jenkins helper flows, AWS/on-prem provider config wiring, live AWS provider bootstrap, and end-to-end GitHub Actions OIDC exchange plus signed artifact upload validation against the strict trusted-key policy).
 - ✅ Artifact tracking policies (explicit group/device/component auto-follow targets, immediate reconcile on desired-state save, trust-aware eligibility, artifact-family visibility in the UI, device-scoped artifact retrieval for assigned artifacts, and live AWS validation with a local agent applying `trackingdemo` 1.3.0 end-to-end).
+- ✅ Connected email delivery for auth recovery (SMTP mailer with STARTTLS/TLS/plain; forgot-password, admin-issued reset, and user-invite flows; `smtpEnabled` on auth status; SMTP vars in all deployment templates; SMTP password via Secrets Manager on AWS; operator runbook and full config reference docs).
+- ✅ CI/CD feedback loop (outbound webhooks with HMAC-SHA256, deploy triggers with `immediateRecheckin`, deployment status polling endpoint, scoped service tokens for all CI integration patterns, ICD documentation, and end-to-end smoke test script).
 
 ---
 
@@ -631,7 +631,7 @@ Confirm priorities with the team before mapping to agents.
 - **Notes:** IAM roles, WAFv2, ingress CIDR split, acceptance gate, and operator runbook shipped in the March 2026 IAM/WAF batch. Plaintext `DATABASE_URL` eliminated (#18); `enable_execute_command` default enforced to `false` (#19); CloudWatch alarm resources added to Terraform (#17). Remaining residual: live-deployment acceptance gate execution against a real AWS environment.
 
 #### Connected email delivery for auth recovery/setup
-- **Status:** ⬜ Planned
+- **Status:** 🟢 Complete
 - **Scope:** Optional SMTP/provider-backed delivery for password reset and account setup in connected deployments.
 - **Dependencies:** Password reset token model, deployment-specific mail configuration, public app URL, audit coverage.
 - **Risks:** User-existence leakage, mail delivery drift across environments, and secret handling for SMTP/provider credentials.
@@ -640,19 +640,7 @@ Confirm priorities with the team before mapping to agents.
   - Email request flow does not reveal whether a user exists.
   - Delivery failures and successful sends are auditable.
   - On-prem/airgapped deployments remain fully functional with email disabled.
-- **Notes:** Deferred from Phase C. First implementation should use SMTP relay config; provider-native adapters (SES/SendGrid/etc.) can follow only if needed. This should close out the final password-recovery runbook for cloud/connected environments.
-
-#### Custom RBAC policies
-- **Status:** ⬜ Planned
-- **Scope:** Per-resource permissions and delegated policy control on top of fixed roles.
-- **Dependencies:** Policy engine, policy storage model, admin UI, endpoint enforcement sweep, and audit coverage.
-- **Risks:** Misconfiguration can over-grant access or create support burden; policy debugging becomes harder than fixed roles.
-- **Acceptance:**
-  - Admins can define and assign resource-scoped policies without bypassing the fixed-role baseline.
-  - API and UI honor policy decisions consistently.
-  - Effective permissions are inspectable enough for support/debugging.
-  - Policy changes are fully audited.
-- **Notes:** Explicitly moved from Phase C to Phase D. The platform already has fixed-role RBAC and UI parity; custom policies are now treated as an advanced deployment/delegation feature rather than a Phase C blocker.
+- **Notes:** SMTP mailer package shipped with STARTTLS/TLS/plain modes, stdlib-only (no third-party mail library). `POST /api/v1/auth/forgot-password` (always-200, no user-existence leak), `POST /api/v1/users/{userId}/invite` (72-hour setup link), and `sendEmail: true` on `POST /api/v1/users/{userId}/password-reset-token` all wired. `smtpEnabled` field on `GET /api/v1/auth/status` gates UI forgot-password tab. SMTP vars in all deployment templates (on-prem compose, control-plane env example, AWS Terraform customer_stack and tfvars examples). `SMTP_PASSWORD` injected via ECS Secrets Manager `valueFrom` on AWS. `SMTP_SKIP_VERIFY` blocked by hardened profile. Audit events record `emailFound` and `emailSent` without user ID. Operator runbook in `docs/customer/security-and-recovery.md`; full config reference in `docs/email-delivery.md`.
 
 #### Multi-tenant controls (optional)
 - **Status:** ⬜ Backlog

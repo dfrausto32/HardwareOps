@@ -98,6 +98,45 @@ func TestPostgresStore_Integration(t *testing.T) {
 		t.Fatalf("list artifacts: count=%d err=%v", len(items), err)
 	}
 
+	statuses, err := s.GetGroupDeploymentStatus(groupID, artifactID)
+	if err != nil {
+		t.Fatalf("get empty deployment status: %v", err)
+	}
+	if len(statuses) != 1 || statuses[0].Status != "pending" {
+		t.Fatalf("unexpected empty deployment status: %#v", statuses)
+	}
+	if err := s.CreateApplyResult(store.ApplyResult{
+		ApplyID:        uuid.NewString(),
+		DeviceID:       deviceID,
+		ArtifactID:     artifactID,
+		Status:         "error",
+		Error:          "older",
+		CreatedAt:      time.Now().UTC().Add(-2 * time.Minute),
+		AppliedVersion: "0.9.0",
+	}); err != nil {
+		t.Fatalf("create old apply result: %v", err)
+	}
+	if err := s.CreateApplyResult(store.ApplyResult{
+		ApplyID:        uuid.NewString(),
+		DeviceID:       deviceID,
+		ArtifactID:     artifactID,
+		Status:         "success",
+		AppliedVersion: "1.0.0",
+		CreatedAt:      time.Now().UTC().Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("create latest apply result: %v", err)
+	}
+	statuses, err = s.GetGroupDeploymentStatus(groupID, artifactID)
+	if err != nil {
+		t.Fatalf("get populated deployment status: %v", err)
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("expected one device deployment status, got %d", len(statuses))
+	}
+	if statuses[0].DeviceID != deviceID || statuses[0].Status != "success" || statuses[0].AppliedVersion != "1.0.0" {
+		t.Fatalf("unexpected deployment status row: %#v", statuses[0])
+	}
+
 	hash := "abcd"
 	if err := s.CreateEnrollmentToken(hash, time.Now().UTC().Add(1*time.Hour)); err != nil {
 		t.Fatalf("create token: %v", err)

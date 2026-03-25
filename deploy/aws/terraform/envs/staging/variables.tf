@@ -316,6 +316,12 @@ variable "demo_agent_env" {
   default     = {}
 }
 
+variable "demo_agent_secret_arns" {
+  description = "Additional demo agent secrets."
+  type        = map(string)
+  default     = {}
+}
+
 variable "demo_bootstrap_email" {
   description = "Optional bootstrap email used by demo agents for token creation."
   type        = string

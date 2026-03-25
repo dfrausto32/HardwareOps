@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"github.com/hardwareops/control-plane/internal/auth"
 	"github.com/hardwareops/control-plane/internal/store"
 	"github.com/hardwareops/control-plane/internal/store/memory"
+	"github.com/hardwareops/control-plane/internal/webhooks"
 )
 
 type authFixture struct {
@@ -28,9 +30,10 @@ func newAuthFixture(t *testing.T) authFixture {
 	if err != nil {
 		t.Fatalf("new auth manager: %v", err)
 	}
+	encryptionKey := bytes.Repeat([]byte("k"), 32)
 
 	return authFixture{
-		router:  NewRouter(logDiscard(), Dependencies{Store: mem, Auth: manager}),
+		router:  NewRouter(logDiscard(), Dependencies{Store: mem, Auth: manager, WebhookEncryptionKey: encryptionKey}),
 		manager: manager,
 		store:   mem,
 	}
@@ -274,5 +277,174 @@ func TestServiceTokenCannotAccessRoleOnlyEndpoints(t *testing.T) {
 				t.Fatalf("expected %d, got %d body=%s", http.StatusUnauthorized, rec.Code, rec.Body.String())
 			}
 		})
+	}
+}
+
+func seedScopedRouteFixtures(t *testing.T, fixture authFixture) (deviceID, groupID, artifactID, webhookID, deliveryID string) {
+	t.Helper()
+
+	deviceID = uuid.NewString()
+	if err := fixture.store.UpsertDevice(store.Device{
+		DeviceID:  deviceID,
+		Status:    "active",
+		LastSeen:  time.Now().UTC(),
+		LabelsJSON: []byte(`{"role":"edge"}`),
+	}); err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
+
+	groupID = uuid.NewString()
+	if err := fixture.store.UpsertGroup(store.Group{
+		GroupID:      groupID,
+		Name:         "edge",
+		SelectorJSON: []byte(`{"role":"edge"}`),
+		CreatedAt:    time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed group: %v", err)
+	}
+
+	artifactID = uuid.NewString()
+	if err := fixture.store.CreateArtifact(store.Artifact{
+		ArtifactID: artifactID,
+		Name:       "agent",
+		Version:    "1.0.0",
+		ObjectKey:  "artifacts/agent.tar.gz",
+		SHA256:     "abc",
+		SizeBytes:  10,
+		CreatedAt:  time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed artifact: %v", err)
+	}
+
+	webhookID = uuid.NewString()
+	encryptedSecret, err := webhooks.EncryptSecret(bytes.Repeat([]byte("k"), 32), "shared-secret")
+	if err != nil {
+		t.Fatalf("encrypt secret: %v", err)
+	}
+	if err := fixture.store.CreateWebhook(store.Webhook{
+		ID:              webhookID,
+		Name:            "ci",
+		URL:             "http://example.invalid/hook",
+		EncryptedSecret: encryptedSecret,
+		EventTypes:      []string{"ping", "deployment.triggered"},
+		Enabled:         true,
+		CreatedAt:       time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed webhook: %v", err)
+	}
+
+	deliveryID = uuid.NewString()
+	if err := fixture.store.CreateWebhookDelivery(store.WebhookDelivery{
+		ID:          deliveryID,
+		WebhookID:   webhookID,
+		EventType:   "ping",
+		PayloadJSON: []byte(`{"eventType":"ping"}`),
+		Status:      "failed",
+		CreatedAt:   time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed webhook delivery: %v", err)
+	}
+
+	return deviceID, groupID, artifactID, webhookID, deliveryID
+}
+
+func TestServiceTokenScopedRouteAccess(t *testing.T) {
+	fixture := newAuthFixture(t)
+	deviceID, groupID, artifactID, webhookID, deliveryID := seedScopedRouteFixtures(t, fixture)
+	now := time.Now().UTC()
+
+	deviceReadToken := fixture.issueServiceToken(t, []string{auth.ScopeDeviceRead}, now.Add(time.Hour), false)
+	artifactReadToken := fixture.issueServiceToken(t, []string{auth.ScopeArtifactRead}, now.Add(time.Hour), false)
+	deploymentTriggerToken := fixture.issueServiceToken(t, []string{auth.ScopeDeploymentTrigger}, now.Add(time.Hour), false)
+	webhookManageToken := fixture.issueServiceToken(t, []string{auth.ScopeWebhookManage}, now.Add(time.Hour), false)
+	wrongScopeToken := fixture.issueServiceToken(t, []string{"inventory.read"}, now.Add(time.Hour), false)
+	expiredToken := fixture.issueServiceToken(t, []string{auth.ScopeDeviceRead}, now.Add(-time.Hour), false)
+	revokedToken := fixture.issueServiceToken(t, []string{auth.ScopeDeviceRead}, now.Add(time.Hour), true)
+
+	testCases := []struct {
+		name      string
+		method    string
+		path      string
+		body      string
+		okToken   string
+		wantOK    []int
+		wrongVerb bool
+	}{
+		{name: "device.read devices", method: http.MethodGet, path: "/api/v1/devices", okToken: deviceReadToken, wantOK: []int{http.StatusOK}},
+		{name: "device.read device detail", method: http.MethodGet, path: "/api/v1/devices/" + deviceID, okToken: deviceReadToken, wantOK: []int{http.StatusOK}},
+		{name: "device.read groups", method: http.MethodGet, path: "/api/v1/groups", okToken: deviceReadToken, wantOK: []int{http.StatusOK}},
+		{name: "device.read deployment status", method: http.MethodGet, path: "/api/v1/groups/" + groupID + "/deployment-status?artifactId=" + artifactID, okToken: deviceReadToken, wantOK: []int{http.StatusOK}},
+		{name: "device.read device vuln scans", method: http.MethodGet, path: "/api/v1/devices/" + deviceID + "/vulnerability-scans", okToken: deviceReadToken, wantOK: []int{http.StatusOK}},
+		{name: "artifact.read artifacts", method: http.MethodGet, path: "/api/v1/artifacts", okToken: artifactReadToken, wantOK: []int{http.StatusOK}},
+		{name: "artifact.read artifact detail", method: http.MethodGet, path: "/api/v1/artifacts/" + artifactID, okToken: artifactReadToken, wantOK: []int{http.StatusOK}},
+		{name: "artifact.read attestations", method: http.MethodGet, path: "/api/v1/artifacts/" + artifactID + "/attestations", okToken: artifactReadToken, wantOK: []int{http.StatusOK}},
+		{name: "artifact.read lifecycle status", method: http.MethodGet, path: "/api/v1/artifacts/lifecycle/status", okToken: artifactReadToken, wantOK: []int{http.StatusOK}},
+		{name: "artifact.read vuln scans", method: http.MethodGet, path: "/api/v1/artifacts/" + artifactID + "/vulnerability-scans", okToken: artifactReadToken, wantOK: []int{http.StatusOK}},
+		{name: "artifact.read presign", method: http.MethodPost, path: "/api/v1/artifacts/" + artifactID + "/presign", body: `{}`, okToken: artifactReadToken, wantOK: []int{http.StatusInternalServerError}},
+		{name: "deployment.trigger device", method: http.MethodPost, path: "/api/v1/devices/" + deviceID + "/trigger-apply", body: `{}`, okToken: deploymentTriggerToken, wantOK: []int{http.StatusOK}},
+		{name: "deployment.trigger group", method: http.MethodPost, path: "/api/v1/groups/" + groupID + "/trigger-apply", body: `{}`, okToken: deploymentTriggerToken, wantOK: []int{http.StatusOK}},
+		{name: "webhook.manage list", method: http.MethodGet, path: "/api/v1/webhooks", okToken: webhookManageToken, wantOK: []int{http.StatusOK}},
+		{name: "webhook.manage get", method: http.MethodGet, path: "/api/v1/webhooks/" + webhookID, okToken: webhookManageToken, wantOK: []int{http.StatusOK}},
+		{name: "webhook.manage deliveries", method: http.MethodGet, path: "/api/v1/webhooks/" + webhookID + "/deliveries", okToken: webhookManageToken, wantOK: []int{http.StatusOK}},
+		{name: "webhook.manage create", method: http.MethodPost, path: "/api/v1/webhooks", body: `{"name":"ci","url":"http://example.invalid/hook","eventTypes":["ping"],"enabled":true}`, okToken: webhookManageToken, wantOK: []int{http.StatusCreated}},
+		{name: "webhook.manage update", method: http.MethodPut, path: "/api/v1/webhooks/" + webhookID, body: `{"name":"new-name","enabled":true}`, okToken: webhookManageToken, wantOK: []int{http.StatusOK}},
+		{name: "webhook.manage redeliver", method: http.MethodPost, path: "/api/v1/webhooks/" + webhookID + "/deliveries/" + deliveryID + "/redeliver", okToken: webhookManageToken, wantOK: []int{http.StatusOK}},
+		{name: "webhook.manage test", method: http.MethodPost, path: "/api/v1/webhooks/" + webhookID + "/test", okToken: webhookManageToken, wantOK: []int{http.StatusOK}},
+		{name: "webhook.manage delete", method: http.MethodDelete, path: "/api/v1/webhooks/" + webhookID, okToken: webhookManageToken, wantOK: []int{http.StatusNoContent}},
+	}
+
+	hasStatus := func(got int, want []int) bool {
+		for _, code := range want {
+			if got == code {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := performRequest(t, fixture.router, tc.method, tc.path, tc.body, tc.okToken)
+			if !hasStatus(rec.Code, tc.wantOK) {
+				t.Fatalf("scoped token: expected one of %v, got %d body=%s", tc.wantOK, rec.Code, rec.Body.String())
+			}
+
+			rec = performRequest(t, fixture.router, tc.method, tc.path, tc.body, wrongScopeToken)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("wrong scope: expected %d, got %d body=%s", http.StatusForbidden, rec.Code, rec.Body.String())
+			}
+
+			rec = performRequest(t, fixture.router, tc.method, tc.path, tc.body, "")
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("anonymous: expected %d, got %d body=%s", http.StatusUnauthorized, rec.Code, rec.Body.String())
+			}
+		})
+	}
+
+	expiredCases := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{name: "expired device.read", method: http.MethodGet, path: "/api/v1/devices"},
+		{name: "revoked device.read", method: http.MethodGet, path: "/api/v1/groups"},
+	}
+	for _, tc := range expiredCases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := performRequest(t, fixture.router, tc.method, tc.path, tc.body, expiredToken)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("expired: expected %d, got %d body=%s", http.StatusUnauthorized, rec.Code, rec.Body.String())
+			}
+			rec = performRequest(t, fixture.router, tc.method, tc.path, tc.body, revokedToken)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("revoked: expected %d, got %d body=%s", http.StatusUnauthorized, rec.Code, rec.Body.String())
+			}
+		})
+	}
+
+	rec := performRequest(t, fixture.router, http.MethodPost, "/api/v1/artifacts/presign-upload", `{}`, deploymentTriggerToken)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("deployment.trigger should not grant artifact upload: got %d body=%s", rec.Code, rec.Body.String())
 	}
 }

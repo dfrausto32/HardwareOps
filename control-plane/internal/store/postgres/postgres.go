@@ -3787,11 +3787,37 @@ func (s *Store) CreateWebhookDelivery(delivery store.WebhookDelivery) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO webhook_deliveries
 		(id, webhook_id, event_type, payload, status, attempts, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
 	`, delivery.ID, delivery.WebhookID, delivery.EventType,
-		nullIfEmptyBytes(delivery.PayloadJSON), delivery.Status,
+		nullIfEmpty(string(delivery.PayloadJSON)), delivery.Status,
 		delivery.Attempts, coalesceTime(delivery.CreatedAt))
 	return err
+}
+
+func (s *Store) GetWebhookDelivery(deliveryID string) (store.WebhookDelivery, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var d store.WebhookDelivery
+	var lastAttemptAt *time.Time
+	var responseStatus sql.NullInt32
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, webhook_id, event_type, payload, status, attempts, last_attempt_at, response_status, created_at
+		FROM webhook_deliveries WHERE id = $1
+	`, deliveryID).Scan(&d.ID, &d.WebhookID, &d.EventType, &d.PayloadJSON,
+		&d.Status, &d.Attempts, &lastAttemptAt, &responseStatus, &d.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.WebhookDelivery{}, false, nil
+	}
+	if err != nil {
+		return store.WebhookDelivery{}, false, err
+	}
+	if lastAttemptAt != nil {
+		d.LastAttemptAt = *lastAttemptAt
+	}
+	if responseStatus.Valid {
+		d.ResponseStatus = int(responseStatus.Int32)
+	}
+	return d, true, nil
 }
 
 func (s *Store) UpdateWebhookDelivery(delivery store.WebhookDelivery) error {
@@ -3893,4 +3919,48 @@ func coalesceTime(t time.Time) time.Time {
 		return time.Now().UTC()
 	}
 	return t
+}
+
+// ── Deployment status ─────────────────────────────────────────────────────────
+
+func (s *Store) GetGroupDeploymentStatus(groupID, artifactID string) ([]store.DeviceDeploymentStatus, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `
+		SELECT d.device_id::text,
+		       COALESCE(dar.status, 'pending'),
+		       COALESCE(dar.applied_version, ''),
+		       COALESCE(dar.error, ''),
+		       dar.last_apply_at
+		FROM devices d
+		INNER JOIN groups g ON g.group_id = $1
+		LEFT JOIN LATERAL (
+		    SELECT status, applied_version, error, created_at AS last_apply_at
+		    FROM device_apply_results
+		    WHERE device_id = d.device_id
+		      AND artifact_id = $2
+		    ORDER BY created_at DESC
+		    LIMIT 1
+		) dar ON true
+		WHERE COALESCE(d.labels, '{}'::jsonb) @> COALESCE(g.selector, '{}'::jsonb)
+		  AND d.status != 'decommissioned'
+		ORDER BY d.device_id
+	`, groupID, artifactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.DeviceDeploymentStatus
+	for rows.Next() {
+		var s store.DeviceDeploymentStatus
+		var lastApplyAt *time.Time
+		if err := rows.Scan(&s.DeviceID, &s.Status, &s.AppliedVersion, &s.Error, &lastApplyAt); err != nil {
+			return nil, err
+		}
+		if lastApplyAt != nil {
+			s.LastApplyAt = *lastApplyAt
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
 }

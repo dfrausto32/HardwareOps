@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -294,6 +295,20 @@ func TestWebhook(logger *log.Logger, st store.Store, encryptionKey []byte) http.
 			"firedAt":   time.Now().UTC(),
 			"data":      map[string]any{"webhookId": id, "test": true},
 		})
+		deliveryID := uuid.NewString()
+		createdAt := time.Now().UTC()
+		if err := st.CreateWebhookDelivery(store.WebhookDelivery{
+			ID:          deliveryID,
+			WebhookID:   wh.ID,
+			EventType:   "ping",
+			PayloadJSON: payload,
+			Status:      "pending",
+			CreatedAt:   createdAt,
+		}); err != nil {
+			logger.Printf("webhook test: create delivery record: %v", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
 		sig := hmacSHA256Hex(secret, payload)
 		client := &http.Client{Timeout: 10 * time.Second}
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, wh.URL, strings.NewReader(string(payload)))
@@ -306,11 +321,142 @@ func TestWebhook(logger *log.Logger, st store.Store, encryptionKey []byte) http.
 		req.Header.Set("User-Agent", "HardwareOps-Webhook/1.0")
 		resp, err := client.Do(req)
 		if err != nil {
+			_ = st.UpdateWebhookDelivery(store.WebhookDelivery{
+				ID:            deliveryID,
+				WebhookID:     wh.ID,
+				EventType:     "ping",
+				PayloadJSON:   payload,
+				Status:        "failed",
+				Attempts:      1,
+				LastAttemptAt: time.Now().UTC(),
+				CreatedAt:     createdAt,
+			})
 			writeJSON(w, map[string]any{"success": false, "error": err.Error()})
 			return
 		}
 		_ = resp.Body.Close()
-		writeJSON(w, map[string]any{"success": resp.StatusCode >= 200 && resp.StatusCode < 300, "statusCode": resp.StatusCode})
+		now := time.Now().UTC()
+		delivery := store.WebhookDelivery{
+			ID:             deliveryID,
+			WebhookID:      wh.ID,
+			EventType:      "ping",
+			PayloadJSON:    payload,
+			Attempts:       1,
+			LastAttemptAt:  now,
+			ResponseStatus: resp.StatusCode,
+			CreatedAt:      createdAt,
+		}
+		success := resp.StatusCode >= 200 && resp.StatusCode < 300
+		if success {
+			delivery.Status = "delivered"
+			_ = st.UpdateWebhookLastFired(wh.ID, now, resp.StatusCode)
+		} else {
+			delivery.Status = "failed"
+		}
+		_ = st.UpdateWebhookDelivery(delivery)
+		writeJSON(w, map[string]any{"success": success, "statusCode": resp.StatusCode, "deliveryId": deliveryID})
+	}
+}
+
+// RedeliverWebhookDelivery re-sends the payload from a previous delivery
+// attempt. A new delivery record is created so the original failure history
+// is preserved. Returns the new delivery ID and whether it succeeded.
+//
+// POST /api/v1/webhooks/{webhookId}/deliveries/{deliveryId}/redeliver
+func RedeliverWebhookDelivery(logger *log.Logger, st store.Store, encryptionKey []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		webhookID := chi.URLParam(r, "webhookId")
+		deliveryID := chi.URLParam(r, "deliveryId")
+
+		wh, found, err := st.GetWebhook(webhookID)
+		if err != nil {
+			logger.Printf("redeliver: get webhook %s: %v", webhookID, err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		if !found {
+			http.Error(w, "webhook not found", http.StatusNotFound)
+			return
+		}
+		if len(encryptionKey) == 0 {
+			http.Error(w, "webhook encryption not configured", http.StatusServiceUnavailable)
+			return
+		}
+
+		original, found, err := st.GetWebhookDelivery(deliveryID)
+		if err != nil {
+			logger.Printf("redeliver: get delivery %s: %v", deliveryID, err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		if !found || original.WebhookID != webhookID {
+			http.Error(w, "delivery not found", http.StatusNotFound)
+			return
+		}
+
+		secret, err := webhooks.DecryptSecret(encryptionKey, wh.EncryptedSecret)
+		if err != nil {
+			logger.Printf("redeliver: decrypt secret for webhook %s: %v", webhookID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		// Create a fresh delivery record so the original failure is preserved.
+		newDelivery := store.WebhookDelivery{
+			ID:          uuid.NewString(),
+			WebhookID:   webhookID,
+			EventType:   original.EventType,
+			PayloadJSON: original.PayloadJSON,
+			Status:      "pending",
+			CreatedAt:   time.Now().UTC(),
+		}
+		if err := st.CreateWebhookDelivery(newDelivery); err != nil {
+			logger.Printf("redeliver: create delivery record: %v", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+
+		sig := hmacSHA256Hex(secret, original.PayloadJSON)
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, wh.URL, bytes.NewReader(original.PayloadJSON))
+		if err != nil {
+			newDelivery.Status = "failed"
+			newDelivery.Attempts = 1
+			newDelivery.LastAttemptAt = time.Now().UTC()
+			_ = st.UpdateWebhookDelivery(newDelivery)
+			writeJSON(w, map[string]any{"deliveryId": newDelivery.ID, "success": false, "error": "invalid webhook url"})
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-HardwareOps-Signature", "sha256="+sig)
+		req.Header.Set("User-Agent", "HardwareOps-Webhook/1.0")
+
+		client := &http.Client{Timeout: 10 * time.Second}
+		now := time.Now().UTC()
+		httpResp, deliverErr := client.Do(req)
+
+		newDelivery.Attempts = 1
+		newDelivery.LastAttemptAt = now
+		if deliverErr != nil {
+			newDelivery.Status = "failed"
+			_ = st.UpdateWebhookDelivery(newDelivery)
+			writeJSON(w, map[string]any{"deliveryId": newDelivery.ID, "success": false, "error": deliverErr.Error()})
+			return
+		}
+		_ = httpResp.Body.Close()
+		newDelivery.ResponseStatus = httpResp.StatusCode
+		if httpResp.StatusCode >= 200 && httpResp.StatusCode < 300 {
+			newDelivery.Status = "delivered"
+			_ = st.UpdateWebhookLastFired(webhookID, now, httpResp.StatusCode)
+		} else {
+			newDelivery.Status = "failed"
+		}
+		_ = st.UpdateWebhookDelivery(newDelivery)
+
+		writeJSON(w, map[string]any{
+			"deliveryId": newDelivery.ID,
+			"success":    newDelivery.Status == "delivered",
+			"statusCode": httpResp.StatusCode,
+		})
 	}
 }
 

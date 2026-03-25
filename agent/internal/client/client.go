@@ -119,10 +119,11 @@ type DesiredComponent struct {
 }
 
 type CheckinResponse struct {
-	Desired        *DesiredState       `json:"desired"`
-	PendingActions []Action            `json:"pendingActions,omitempty"`
-	ServerTime     time.Time           `json:"serverTime"`
-	SigningTrust   *SigningTrustBundle `json:"signingTrust,omitempty"`
+	Desired             *DesiredState       `json:"desired"`
+	PendingActions      []Action            `json:"pendingActions,omitempty"`
+	ServerTime          time.Time           `json:"serverTime"`
+	SigningTrust        *SigningTrustBundle `json:"signingTrust,omitempty"`
+	ImmediateRecheckin  bool                `json:"immediateRecheckin,omitempty"`
 }
 
 type Action struct {

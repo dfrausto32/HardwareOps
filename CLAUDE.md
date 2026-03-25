@@ -72,9 +72,34 @@ cd ui && npm run test:rbac
 
 # Artifact trust/signing validation
 ./scripts/test-artifact-trust.sh
+
+# CI/CD feedback loop (webhooks, deploy triggers, deployment status, scoped service tokens)
+./scripts/test-ci-feedback-loop.sh
 ```
 
 Go modules have no dedicated test targets — test with standard `go test ./...` inside `control-plane/` or `agent/`.
+
+### Running tests against the AWS instance
+
+The scripts above default to `https://localhost:8080`. To run against the live AWS instance, set these environment variables before invoking the script:
+
+```bash
+export BASE_URL=https://<your-aws-instance-hostname>
+export AUTH_EMAIL=admin@example.com
+export AUTH_PASSWORD=<admin-password>
+# If the AWS instance uses a self-signed or internal CA:
+export CA_CERT_PATH=/path/to/ca.crt
+# OR to skip TLS verification entirely (not for production use):
+export INSECURE=1
+```
+
+Then run:
+
+```bash
+./scripts/test-ci-feedback-loop.sh
+```
+
+All scripts read `BASE_URL`, `AUTH_EMAIL`, `AUTH_PASSWORD`, and `CA_CERT_PATH` / `INSECURE` from the environment and fall back to localhost defaults when unset. The `test-ci-feedback-loop.sh` script also starts a local Python HTTP listener for the webhook delivery test; ensure the AWS instance can reach the machine running the script on `WEBHOOK_PORT` (default `9876`).
 
 ## Building
 

@@ -68,6 +68,7 @@ module "stack" {
   demo_agent_memory                            = var.demo_agent_memory
   demo_agent_checkin_interval_sec              = var.demo_agent_checkin_interval_sec
   demo_agent_env                               = var.demo_agent_env
+  demo_agent_secret_arns                       = var.demo_agent_secret_arns
   demo_bootstrap_email                         = var.demo_bootstrap_email
   demo_bootstrap_password                      = var.demo_bootstrap_password
 }

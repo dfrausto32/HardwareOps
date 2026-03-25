@@ -365,6 +365,12 @@ variable "demo_agent_env" {
   default     = {}
 }
 
+variable "demo_agent_secret_arns" {
+  description = "Demo agent secrets map (env name => secret ARN)."
+  type        = map(string)
+  default     = {}
+}
+
 variable "demo_bootstrap_email" {
   description = "Bootstrap admin email for demo agent self-enrollment. If null, derived from control_plane_env."
   type        = string

@@ -104,6 +104,7 @@ func (d *Dispatcher) fanout(event events.Event) {
 	payload, _ := json.Marshal(Payload{
 		ID:        uuid.NewString(),
 		EventType: event.Type,
+		DeviceID:  event.DeviceID,
 		FiredAt:   event.At,
 		Data:      event.Payload,
 	})

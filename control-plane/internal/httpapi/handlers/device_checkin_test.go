@@ -230,3 +230,78 @@ func TestDeviceCheckin_AppliesSignaturePolicyDefaults(t *testing.T) {
 		t.Fatalf("expected signingKeyId default, got %#v", policy["signingKeyId"])
 	}
 }
+
+func TestDeviceCheckin_ImmediateRecheckinConsumesPendingTrigger(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+	deviceID := uuid.NewString()
+	reqBody := []byte(`{"deviceId":"` + deviceID + `","agentVersion":"0.1.0","current":{"softwareVersion":"v1","configRev":"c1"}}`)
+
+	if err := mem.UpsertDeployTrigger(store.DeployTrigger{
+		DeviceID:    deviceID,
+		TriggeredBy: "test",
+		TriggeredAt: time.Now().UTC(),
+		Reason:      "ci",
+	}); err != nil {
+		t.Fatalf("seed trigger: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/checkin", bytes.NewReader(reqBody))
+	req, _ = attachMTLSDevice(t, mem, req, deviceID)
+	w := httptest.NewRecorder()
+
+	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp DeviceCheckinResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid response json: %v", err)
+	}
+	if !resp.ImmediateRecheckin {
+		t.Fatal("expected immediateRecheckin=true")
+	}
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/devices/checkin", bytes.NewReader(reqBody))
+	req2 = attachExistingMTLSDevice(t, mem, req2, deviceID)
+	w2 := httptest.NewRecorder()
+	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil, ArtifactSignaturePolicy{}).ServeHTTP(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected 200 on second check-in, got %d", w2.Code)
+	}
+	var resp2 DeviceCheckinResponse
+	if err := json.Unmarshal(w2.Body.Bytes(), &resp2); err != nil {
+		t.Fatalf("invalid response json: %v", err)
+	}
+	if resp2.ImmediateRecheckin {
+		t.Fatal("expected immediateRecheckin to be consumed after one check-in")
+	}
+}
+
+func TestDeviceCheckin_NoPendingTriggerOmitsImmediateRecheckin(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+	deviceID := uuid.NewString()
+	reqBody := []byte(`{"deviceId":"` + deviceID + `","agentVersion":"0.1.0","current":{"softwareVersion":"v1","configRev":"c1"}}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/checkin", bytes.NewReader(reqBody))
+	req, _ = attachMTLSDevice(t, mem, req, deviceID)
+	w := httptest.NewRecorder()
+
+	DeviceCheckin(logger, mem, nil, false, "", nil, DeviceIdentityPolicy{}, nil, ArtifactSignaturePolicy{}).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp DeviceCheckinResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid response json: %v", err)
+	}
+	if resp.ImmediateRecheckin {
+		t.Fatal("expected immediateRecheckin=false without pending trigger")
+	}
+	if bytes.Contains(w.Body.Bytes(), []byte(`"immediateRecheckin"`)) {
+		t.Fatalf("expected immediateRecheckin to be omitted from JSON: %s", w.Body.String())
+	}
+}

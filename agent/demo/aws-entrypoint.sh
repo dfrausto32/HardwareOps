@@ -122,6 +122,15 @@ ensure_dir "$CERT_DIR"
 ensure_dir "$(dirname "$STATE_PATH")"
 ensure_dir "$ARTIFACT_ROOT"
 
+if [ -n "${CONTROL_PLANE_CA_CERT_PEM:-}" ]; then
+  if [ -z "${CONTROL_PLANE_CA_CERT_PATH:-}" ]; then
+    export CONTROL_PLANE_CA_CERT_PATH="$CERT_DIR/control-plane-ca.crt"
+  fi
+  ensure_dir "$(dirname "$CONTROL_PLANE_CA_CERT_PATH")"
+  printf '%s\n' "$CONTROL_PLANE_CA_CERT_PEM" >"$CONTROL_PLANE_CA_CERT_PATH"
+  chmod 0644 "$CONTROL_PLANE_CA_CERT_PATH"
+fi
+
 if [ ! -s "$DEVICE_CERT_PATH" ] || [ ! -s "$DEVICE_KEY_PATH" ]; then
   log "device cert/key missing, enrolling demo agent"
 

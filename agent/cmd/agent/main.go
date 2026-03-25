@@ -169,8 +169,16 @@ func main() {
 		if *once {
 			return
 		}
+		if shouldImmediateRecheck(resp) {
+			logger.Infof("deploy trigger: rechecking immediately")
+			continue
+		}
 		time.Sleep(interval + jitterDuration(jitterMax(interval, cfg), rng))
 	}
+}
+
+func shouldImmediateRecheck(resp *client.CheckinResponse) bool {
+	return resp != nil && resp.ImmediateRecheckin
 }
 
 func handlePendingActions(actions []client.Action, cfg config.Config, c *client.Client, st *state.State, logger *logging.Logger) (bool, error) {
@@ -280,27 +288,28 @@ func buildTLSConfig(cfg config.Config, logger *logging.Logger) *tls.Config {
 	if cfg.CACertPath == "" && cfg.DeviceCertPath == "" && cfg.DeviceKeyPath == "" {
 		return nil
 	}
-	// Once any TLS option is set, require the CA cert to prevent system CA fallback.
-	if cfg.CACertPath == "" {
-		logger.Errorf("CONTROL_PLANE_CA_CERT_PATH is required when using mTLS; refusing to fall back to system CA store")
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		logger.Errorf("load system CA pool: %v", err)
 		os.Exit(1)
 	}
-
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
-
+	if pool == nil {
+		pool = x509.NewCertPool()
+	}
 	if cfg.CACertPath != "" {
 		caPEM, err := os.ReadFile(cfg.CACertPath)
 		if err != nil {
-			logger.Errorf("read control-plane CA: %v", err)
-			os.Exit(1)
-		}
-		pool := x509.NewCertPool()
-		if ok := pool.AppendCertsFromPEM(caPEM); !ok {
+			if !errors.Is(err, os.ErrNotExist) {
+				logger.Errorf("read control-plane CA: %v", err)
+				os.Exit(1)
+			}
+		} else if ok := pool.AppendCertsFromPEM(caPEM); !ok {
 			logger.Errorf("invalid control-plane CA cert")
 			os.Exit(1)
 		}
-		tlsConfig.RootCAs = pool
 	}
+	tlsConfig.RootCAs = pool
 
 	if cfg.DeviceCertPath != "" || cfg.DeviceKeyPath != "" {
 		if cfg.DeviceCertPath == "" || cfg.DeviceKeyPath == "" {

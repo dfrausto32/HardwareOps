@@ -30,6 +30,7 @@ locals {
   execution_secret_arns = distinct(compact(concat(
     values(var.control_plane_secret_arns),
     values(var.gateway_secret_arns),
+    values(var.demo_agent_secret_arns),
   )))
   task_secret_arns    = distinct(compact(var.task_secret_arns))
   secret_kms_key_arns = distinct(compact(var.secret_kms_key_arns))
@@ -427,6 +428,12 @@ resource "aws_ecs_task_definition" "demo_agent" {
           }
         ]
       )
+      secrets = [
+        for k, v in var.demo_agent_secret_arns : {
+          name      = k
+          valueFrom = v
+        }
+      ]
       mountPoints = [
         {
           sourceVolume  = "demo_data"

@@ -25,8 +25,37 @@ func TestCheckIn(t *testing.T) {
 
 	c := New(srv.URL)
 	st := state.State{DeviceID: "dev-1", AgentVersion: "0.1.0"}
-	if _, err := c.CheckIn(st, nil); err != nil {
+	resp, err := c.CheckIn(st, nil)
+	if err != nil {
 		t.Fatalf("checkin failed: %v", err)
+	}
+	if resp.ImmediateRecheckin {
+		t.Fatal("expected immediateRecheckin=false by default")
+	}
+}
+
+func TestCheckIn_ImmediateRecheckin(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/devices/checkin" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"serverTime":         time.Now().UTC(),
+			"immediateRecheckin": true,
+		})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL)
+	st := state.State{DeviceID: "dev-1", AgentVersion: "0.1.0"}
+	resp, err := c.CheckIn(st, nil)
+	if err != nil {
+		t.Fatalf("checkin failed: %v", err)
+	}
+	if !resp.ImmediateRecheckin {
+		t.Fatal("expected immediateRecheckin to be preserved from JSON")
 	}
 }
 

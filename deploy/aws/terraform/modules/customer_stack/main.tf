@@ -95,11 +95,12 @@ locals {
     "",
   )
   demo_default_agent_env = {
-    DEMO_APP_URL            = "https://${var.app_host}"
-    DEMO_DEVICES_URL        = "https://${var.devices_host}:8443"
-    CHECKIN_INTERVAL_SEC    = tostring(var.demo_agent_checkin_interval_sec)
-    DEMO_BOOTSTRAP_EMAIL    = local.demo_bootstrap_email
-    DEMO_BOOTSTRAP_PASSWORD = local.demo_bootstrap_password
+    DEMO_APP_URL               = "https://${var.app_host}"
+    DEMO_DEVICES_URL           = "https://${var.devices_host}:8443"
+    CHECKIN_INTERVAL_SEC       = tostring(var.demo_agent_checkin_interval_sec)
+    DEMO_BOOTSTRAP_EMAIL       = local.demo_bootstrap_email
+    DEMO_BOOTSTRAP_PASSWORD    = local.demo_bootstrap_password
+    CONTROL_PLANE_CA_CERT_PATH = "/data/certs/control-plane-ca.crt"
   }
   effective_demo_agent_env = merge(local.demo_default_agent_env, var.demo_agent_env)
   task_secret_arns = concat(
@@ -294,6 +295,7 @@ module "ecs" {
   demo_agent_cpu                  = var.demo_agent_cpu
   demo_agent_memory               = var.demo_agent_memory
   demo_agent_env                  = local.effective_demo_agent_env
+  demo_agent_secret_arns          = var.demo_agent_secret_arns
   demo_agent_efs_file_system_id   = local.demo_agents_enabled ? aws_efs_file_system.demo[0].id : null
   demo_agent_efs_access_point_ids = local.demo_agents_enabled ? aws_efs_access_point.demo[*].id : []
   enable_execute_command          = var.enable_execute_command

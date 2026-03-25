@@ -21,7 +21,10 @@ import (
 )
 
 func withURLParam(req *http.Request, key, val string) *http.Request {
-	routeCtx := chi.NewRouteContext()
+	routeCtx, _ := req.Context().Value(chi.RouteCtxKey).(*chi.Context)
+	if routeCtx == nil {
+		routeCtx = chi.NewRouteContext()
+	}
 	routeCtx.URLParams.Add(key, val)
 	ctx := context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx)
 	return req.WithContext(ctx)

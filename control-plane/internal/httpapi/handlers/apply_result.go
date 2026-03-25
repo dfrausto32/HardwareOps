@@ -212,6 +212,7 @@ func PostApplyResult(logger *log.Logger, st store.Store, hub *events.Hub, trustP
 		writeAudit(logger, st, event, nil)
 
 		payload, _ := json.Marshal(map[string]any{
+			"deviceId":         res.DeviceID,
 			"status":           res.Status,
 			"artifactId":       res.ArtifactID,
 			"component":        res.Component,

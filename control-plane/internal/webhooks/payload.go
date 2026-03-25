@@ -9,6 +9,7 @@ import (
 type Payload struct {
 	ID        string          `json:"id"`
 	EventType string          `json:"eventType"`
+	DeviceID  string          `json:"deviceId,omitempty"`
 	FiredAt   time.Time       `json:"firedAt"`
 	Data      json.RawMessage `json:"data,omitempty"`
 }

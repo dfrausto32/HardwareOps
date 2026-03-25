@@ -53,6 +53,7 @@ func TriggerDeviceApply(logger *log.Logger, st store.Store, hub *events.Hub, tru
 		}
 
 		payload := auditJSON(map[string]any{
+			"deviceId":    deviceID,
 			"triggeredBy": triggeredBy,
 			"reason":      req.Reason,
 			"deviceCount": 1,
@@ -108,6 +109,9 @@ func TriggerGroupApply(logger *log.Logger, st store.Store, hub *events.Hub, trus
 		now := time.Now().UTC()
 		deviceIDs := make([]string, 0, len(devices))
 		for _, d := range devices {
+			if d.Status == "decommissioned" {
+				continue
+			}
 			if err := st.UpsertDeployTrigger(store.DeployTrigger{
 				DeviceID:    d.DeviceID,
 				TriggeredBy: triggeredBy,
