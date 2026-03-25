@@ -30,7 +30,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 No items currently in-flight. Queue is clear.
 
 ### Prepared next tasks (agent-scoped)
-- `E1-UI` — global-plane UI panel: cross-region device list, health cards per regional plane, artifact inventory view
+- `E2-ARTIFACT-FEDERATION` — single artifact upload to global plane; metadata push to regional planes via federation endpoint; MinIO bucket replication tracking; per-artifact per-region replication status in global UI
 
 ---
 
@@ -690,12 +690,12 @@ Inter-plane authentication uses the existing service token mechanism (`federatio
 ### Feature Templates
 
 #### E1 — Global aggregation plane (read-only foundation)
-- **Status:** 🟡 In progress
+- **Status:** 🟢 Complete
 - **Scope:** New `global-plane` binary that registers regional control planes and aggregates their data via existing read-only API endpoints. Unified UI showing cross-region device list, regional health cards, artifact inventory, and aggregated audit feed.
 - **Dependencies:** Service tokens on regional planes; new `regional_planes` and `device_directory_cache` tables on global DB.
 - **Risks:** Regional plane API version skew; stale cache if sync goroutine falls behind.
 - **Acceptance:** Operator can register N regional planes and see a unified device list and health summary without opening N browser tabs. Zero changes to agents or regional control planes.
-- **Notes:** Backend complete: `cmd/global-plane` binary, `internal/globalplane` package (store, config, AES-256-GCM token encryption), `internal/globalplane/sync` (Manager + PlaneWorker with exponential backoff), `internal/globalplane/httpapi` (router, planes/aggregated handlers), and 5 SQL migrations (`migrations/global/`). `auth.AuthStore` interface extracted so the global-plane store satisfies it without importing the full regional store. Two new service token scopes: `federation.push` and `federation.manage`. Remaining: UI panel (cross-region device/health/artifact views) and end-to-end smoke test against a running regional plane.
+- **Notes:** `cmd/global-plane` binary, `internal/globalplane` package (store, config, AES-256-GCM token encryption), `internal/globalplane/sync` (Manager + PlaneWorker with exponential backoff), `internal/globalplane/httpapi` (router, planes/aggregated handlers), 5 SQL migrations (`migrations/global/`). `auth.AuthStore` interface extracted so the global-plane store satisfies it without importing the full regional store. Two new service token scopes: `federation.push` and `federation.manage`. UI: `GlobalPage.jsx` with Planes health cards, Devices table, Artifacts table, Register Plane modal, 30s auto-refresh; admin-only nav entry with RBAC test coverage. Operator runbook in `docs/global-plane.md`.
 
 #### E2 — Artifact federation (single upload, N regions)
 - **Status:** ⬜ Planned
