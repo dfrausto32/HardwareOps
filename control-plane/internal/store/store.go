@@ -453,6 +453,24 @@ type DeployTrigger struct {
 	Reason      string
 }
 
+// GlobalPolicyCache is a regional-plane cache of a global desired state policy.
+// Written by the federation push endpoint; read during device checkin as
+// lowest-priority fallback when no local group selector matches.
+type GlobalPolicyCache struct {
+	CacheID          string
+	GroupID          string
+	GroupName        string
+	SelectorJSON     []byte
+	ArtifactID       string
+	DesiredVersion   string
+	DesiredConfigRev string
+	PolicyJSON       []byte
+	ComponentsJSON   []byte
+	CheckinInterval  int
+	ReceivedAt       time.Time
+	UpdatedAt        time.Time
+}
+
 // FederationIngest tracks artifact metadata pushed from the global plane.
 type FederationIngest struct {
 	IngestID             string
@@ -607,4 +625,10 @@ type Store interface {
 	UpsertFederationIngest(ingest FederationIngest) error
 	GetFederationIngest(artifactID string) (FederationIngest, bool, error)
 	ConfirmFederationBlobLocal(artifactID string, confirmedAt time.Time) error
+
+	// Global policy cache — regional CP side.
+	UpsertGlobalPolicyCache(policy GlobalPolicyCache) error
+	ListGlobalPolicyCaches() ([]GlobalPolicyCache, error)
+	GetGlobalPolicyCacheForDevice(deviceID string) (GlobalPolicyCache, bool, error)
+	DeleteGlobalPolicyCache(groupID string) error
 }

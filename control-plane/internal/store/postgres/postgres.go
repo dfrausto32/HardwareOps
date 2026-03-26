@@ -3967,6 +3967,110 @@ func (s *Store) GetGroupDeploymentStatus(groupID, artifactID string) ([]store.De
 
 // ── Federation ingest ──────────────────────────────────────────────────────────
 
+// ── Global policy cache ───────────────────────────────────────────────────────
+
+func (s *Store) UpsertGlobalPolicyCache(policy store.GlobalPolicyCache) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sel := policy.SelectorJSON
+	if len(sel) == 0 {
+		sel = []byte("{}")
+	}
+	pol := policy.PolicyJSON
+	if len(pol) == 0 {
+		pol = []byte("{}")
+	}
+	comp := policy.ComponentsJSON
+	if len(comp) == 0 {
+		comp = []byte("{}")
+	}
+	now := time.Now().UTC()
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO global_policy_cache
+			(group_id, group_name, selector_json, artifact_id, desired_version,
+			 desired_config_rev, policy_json, components_json, checkin_interval,
+			 received_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)
+		ON CONFLICT (group_id) DO UPDATE SET
+			group_name        = EXCLUDED.group_name,
+			selector_json     = EXCLUDED.selector_json,
+			artifact_id       = EXCLUDED.artifact_id,
+			desired_version   = EXCLUDED.desired_version,
+			desired_config_rev = EXCLUDED.desired_config_rev,
+			policy_json       = EXCLUDED.policy_json,
+			components_json   = EXCLUDED.components_json,
+			checkin_interval  = EXCLUDED.checkin_interval,
+			updated_at        = $10
+	`, policy.GroupID, policy.GroupName, sel, policy.ArtifactID, policy.DesiredVersion,
+		policy.DesiredConfigRev, pol, comp, policy.CheckinInterval, now)
+	return err
+}
+
+func (s *Store) ListGlobalPolicyCaches() ([]store.GlobalPolicyCache, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `
+		SELECT cache_id, group_id, group_name, selector_json, artifact_id, desired_version,
+		       desired_config_rev, policy_json, components_json, checkin_interval,
+		       received_at, updated_at
+		FROM global_policy_cache ORDER BY group_name
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.GlobalPolicyCache
+	for rows.Next() {
+		var p store.GlobalPolicyCache
+		if err := rows.Scan(
+			&p.CacheID, &p.GroupID, &p.GroupName, &p.SelectorJSON,
+			&p.ArtifactID, &p.DesiredVersion, &p.DesiredConfigRev,
+			&p.PolicyJSON, &p.ComponentsJSON, &p.CheckinInterval,
+			&p.ReceivedAt, &p.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetGlobalPolicyCacheForDevice(deviceID string) (store.GlobalPolicyCache, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var p store.GlobalPolicyCache
+	err := s.pool.QueryRow(ctx, `
+		SELECT gpc.cache_id, gpc.group_id, gpc.group_name, gpc.selector_json,
+		       gpc.artifact_id, gpc.desired_version, gpc.desired_config_rev,
+		       gpc.policy_json, gpc.components_json, gpc.checkin_interval,
+		       gpc.received_at, gpc.updated_at
+		FROM global_policy_cache gpc
+		JOIN devices d ON d.device_id = $1
+		WHERE COALESCE(d.labels, '{}'::jsonb) @> COALESCE(gpc.selector_json, '{}'::jsonb)
+		ORDER BY gpc.updated_at DESC
+		LIMIT 1
+	`, deviceID).Scan(
+		&p.CacheID, &p.GroupID, &p.GroupName, &p.SelectorJSON,
+		&p.ArtifactID, &p.DesiredVersion, &p.DesiredConfigRev,
+		&p.PolicyJSON, &p.ComponentsJSON, &p.CheckinInterval,
+		&p.ReceivedAt, &p.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.GlobalPolicyCache{}, false, nil
+	}
+	if err != nil {
+		return store.GlobalPolicyCache{}, false, err
+	}
+	return p, true, nil
+}
+
+func (s *Store) DeleteGlobalPolicyCache(groupID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `DELETE FROM global_policy_cache WHERE group_id = $1`, groupID)
+	return err
+}
+
 func (s *Store) UpsertFederationIngest(ingest store.FederationIngest) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

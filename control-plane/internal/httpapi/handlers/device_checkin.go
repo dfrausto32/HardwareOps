@@ -363,12 +363,25 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 		}
 		groupComponents := mergeLegacyDesiredComponents(decodeDesiredComponents(groupDesired.ComponentsJSON), groupDesired.ArtifactID, groupDesired.DesiredVersion, groupDesired.DesiredConfigRev, groupDesired.PolicyJSON, "")
 
+		// Global policy cache is the lowest-priority fallback when no local group matches.
+		var globalComponents map[string]DesiredComponentResponse
+		globalPolicy, hasGlobal, _ := st.GetGlobalPolicyCacheForDevice(req.DeviceID)
+		if hasGlobal {
+			globalComponents = mergeLegacyDesiredComponents(
+				decodeDesiredComponents(globalPolicy.ComponentsJSON),
+				globalPolicy.ArtifactID, globalPolicy.DesiredVersion,
+				globalPolicy.DesiredConfigRev, globalPolicy.PolicyJSON, "")
+		}
+
 		respComponents := map[string]DesiredComponent{}
 		componentKeys := map[string]struct{}{}
 		for key := range desiredComponents {
 			componentKeys[key] = struct{}{}
 		}
 		for key := range groupComponents {
+			componentKeys[key] = struct{}{}
+		}
+		for key := range globalComponents {
 			componentKeys[key] = struct{}{}
 		}
 		for key := range componentKeys {
@@ -381,6 +394,12 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 			if comp, ok := groupComponents[key]; ok && (comp.ArtifactID != "" || comp.DesiredVersion != "" || comp.DesiredConfigRev != "" || len(comp.Policy) != 0) {
 				out := toCheckinComponent(comp, signaturePolicy)
 				out.Source = "group"
+				respComponents[key] = out
+				continue
+			}
+			if comp, ok := globalComponents[key]; ok && (comp.ArtifactID != "" || comp.DesiredVersion != "" || comp.DesiredConfigRev != "" || len(comp.Policy) != 0) {
+				out := toCheckinComponent(comp, signaturePolicy)
+				out.Source = "global"
 				respComponents[key] = out
 				continue
 			}
@@ -403,6 +422,8 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 			}
 			if hasGroup && groupDesired.CheckinInterval > 0 {
 				desiredResp.CheckinInterval = groupDesired.CheckinInterval
+			} else if hasGlobal && globalPolicy.CheckinInterval > 0 {
+				desiredResp.CheckinInterval = globalPolicy.CheckinInterval
 			} else if hasDesired {
 				desiredResp.CheckinInterval = desired.CheckinInterval
 			}

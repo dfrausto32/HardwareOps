@@ -225,6 +225,64 @@ func (c *regionalClient) getJSON(ctx context.Context, url string, dest any) erro
 	return json.Unmarshal(body, dest)
 }
 
+// FederationPolicyPayload is the metadata pushed to regional planes for global desired state.
+type FederationPolicyPayload struct {
+	GroupID          string `json:"groupId"`
+	GroupName        string `json:"groupName"`
+	SelectorJSON     []byte `json:"selectorJson"`
+	ArtifactID       string `json:"artifactId"`
+	DesiredVersion   string `json:"desiredVersion"`
+	DesiredConfigRev string `json:"desiredConfigRev"`
+	PolicyJSON       []byte `json:"policyJson"`
+	ComponentsJSON   []byte `json:"componentsJson"`
+	CheckinInterval  int    `json:"checkinInterval"`
+}
+
+// PushPolicy sends a global desired state policy to a regional plane.
+func (c *regionalClient) PushPolicy(ctx context.Context, payload FederationPolicyPayload) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	url := c.baseURL + "/api/v1/federation/policies"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(respBody), 200))
+	}
+	return nil
+}
+
+// DeletePolicy removes a global desired state policy from a regional plane.
+func (c *regionalClient) DeletePolicy(ctx context.Context, groupID string) error {
+	url := fmt.Sprintf("%s/api/v1/federation/policies/%s", c.baseURL, groupID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))
+	}
+	return nil
+}
+
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s

@@ -51,6 +51,7 @@ type Store struct {
 	webhookDeliveries     []store.WebhookDelivery
 	deployTriggers        map[string]store.DeployTrigger
 	federationIngests     map[string]store.FederationIngest
+	globalPolicyCaches    map[string]store.GlobalPolicyCache // keyed by groupID
 }
 
 func New() *Store {
@@ -91,6 +92,7 @@ func New() *Store {
 		webhookDeliveries:     []store.WebhookDelivery{},
 		deployTriggers:        map[string]store.DeployTrigger{},
 		federationIngests:     map[string]store.FederationIngest{},
+		globalPolicyCaches:    map[string]store.GlobalPolicyCache{},
 	}
 }
 
@@ -2489,5 +2491,62 @@ func (s *Store) ConfirmFederationBlobLocal(artifactID string, confirmedAt time.T
 	fi.BlobConfirmedAt = confirmedAt
 	fi.UpdatedAt = confirmedAt
 	s.federationIngests[artifactID] = fi
+	return nil
+}
+
+// ── Global policy cache ───────────────────────────────────────────────────────
+
+func (s *Store) UpsertGlobalPolicyCache(policy store.GlobalPolicyCache) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	if existing, ok := s.globalPolicyCaches[policy.GroupID]; ok {
+		policy.CacheID = existing.CacheID
+		policy.ReceivedAt = existing.ReceivedAt
+	} else {
+		policy.ReceivedAt = now
+	}
+	policy.UpdatedAt = now
+	s.globalPolicyCaches[policy.GroupID] = policy
+	return nil
+}
+
+func (s *Store) ListGlobalPolicyCaches() ([]store.GlobalPolicyCache, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]store.GlobalPolicyCache, 0, len(s.globalPolicyCaches))
+	for _, p := range s.globalPolicyCaches {
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+func (s *Store) GetGlobalPolicyCacheForDevice(deviceID string) (store.GlobalPolicyCache, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dev, ok := s.devices[deviceID]
+	if !ok {
+		return store.GlobalPolicyCache{}, false, nil
+	}
+	var devLabels map[string]string
+	if len(dev.LabelsJSON) > 0 {
+		_ = json.Unmarshal(dev.LabelsJSON, &devLabels)
+	}
+	for _, p := range s.globalPolicyCaches {
+		var sel map[string]any
+		if len(p.SelectorJSON) > 0 {
+			_ = json.Unmarshal(p.SelectorJSON, &sel)
+		}
+		if labelsContain(dev.LabelsJSON, sel) {
+			return p, true, nil
+		}
+	}
+	return store.GlobalPolicyCache{}, false, nil
+}
+
+func (s *Store) DeleteGlobalPolicyCache(groupID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.globalPolicyCaches, groupID)
 	return nil
 }

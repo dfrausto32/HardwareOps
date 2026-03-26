@@ -104,6 +104,35 @@ type ArtifactReplicationStatus struct {
 	UpdatedAt          time.Time
 }
 
+// GlobalGroup is an operator-defined group on the global plane with a label selector.
+type GlobalGroup struct {
+	GroupID      string
+	Name         string
+	SelectorJSON []byte
+	CreatedBy    string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// GlobalDesiredState is the desired artifact state for a global group.
+type GlobalDesiredState struct {
+	GroupID          string
+	ArtifactID       string
+	DesiredVersion   string
+	DesiredConfigRev string
+	PolicyJSON       []byte
+	ComponentsJSON   []byte
+	CheckinInterval  int
+	UpdatedAt        time.Time
+	UpdatedBy        string
+}
+
+// GlobalDesiredStateWithGroup pairs a group with its desired state for fan-out.
+type GlobalDesiredStateWithGroup struct {
+	GlobalGroup
+	GlobalDesiredState
+}
+
 // Store is the data access interface for the global aggregation plane.
 type Store interface {
 	// Regional plane registry
@@ -139,4 +168,16 @@ type Store interface {
 	UpdateReplicationStatusBlobCheckError(artifactID, planeID, checkErr string) error
 	ListReplicationStatus(artifactID string) ([]ArtifactReplicationStatus, error)
 	ListPendingReplicationRows() ([]ArtifactReplicationStatus, error)
+
+	// Global groups
+	CreateGlobalGroup(g GlobalGroup) (GlobalGroup, error)
+	GetGlobalGroup(groupID string) (GlobalGroup, bool, error)
+	ListGlobalGroups() ([]GlobalGroup, error)
+	DeleteGlobalGroup(groupID string) error
+
+	// Global desired state
+	UpsertGlobalDesiredState(state GlobalDesiredState) error
+	GetGlobalDesiredState(groupID string) (GlobalDesiredState, bool, error)
+	ListGlobalDesiredStatesWithGroups() ([]GlobalDesiredStateWithGroup, error)
+	DeleteGlobalDesiredState(groupID string) error
 }

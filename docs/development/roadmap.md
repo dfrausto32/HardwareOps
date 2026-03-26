@@ -23,14 +23,14 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Operational Hardening (between B and C) | 🟢 Complete | Pull-boundary, token exposure, startup guardrails, break-glass backend, proxy trust policy, and abuse controls are all shipped. |
 | Phase C — Enterprise Readiness | 🟢 Complete | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, artifact tracking policies, the local-auth recovery stack (recovery codes, reset tokens, break-glass CLI), CI workload identity federation, supply-chain provenance policy (Cosign/Sigstore), LDAP/AD auth, and Vault secrets integration are all shipped. |
 | Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Connected email delivery complete. Remaining Phase D work is live-deployment acceptance gate execution (operational) and full VPC reference diagram (docs). |
-| Phase E — Federated Multi-Region | 🟡 In progress | Hub-and-spoke federation layer: global management plane above regional control planes. Agents unchanged. E1 (global aggregation plane) and E2 (artifact federation) complete. E3–E6 planned. |
+| Phase E — Federated Multi-Region | 🟡 In progress | Hub-and-spoke federation layer: global management plane above regional control planes. Agents unchanged. E1 (global aggregation plane), E2 (artifact federation), and E3 (global desired state / policy push) complete. E4–E6 planned. |
 
 ### Active work queue (what is still to do)
 
 No items currently in-flight. Queue is clear.
 
 ### Prepared next tasks (agent-scoped)
-- `E3-GLOBAL-DESIRED-STATE` — operators define global group policies from the global plane; regional planes receive and apply them; global UI aggregates execution status across regions
+- `E4-SYNC-RECONCILER` — periodic reconciler on the global plane re-pushes policies and artifact metadata to regional planes that missed a fan-out; exponential backoff on failure; last-sync timestamps visible in the global UI
 
 ---
 
@@ -80,6 +80,7 @@ No items currently in-flight. Queue is clear.
 - ✅ Artifact tracking policies (explicit group/device/component auto-follow targets, immediate reconcile on desired-state save, trust-aware eligibility, artifact-family visibility in the UI, device-scoped artifact retrieval for assigned artifacts, and live AWS validation with a local agent applying `trackingdemo` 1.3.0 end-to-end).
 - ✅ Connected email delivery for auth recovery (SMTP mailer with STARTTLS/TLS/plain; forgot-password, admin-issued reset, and user-invite flows; `smtpEnabled` on auth status; SMTP vars in all deployment templates; SMTP password via Secrets Manager on AWS; operator runbook and full config reference docs).
 - ✅ CI/CD feedback loop (outbound webhooks with HMAC-SHA256, deploy triggers with `immediateRecheckin`, deployment status polling endpoint, scoped service tokens for all CI integration patterns, ICD documentation, and end-to-end smoke test script).
+- ✅ Global desired state / policy push (E3): global groups with label selectors, per-group desired state, fan-out push to all enabled regional planes via `POST /api/v1/federation/policies`, regional policy cache table, lowest-priority fallback during device checkin, and global-plane UI Groups tab with create-group and set-policy modals).
 
 ---
 
