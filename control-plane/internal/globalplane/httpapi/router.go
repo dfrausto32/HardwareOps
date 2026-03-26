@@ -100,6 +100,22 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(requireScopeOrRole(auth.ScopeArtifactRead, "viewer")).
 			Get("/artifacts", handlers.ListArtifacts(deps.Store))
 
+		// Global groups and desired state.
+		r.With(requireScopeOrRole(auth.ScopeArtifactRead, "viewer")).
+			Get("/groups", handlers.ListGlobalGroups(deps.Store))
+		r.With(requireRole("operator")).
+			Post("/groups", handlers.CreateGlobalGroup(deps.Store, logger))
+		r.With(requireRole("admin")).
+			Delete("/groups/{groupId}", handlers.DeleteGlobalGroup(deps.Store, deps.TokenEncryptionKey, logger))
+		r.With(requireScopeOrRole(auth.ScopeArtifactRead, "viewer")).
+			Get("/groups/{groupId}/desired-state", handlers.GetGlobalDesiredState(deps.Store))
+		r.With(requireRole("operator")).
+			Put("/groups/{groupId}/desired-state", handlers.PutGlobalDesiredState(deps.Store, deps.TokenEncryptionKey, logger))
+		r.With(requireRole("operator")).
+			Delete("/groups/{groupId}/desired-state", handlers.DeleteGlobalDesiredState(deps.Store, deps.TokenEncryptionKey, logger))
+		r.With(requireScopeOrRole(auth.ScopeArtifactRead, "viewer")).
+			Get("/desired-state", handlers.ListGlobalDesiredStates(deps.Store))
+
 		// Federated artifact management.
 		r.With(requireRole("operator")).
 			Post("/federation/artifacts/upload", handlers.UploadFederatedArtifact(

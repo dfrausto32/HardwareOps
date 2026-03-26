@@ -109,7 +109,7 @@ export default function GlobalPage({
   const [error, setError] = useState(null)
   const [deviceFilter, setDeviceFilter] = useState('')
   const [artifactFilter, setArtifactFilter] = useState('')
-  const [tab, setTab] = useState('health') // health | devices | artifacts | federated
+  const [tab, setTab] = useState('health') // health | devices | artifacts | federated | groups
   const [registerOpen, setRegisterOpen] = useState(false)
   const [registerForm, setRegisterForm] = useState({ name: '', baseUrl: '', serviceToken: '', tlsCaPem: '', syncIntervalSeconds: '60' })
   const [registerError, setRegisterError] = useState(null)
@@ -120,6 +120,16 @@ export default function GlobalPage({
   const [uploadForm, setUploadForm] = useState({ name: '', version: '', type: 'app_bundle', file: null })
   const [uploadError, setUploadError] = useState(null)
   const [uploading, setUploading] = useState(false)
+  const [groups, setGroups] = useState([])
+  const [desiredStates, setDesiredStates] = useState([]) // [{GlobalGroup, GlobalDesiredState}]
+  const [groupOpen, setGroupOpen] = useState(false)
+  const [groupForm, setGroupForm] = useState({ name: '', selectorJson: '{}' })
+  const [groupError, setGroupError] = useState(null)
+  const [groupSaving, setGroupSaving] = useState(false)
+  const [policyOpen, setPolicyOpen] = useState(null) // groupId or null
+  const [policyForm, setPolicyForm] = useState({ artifactId: '', desiredVersion: '', desiredConfigRev: '', checkinInterval: '0' })
+  const [policyError, setPolicyError] = useState(null)
+  const [policySaving, setPolicySaving] = useState(false)
   const pollRef = useRef(null)
 
   const effectiveUrl = globalPlaneUrl || urlInput
@@ -142,12 +152,14 @@ export default function GlobalPage({
     setLoading(true)
     setError(null)
     try {
-      const [planesData, healthData, devicesData, artifactsData, fedData] = await Promise.all([
+      const [planesData, healthData, devicesData, artifactsData, fedData, groupsData, dsData] = await Promise.all([
         apiFetch('/api/v1/planes'),
         apiFetch('/api/v1/health/summary'),
         apiFetch('/api/v1/devices'),
         apiFetch('/api/v1/artifacts'),
         apiFetch('/api/v1/federation/artifacts').catch(() => []),
+        apiFetch('/api/v1/groups').catch(() => []),
+        apiFetch('/api/v1/desired-state').catch(() => []),
       ])
       setPlanes(planesData || [])
       const hm = {}
@@ -158,6 +170,8 @@ export default function GlobalPage({
       setDevices(devicesData || [])
       setArtifacts(artifactsData || [])
       setFedArtifacts(fedData || [])
+      setGroups(groupsData || [])
+      setDesiredStates(dsData || [])
     } catch (err) {
       setError(err.message)
     } finally {
@@ -276,7 +290,7 @@ export default function GlobalPage({
         <>
           {/* Tab bar */}
           <div style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid var(--border)', paddingBottom: 0 }}>
-            {[['health', `Planes (${planes.length})`], ['devices', `Devices (${devices.length})`], ['artifacts', `Artifacts (${artifacts.length})`], ['federated', `Federated (${fedArtifacts.length})`]].map(([id, label]) => (
+            {[['health', `Planes (${planes.length})`], ['devices', `Devices (${devices.length})`], ['artifacts', `Artifacts (${artifacts.length})`], ['federated', `Federated (${fedArtifacts.length})`], ['groups', `Groups (${groups.length})`]].map(([id, label]) => (
               <button
                 key={id}
                 className={`chip ${tab === id ? 'active' : ''}`}
@@ -477,6 +491,65 @@ export default function GlobalPage({
               </table>
             </>
           )}
+
+          {/* Global groups tab */}
+          {tab === 'groups' && (
+            <>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+                <button className="button" onClick={() => setGroupOpen(true)}>Create group</button>
+                <span className="muted" style={{ fontSize: 12 }}>Global groups define label selectors for cross-region policy assignment.</span>
+              </div>
+              {desiredStates.length === 0 && groups.length === 0 ? (
+                <div className="muted" style={{ textAlign: 'center', padding: '32px 0' }}>
+                  No global groups yet. Click <strong>Create group</strong> to define a label-based device group.
+                </div>
+              ) : (
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Selector</th>
+                      <th>Artifact ID</th>
+                      <th>Version</th>
+                      <th>Checkin interval</th>
+                      <th>Updated</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {desiredStates.map(row => (
+                      <tr key={row.groupId}>
+                        <td style={{ fontWeight: 500 }}>{row.name || '—'}</td>
+                        <td><code style={{ fontSize: 11 }}>{row.selectorJson ? JSON.stringify(row.selectorJson) : '{}'}</code></td>
+                        <td><code style={{ fontSize: 11 }}>{row.artifactId || <span className="muted">—</span>}</code></td>
+                        <td>{row.desiredVersion || <span className="muted">—</span>}</td>
+                        <td className="muted" style={{ fontSize: 12 }}>{row.checkinInterval ? `${row.checkinInterval}s` : '—'}</td>
+                        <td className="muted" style={{ fontSize: 12 }}><RelativeTime iso={row.updatedAt} /></td>
+                        <td>
+                          <button
+                            className="button ghost"
+                            style={{ fontSize: 12, padding: '2px 8px' }}
+                            onClick={() => {
+                              setPolicyOpen(row.groupId)
+                              setPolicyForm({
+                                artifactId: row.artifactId || '',
+                                desiredVersion: row.desiredVersion || '',
+                                desiredConfigRev: row.desiredConfigRev || '',
+                                checkinInterval: String(row.checkinInterval || 0),
+                              })
+                              setPolicyError(null)
+                            }}
+                          >
+                            Set policy
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </>
+          )}
         </>
       )}
 
@@ -554,6 +627,135 @@ export default function GlobalPage({
                 <button type="button" className="button ghost" onClick={() => setUploadOpen(false)}>Cancel</button>
                 <button type="submit" className="button" disabled={uploading || !uploadForm.file}>
                   {uploading ? 'Uploading…' : 'Upload & replicate'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Create global group modal */}
+      {groupOpen && (
+        <div className="modal-overlay" onClick={() => setGroupOpen(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 460 }}>
+            <div className="modal-header">
+              <h3>Create global group</h3>
+              <button className="modal-close" onClick={() => setGroupOpen(false)}>×</button>
+            </div>
+            <form onSubmit={async (e) => {
+              e.preventDefault()
+              setGroupError(null)
+              setGroupSaving(true)
+              try {
+                let sel
+                try { sel = JSON.parse(groupForm.selectorJson) } catch { throw new Error('Selector JSON is invalid') }
+                await apiFetch('/api/v1/groups', {
+                  method: 'POST',
+                  body: JSON.stringify({ name: groupForm.name, selectorJson: sel }),
+                })
+                setGroupOpen(false)
+                setGroupForm({ name: '', selectorJson: '{}' })
+                setTab('groups')
+                loadAll()
+              } catch (err) {
+                setGroupError(err.message)
+              } finally {
+                setGroupSaving(false)
+              }
+            }}>
+              <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div>
+                  <label className="label">Name <span style={{ color: '#f27272' }}>*</span></label>
+                  <input className="input" required value={groupForm.name}
+                    onChange={e => setGroupForm(f => ({ ...f, name: e.target.value }))}
+                    placeholder="fleet-prod" />
+                </div>
+                <div>
+                  <label className="label">Label selector (JSON)</label>
+                  <textarea className="input" rows={3} value={groupForm.selectorJson}
+                    onChange={e => setGroupForm(f => ({ ...f, selectorJson: e.target.value }))}
+                    placeholder='{"env":"prod","region":"us-east-1"}'
+                    style={{ fontFamily: 'monospace', fontSize: 12 }} />
+                  <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                    Devices whose labels contain all keys from this object will be matched.
+                  </div>
+                </div>
+                {groupError && <div style={{ color: '#f27272', fontSize: 12 }}>{groupError}</div>}
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="button ghost" onClick={() => setGroupOpen(false)}>Cancel</button>
+                <button type="submit" className="button" disabled={groupSaving}>
+                  {groupSaving ? 'Creating…' : 'Create group'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Set global policy modal */}
+      {policyOpen && (
+        <div className="modal-overlay" onClick={() => setPolicyOpen(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 480 }}>
+            <div className="modal-header">
+              <h3>Set global policy</h3>
+              <button className="modal-close" onClick={() => setPolicyOpen(null)}>×</button>
+            </div>
+            <form onSubmit={async (e) => {
+              e.preventDefault()
+              setPolicyError(null)
+              setPolicySaving(true)
+              try {
+                await apiFetch(`/api/v1/groups/${policyOpen}/desired-state`, {
+                  method: 'PUT',
+                  body: JSON.stringify({
+                    artifactId: policyForm.artifactId,
+                    desiredVersion: policyForm.desiredVersion,
+                    desiredConfigRev: policyForm.desiredConfigRev,
+                    checkinInterval: parseInt(policyForm.checkinInterval, 10) || 0,
+                  }),
+                })
+                setPolicyOpen(null)
+                loadAll()
+              } catch (err) {
+                setPolicyError(err.message)
+              } finally {
+                setPolicySaving(false)
+              }
+            }}>
+              <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div className="muted" style={{ fontSize: 12 }}>
+                  This policy will be pushed to all enabled regional planes and applied to matching devices.
+                </div>
+                <div>
+                  <label className="label">Artifact ID</label>
+                  <input className="input" value={policyForm.artifactId}
+                    onChange={e => setPolicyForm(f => ({ ...f, artifactId: e.target.value }))}
+                    placeholder="Leave blank to inherit from group" />
+                </div>
+                <div>
+                  <label className="label">Desired version</label>
+                  <input className="input" value={policyForm.desiredVersion}
+                    onChange={e => setPolicyForm(f => ({ ...f, desiredVersion: e.target.value }))}
+                    placeholder="1.2.3" />
+                </div>
+                <div>
+                  <label className="label">Desired config rev</label>
+                  <input className="input" value={policyForm.desiredConfigRev}
+                    onChange={e => setPolicyForm(f => ({ ...f, desiredConfigRev: e.target.value }))}
+                    placeholder="abc123" />
+                </div>
+                <div>
+                  <label className="label">Checkin interval (seconds, 0 = default)</label>
+                  <input className="input" type="number" min="0" value={policyForm.checkinInterval}
+                    onChange={e => setPolicyForm(f => ({ ...f, checkinInterval: e.target.value }))} />
+                </div>
+                {policyError && <div style={{ color: '#f27272', fontSize: 12 }}>{policyError}</div>}
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="button ghost" onClick={() => setPolicyOpen(null)}>Cancel</button>
+                <button type="submit" className="button" disabled={policySaving}>
+                  {policySaving ? 'Saving…' : 'Save policy'}
                 </button>
               </div>
             </form>

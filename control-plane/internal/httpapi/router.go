@@ -269,10 +269,13 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(admin).Post("/vulnerability-scans/nessus/sync", handlers.TriggerNessusSync(logger, nessusTrigger))
 		r.With(admin).Get("/vulnerability-scans/nessus/status", handlers.GetNessusSyncStatus(logger, nessusTrigger))
 
-		// Federation artifact ingest — called by the global plane.
+		// Federation ingest — called by the global plane.
 		federationPush := requireScopeOrRole(auth.ScopeFederationPush, "admin")
 		r.With(federationPush).Post("/federation/artifacts", handlers.ReceiveFederatedArtifact(deps.Store, logger))
 		r.With(federationPush).Get("/federation/artifacts/{artifactId}/blob-status", handlers.GetFederatedBlobStatus(deps.Store, deps.ObjectStore, deps.S3Bucket, logger))
+		r.With(federationPush).Post("/federation/policies", handlers.ReceiveFederatedPolicy(deps.Store, logger))
+		r.With(federationPush).Get("/federation/policies", handlers.ListFederatedPolicies(deps.Store))
+		r.With(federationPush).Delete("/federation/policies/{groupId}", handlers.DeleteFederatedPolicy(deps.Store, logger))
 
 		// Webhook registration and outbound delivery.
 		r.With(webhookManager).Post("/webhooks", handlers.CreateWebhook(logger, deps.Store, deps.WebhookEncryptionKey, deps.TrustProxy))
