@@ -1,0 +1,19 @@
+FROM golang:1.25 AS build
+
+WORKDIR /src
+COPY control-plane/go.mod control-plane/go.sum ./
+RUN go mod download
+
+COPY control-plane/ ./
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/global-plane ./cmd/global-plane
+
+FROM alpine:3.20
+
+WORKDIR /app
+RUN apk add --no-cache bash curl ca-certificates
+
+COPY --from=build /out/global-plane /app/global-plane
+COPY control-plane/migrations/global /app/migrations/global
+
+EXPOSE 8090
+ENTRYPOINT ["/app/global-plane"]

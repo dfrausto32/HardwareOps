@@ -279,6 +279,7 @@ build_stack_bundle() {
   local stage="$DIST_DIR/stack-${VERSION}-linux-${arch}"
   local cp_tag="hardwareops-control-plane:${VERSION}-${arch}"
   local gw_tag="hardwareops-gateway:${VERSION}-${arch}"
+  local gp_tag="hardwareops-global-plane:${VERSION}-${arch}"
 
   if ! command -v docker >/dev/null 2>&1; then
     echo "Docker not found. Install Docker or set BUILD_STACK=0 to skip." >&2
@@ -305,12 +306,15 @@ build_stack_bundle() {
     --build-arg VITE_API_BASE_URL="https://hardwareops.internal" \
     --build-arg VITE_SIMULATE_PROD=1 \
     "$BASE_DIR"
+  docker build -t "$gp_tag" -f "$BASE_DIR/control-plane/Dockerfile.global-plane" "$BASE_DIR"
 
   docker save -o "$stage/images/control-plane.tar" "$cp_tag"
   docker save -o "$stage/images/gateway.tar" "$gw_tag"
+  docker save -o "$stage/images/global-plane.tar" "$gp_tag"
 
   cp -a "$BASE_DIR/deploy/compose/.env.onprem.example" "$stage/.env.onprem.example"
   cp -a "$BASE_DIR/deploy/control-plane.env.example" "$stage/control-plane.env.example"
+  cp -a "$BASE_DIR/deploy/global-plane.env.example" "$stage/global-plane.env.example"
   cp -a "$BASE_DIR/scripts/setup-control-plane.sh" "$stage/scripts/"
   cp -a "$BASE_DIR/scripts/bootstrap-ca.sh" "$stage/scripts/"
   cp -a "$BASE_DIR/scripts/issue-server-cert.sh" "$stage/scripts/"
@@ -529,6 +533,30 @@ services:
       - control-plane
     restart: unless-stopped
 
+  # ── Global plane (optional — uncomment if this node runs the global plane) ──────
+  # global-plane:
+  #   image: ${gp_tag}
+  #   env_file: global-plane.env
+  #   environment:
+  #     GLOBAL_DATABASE_URL: \${GLOBAL_DATABASE_URL:-postgres://hardwareops:hardwareops@postgres:5432/hardwareops_global?sslmode=disable}
+  #     GLOBAL_MIGRATIONS_DIR: /app/migrations/global
+  #     GLOBAL_HTTP_ADDR: :8090
+  #     GLOBAL_MINIO_ENDPOINT: \${GLOBAL_MINIO_ENDPOINT:-minio:9000}
+  #     GLOBAL_MINIO_ACCESS_KEY: \${MINIO_ROOT_USER:-minio}
+  #     GLOBAL_MINIO_SECRET_KEY: \${MINIO_ROOT_PASSWORD:-minio123}
+  #     GLOBAL_MINIO_BUCKET: \${GLOBAL_MINIO_BUCKET:-global-artifacts}
+  #     GLOBAL_MINIO_USE_TLS: "0"
+  #     GLOBAL_PUBLIC_BASE_URL: \${GLOBAL_PUBLIC_BASE_URL:-https://global-plane.example.com}
+  #     AUTH_JWT_SECRET: \${AUTH_JWT_SECRET:-change-me}
+  #     GLOBAL_TOKEN_ENCRYPTION_KEY: \${GLOBAL_TOKEN_ENCRYPTION_KEY:-}
+  #     CORS_ALLOWED_ORIGINS: \${CORS_ALLOWED_ORIGINS:-https://hardwareops.internal}
+  #   ports:
+  #     - "8090:8090"
+  #   depends_on:
+  #     - postgres
+  #     - minio
+  #   restart: unless-stopped
+
 volumes:
   pgdata:
   miniodata:
@@ -539,6 +567,55 @@ EOF
 
   local out="$DIST_DIR/hardwareops-stack-${VERSION}-linux-${arch}.tar.gz"
   package_dir "$stage" "$out" "linux"
+  rm -rf "$stage"
+  echo "built $out"
+}
+
+build_global_plane() {
+  local goos=$1
+  local goarch=$2
+
+  local stage="$DIST_DIR/global-plane-${VERSION}-${goos}-${goarch}"
+  mkdir -p "$stage"
+
+  (cd "$BASE_DIR/control-plane" && CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+    "$GO_BIN" build -o "$stage/global-plane" ./cmd/global-plane)
+
+  if [ ! -f "$stage/global-plane" ]; then
+    echo "Global-plane build failed for $goos/$goarch (binary missing)." >&2
+    exit 1
+  fi
+
+  cp -r "$BASE_DIR/control-plane/migrations/global" "$stage/migrations/"
+  cp -a "$BASE_DIR/deploy/global-plane.env.example" "$stage/global-plane.env.example"
+
+  cat > "$stage/README.txt" <<GLOBAL_README
+HardwareOps Global Plane
+
+1) Create env file from example:
+   cp global-plane.env.example global-plane.env
+
+2) Edit global-plane.env — at minimum set:
+   GLOBAL_DATABASE_URL, AUTH_JWT_SECRET, GLOBAL_TOKEN_ENCRYPTION_KEY
+
+3) Run migrations and start:
+   env \$(cat global-plane.env | xargs) ./global-plane
+
+Notes:
+- The global plane requires its own PostgreSQL database (separate from regional planes).
+- Migrations are in ./migrations/global.
+- Set GLOBAL_MIGRATIONS_DIR=migrations/global (default).
+- The global plane communicates with regional control planes via their REST APIs.
+  Each regional plane must have a service token with device.read, artifact.read,
+  and federation.push scopes registered via POST /api/v1/planes on the global plane.
+- For artifact federation (E2), configure GLOBAL_MINIO_* variables.
+- See docs/global-desired-state.md and docs/artifact-federation.md.
+GLOBAL_README
+
+  printf "\nPlatform: %s/%s\n" "$goos" "$goarch" >> "$stage/README.txt"
+
+  local out="$DIST_DIR/hardwareops-global-plane-${VERSION}-${goos}-${goarch}.tar.gz"
+  package_dir "$stage" "$out" "$goos"
   rm -rf "$stage"
   echo "built $out"
 }
@@ -554,6 +631,13 @@ for platform in $CONTROL_PLANE_PLATFORMS; do
   GOARCH=${platform#*/}
   build_control_plane "$GOOS" "$GOARCH"
   done
+
+GLOBAL_PLANE_PLATFORMS=${GLOBAL_PLANE_PLATFORMS:-$CONTROL_PLANE_PLATFORMS_DEFAULT}
+for platform in $GLOBAL_PLANE_PLATFORMS; do
+  GOOS=${platform%/*}
+  GOARCH=${platform#*/}
+  build_global_plane "$GOOS" "$GOARCH"
+done
 
 if [ "$BUILD_STACK" = "1" ]; then
   host_arch=$(uname -m)
