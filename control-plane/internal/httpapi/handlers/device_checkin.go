@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/artifacttrust"
-	"github.com/hardwareops/control-plane/internal/events"
-	"github.com/hardwareops/control-plane/internal/metrics"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/artifacttrust"
+	"github.com/parcel/control-plane/internal/events"
+	"github.com/parcel/control-plane/internal/metrics"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 type DeviceCheckinRequest struct {

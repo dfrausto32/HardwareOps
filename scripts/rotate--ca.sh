@@ -5,8 +5,8 @@ BASE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 CERTS_DIR=${CERTS_DIR:-}
 if [ -z "$CERTS_DIR" ]; then
-  if [ -d "/opt/hardwareops/certs" ]; then
-    CERTS_DIR="/opt/hardwareops/certs"
+  if [ -d "/opt/parcel/certs" ]; then
+    CERTS_DIR="/opt/parcel/certs"
   else
     CERTS_DIR="$BASE_DIR"
   fi

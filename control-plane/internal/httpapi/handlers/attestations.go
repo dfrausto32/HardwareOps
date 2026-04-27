@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/hardwareops/control-plane/internal/artifacttrust"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/artifacttrust"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 // PostAttestationRequest is the JSON body for submitting an attestation.

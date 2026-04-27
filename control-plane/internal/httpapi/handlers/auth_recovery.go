@@ -10,9 +10,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/hardwareops/control-plane/internal/auth"
-	"github.com/hardwareops/control-plane/internal/mailer"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/auth"
+	"github.com/parcel/control-plane/internal/mailer"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 const recoveryCodeCount = 8

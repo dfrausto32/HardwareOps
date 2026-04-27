@@ -1,7 +1,7 @@
-$ORIGIN hardwareops.internal.
+$ORIGIN parcel.internal.
 $TTL 60
 
-@   IN SOA ns1.hardwareops.internal. admin.hardwareops.internal. (
+@   IN SOA ns1.parcel.internal. admin.parcel.internal. (
         2026020401 ; serial
         7200       ; refresh
         3600       ; retry
@@ -9,7 +9,7 @@ $TTL 60
         60         ; minimum
 )
 
-@   IN NS ns1.hardwareops.internal.
+@   IN NS ns1.parcel.internal.
 ns1 IN A 192.168.1.10
 @   IN A 192.168.1.10
 agent IN A 192.168.1.10

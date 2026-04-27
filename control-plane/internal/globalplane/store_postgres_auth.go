@@ -12,7 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 func (s *PostgresStore) GetUser(userID string) (store.User, bool, error) {

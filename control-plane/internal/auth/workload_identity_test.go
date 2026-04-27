@@ -33,7 +33,7 @@ func TestParseWorkloadIdentityConfigBlob(t *testing.T) {
 	configs, err := parseWorkloadIdentityConfigBlob([]byte(`{
 		"name":"github-actions",
 		"issuer":"https://token.actions.githubusercontent.com",
-		"audience":"hardwareops-ci",
+		"audience":"parcel-ci",
 		"claimMatches":{"repository":["example/app"]}
 	}`))
 	if err != nil {
@@ -76,7 +76,7 @@ func TestLoadWorkloadIdentityConfigsFromAWSSecretManager(t *testing.T) {
 			{
 				"name":"github-actions",
 				"issuer":"https://token.actions.githubusercontent.com",
-				"audience":"hardwareops-ci",
+				"audience":"parcel-ci",
 				"claimMatches":{"repository":["example/app"]}
 			}
 		]`}

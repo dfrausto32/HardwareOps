@@ -34,7 +34,7 @@ copy_common_agent_files() {
   cp -a "$BASE_DIR/scripts/install-agent-deps-ubuntu.sh" "$stage/scripts/"
   cp -a "$BASE_DIR/deploy/systemd/agent.env.example" "$stage/"
   cp -a "$BASE_DIR/deploy/systemd/agent.env.example" "$stage/deploy/systemd/"
-  cp -a "$BASE_DIR/deploy/systemd/hardwareops-agent.service" "$stage/deploy/systemd/"
+  cp -a "$BASE_DIR/deploy/systemd/parcel-agent.service" "$stage/deploy/systemd/"
   cp -a "$BASE_DIR/scripts/agent-install.sh" "$stage/scripts/"
 }
 
@@ -46,13 +46,13 @@ write_agent_readme() {
 
   if [ "$goos" = "linux" ]; then
     cat > "$filename" <<'AGENT_LINUX'
-HardwareOps Agent (linux)
+Parcel Agent (linux)
 
 Install (systemd):
   sudo ./scripts/agent-install.sh \
-       AGENT_SRC=./hardwareops-agent \
-       CONTROL_PLANE_URL=https://agent.hardwareops.internal \
-       CONTROL_PLANE_CA_CERT_SRC=/opt/hardwareops/certs/ca.crt \
+       AGENT_SRC=./parcel-agent \
+       CONTROL_PLANE_URL=https://agent.parcel.internal \
+       CONTROL_PLANE_CA_CERT_SRC=/opt/parcel/certs/ca.crt \
        AGENT_ENROLL_MODE=approval \
        ENROLLMENT_PROFILE_TOKEN=<bootstrap-token> \
        START_SERVICE=1
@@ -61,19 +61,19 @@ For public CA server trust:
   add USE_SYSTEM_CA=1 and omit CONTROL_PLANE_CA_CERT_SRC
 
 Config:
-  /etc/hardwareops/agent/agent.env
+  /etc/parcel/agent/agent.env
 
 Flow:
   1. Create an enrollment profile in the control-plane Security UI or API.
   2. Copy the bootstrap token to the device and copy the control-plane CA to
-     /opt/hardwareops/certs/ca.crt.
+     /opt/parcel/certs/ca.crt.
   3. Run the install command above.
   4. Approve the pending request.
   5. Watch the agent move from approval bootstrap into normal mTLS check-in.
 
 Legacy direct enrollment:
-  sudo CONTROL_PLANE_URL=https://agent.hardwareops.internal \
-       CA_CERT_PATH=/opt/hardwareops/certs/ca.crt \
+  sudo CONTROL_PLANE_URL=https://agent.parcel.internal \
+       CA_CERT_PATH=/opt/parcel/certs/ca.crt \
        ./scripts/agent-enroll.sh
 
 Docs:
@@ -82,13 +82,13 @@ Docs:
 AGENT_LINUX
   else
     cat > "$filename" <<'AGENT_OTHER'
-HardwareOps Agent
+Parcel Agent
 
 This bundle includes the agent binary and sample config.
 Run manually for now:
-  CONTROL_PLANE_URL=https://hardwareops.internal \
+  CONTROL_PLANE_URL=https://parcel.internal \
   CONTROL_PLANE_CA_CERT_PATH=/path/to/ca.crt \
-  ./hardwareops-agent
+  ./parcel-agent
 
 macOS/Windows service install is not included in v1.
 AGENT_OTHER
@@ -105,7 +105,7 @@ write_control_plane_readme() {
   local filename="$stage/README.txt"
 
   cat > "$filename" <<'CONTROL_PLANE'
-HardwareOps Control-Plane
+Parcel Control-Plane
 
 1) Create env file from example:
    cp control-plane.env.example control-plane.env
@@ -159,9 +159,9 @@ build_agent() {
   mkdir -p "$stage"
 
   (cd "$BASE_DIR/agent" && CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
-    "$GO_BIN" build -o "$stage/hardwareops-agent$ext" ./cmd/agent)
+    "$GO_BIN" build -o "$stage/parcel-agent$ext" ./cmd/agent)
 
-  if [ ! -f "$stage/hardwareops-agent$ext" ]; then
+  if [ ! -f "$stage/parcel-agent$ext" ]; then
     echo "Agent build failed for $goos/$goarch (binary missing)." >&2
     exit 1
   fi
@@ -171,9 +171,9 @@ build_agent() {
 
   local out
   if [ "$goos" = "windows" ]; then
-    out="$DIST_DIR/hardwareops-agent-${VERSION}-${goos}-${goarch}.zip"
+    out="$DIST_DIR/parcel-agent-${VERSION}-${goos}-${goarch}.zip"
   else
-    out="$DIST_DIR/hardwareops-agent-${VERSION}-${goos}-${goarch}.tar.gz"
+    out="$DIST_DIR/parcel-agent-${VERSION}-${goos}-${goarch}.tar.gz"
   fi
   package_dir "$stage" "$out" "$goos"
   rm -rf "$stage"
@@ -197,7 +197,7 @@ build_control_plane() {
     LICENSE_EMBED_PUBKEY_B64=$(openssl pkey -pubin -in "$LICENSE_EMBED_PUBKEY_PATH" -pubout -outform DER | tail -c 32 | base64 -w 0)
   fi
   if [ -n "$LICENSE_EMBED_PUBKEY_B64" ]; then
-    ldflags="-ldflags=-X=github.com/hardwareops/control-plane/internal/license.EmbeddedPublicKey=$LICENSE_EMBED_PUBKEY_B64"
+    ldflags="-ldflags=-X=github.com/parcel/control-plane/internal/license.EmbeddedPublicKey=$LICENSE_EMBED_PUBKEY_B64"
   fi
 
   local stage="$DIST_DIR/control-plane-${VERSION}-${goos}-${goarch}"
@@ -238,7 +238,7 @@ write_stack_readme() {
   local filename="$stage/README.txt"
 
   cat > "$filename" <<'STACK'
-HardwareOps Stack Bundle (Control‑Plane + UI)
+Parcel Stack Bundle (Control‑Plane + UI)
 
 1) Install Docker (Ubuntu):
    sudo ./scripts/install-docker-ubuntu.sh
@@ -247,13 +247,13 @@ HardwareOps Stack Bundle (Control‑Plane + UI)
    sudo ./scripts/run-stack.sh
 
 Double‑click installer (Linux desktop):
-  desktop/hardwareops-installer.desktop
+  desktop/parcel-installer.desktop
 
 Defaults:
-- DOMAIN=hardwareops.internal
-- PUBLIC_BASE_URL=https://hardwareops.internal
-- AGENT_BASE_URL=https://agent.hardwareops.internal
-- CERTS_DIR=/opt/hardwareops/certs
+- DOMAIN=parcel.internal
+- PUBLIC_BASE_URL=https://parcel.internal
+- AGENT_BASE_URL=https://agent.parcel.internal
+- CERTS_DIR=/opt/parcel/certs
 - AUTH_MODE=local
 - BOOTSTRAP_TOKEN=change-me-bootstrap
 
@@ -277,9 +277,9 @@ STACK
 build_stack_bundle() {
   local arch=$1
   local stage="$DIST_DIR/stack-${VERSION}-linux-${arch}"
-  local cp_tag="hardwareops-control-plane:${VERSION}-${arch}"
-  local gw_tag="hardwareops-gateway:${VERSION}-${arch}"
-  local gp_tag="hardwareops-global-plane:${VERSION}-${arch}"
+  local cp_tag="parcel-control-plane:${VERSION}-${arch}"
+  local gw_tag="parcel-gateway:${VERSION}-${arch}"
+  local gp_tag="parcel-global-plane:${VERSION}-${arch}"
 
   if ! command -v docker >/dev/null 2>&1; then
     echo "Docker not found. Install Docker or set BUILD_STACK=0 to skip." >&2
@@ -303,7 +303,7 @@ build_stack_bundle() {
 
   docker build -t "$cp_tag" -f "$BASE_DIR/control-plane/Dockerfile" "${build_args[@]}" "$BASE_DIR"
   docker build -t "$gw_tag" -f "$BASE_DIR/deploy/compose/nginx/Dockerfile" \
-    --build-arg VITE_API_BASE_URL="https://hardwareops.internal" \
+    --build-arg VITE_API_BASE_URL="https://parcel.internal" \
     --build-arg VITE_SIMULATE_PROD=1 \
     "$BASE_DIR"
   docker build -t "$gp_tag" -f "$BASE_DIR/control-plane/Dockerfile.global-plane" "$BASE_DIR"
@@ -320,8 +320,8 @@ build_stack_bundle() {
   cp -a "$BASE_DIR/scripts/issue-server-cert.sh" "$stage/scripts/"
   cp -a "$BASE_DIR/scripts/reload-pull-credentials.sh" "$stage/scripts/"
   cp -a "$BASE_DIR/scripts/apply-upgrade.sh" "$stage/scripts/"
-  cp -a "$BASE_DIR/scripts/stack-installer.sh" "$stage/hardwareops-installer.sh"
-  cp -a "$BASE_DIR/deploy/desktop/hardwareops-installer.desktop" "$stage/desktop/"
+  cp -a "$BASE_DIR/scripts/stack-installer.sh" "$stage/parcel-installer.sh"
+  cp -a "$BASE_DIR/deploy/desktop/parcel-installer.desktop" "$stage/desktop/"
   cp -a "$BASE_DIR/scripts/run-stack.sh" "$stage/scripts/"
   cp -a "$BASE_DIR/scripts/run-coredns.sh" "$stage/scripts/"
   cp -a "$BASE_DIR/scripts/set-dns.sh" "$stage/scripts/"
@@ -335,9 +335,9 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_USER: \${POSTGRES_USER:-hardwareops}
-      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-hardwareops}
-      POSTGRES_DB: \${POSTGRES_DB:-hardwareops}
+      POSTGRES_USER: \${POSTGRES_USER:-parcel}
+      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-parcel}
+      POSTGRES_DB: \${POSTGRES_DB:-parcel}
     volumes:
       - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
@@ -355,7 +355,7 @@ services:
   control-plane:
     image: ${cp_tag}
     environment:
-      DATABASE_URL: \${DATABASE_URL:-postgres://hardwareops:hardwareops@postgres:5432/hardwareops?sslmode=disable}
+      DATABASE_URL: \${DATABASE_URL:-postgres://parcel:parcel@postgres:5432/parcel?sslmode=disable}
       AUTO_MIGRATE: "1"
       MIGRATIONS_DIR: /app/migrations
       S3_ENDPOINT: \${S3_ENDPOINT:-minio:9000}
@@ -373,7 +373,7 @@ services:
       TRUST_PROXY: \${TRUST_PROXY:-1}
       TRUST_PROXY_CIDRS: \${TRUST_PROXY_CIDRS:-127.0.0.1/32,::1/128}
       CLIENT_CERT_HEADER: X-Client-Cert
-      CORS_ALLOWED_ORIGINS: \${CORS_ALLOWED_ORIGINS:-https://hardwareops.internal}
+      CORS_ALLOWED_ORIGINS: \${CORS_ALLOWED_ORIGINS:-https://parcel.internal}
       METRICS_ENABLED: \${METRICS_ENABLED:-1}
       METRICS_PATH: \${METRICS_PATH:-/metrics}
       METRICS_REFRESH_INTERVAL: \${METRICS_REFRESH_INTERVAL:-30s}
@@ -410,7 +410,7 @@ services:
       AUTH_LOGIN_BACKOFF_BASE: \${AUTH_LOGIN_BACKOFF_BASE:-2s}
       AUTH_LOGIN_BACKOFF_MAX: \${AUTH_LOGIN_BACKOFF_MAX:-5m}
       AUTH_LOGIN_BACKOFF_WINDOW: \${AUTH_LOGIN_BACKOFF_WINDOW:-15m}
-      AUTH_ISSUER: \${AUTH_ISSUER:-hardwareops}
+      AUTH_ISSUER: \${AUTH_ISSUER:-parcel}
       AUTH_BOOTSTRAP_EMAIL: \${AUTH_BOOTSTRAP_EMAIL:-admin@example.com}
       AUTH_BOOTSTRAP_PASSWORD: \${AUTH_BOOTSTRAP_PASSWORD:-change-me}
       AUTH_OIDC_ISSUER: \${AUTH_OIDC_ISSUER:-}
@@ -448,14 +448,14 @@ services:
       VULN_NESSUS_SECRET_KEY: \${VULN_NESSUS_SECRET_KEY:-}
       VULN_NESSUS_SYNC_INTERVAL: \${VULN_NESSUS_SYNC_INTERVAL:-1h}
       VULN_NESSUS_SCAN_IDS: \${VULN_NESSUS_SCAN_IDS:-}
-      LOG_DIR: /var/lib/hardwareops/logs
+      LOG_DIR: /var/lib/parcel/logs
       DISABLE_HTTP2: "1"
       MAINTENANCE_MODE: \${MAINTENANCE_MODE:-0}
       MAINTENANCE_MESSAGE: \${MAINTENANCE_MESSAGE:-}
       MAINTENANCE_TOKEN: \${MAINTENANCE_TOKEN:-change-me}
       UPGRADE_APPLY_CMD: \${UPGRADE_APPLY_CMD:-/app/scripts/apply-upgrade.sh}
       UPGRADE_WORK_DIR: \${UPGRADE_WORK_DIR:-/stack}
-      UPGRADE_LOG_DIR: \${UPGRADE_LOG_DIR:-/var/lib/hardwareops/logs}
+      UPGRADE_LOG_DIR: \${UPGRADE_LOG_DIR:-/var/lib/parcel/logs}
       UPGRADE_UPDATES_DIR: \${UPGRADE_UPDATES_DIR:-/stack/updates}
       UPGRADE_RUNNER_MODE: \${UPGRADE_RUNNER_MODE:-remote}
       UPGRADE_RUNNER_URL: \${UPGRADE_RUNNER_URL:-http://maintenance-runner:8090}
@@ -465,19 +465,19 @@ services:
       RESTORE_CMD: \${RESTORE_CMD:-/app/scripts/restore-stack.sh}
       BACKUP_DIR: \${BACKUP_DIR:-/stack/backups}
       BACKUP_WORK_DIR: \${BACKUP_WORK_DIR:-/stack}
-      BACKUP_LOG_DIR: \${BACKUP_LOG_DIR:-/var/lib/hardwareops/logs}
+      BACKUP_LOG_DIR: \${BACKUP_LOG_DIR:-/var/lib/parcel/logs}
       BACKUP_RUNNER_MODE: \${BACKUP_RUNNER_MODE:-remote}
       BACKUP_RUNNER_URL: \${BACKUP_RUNNER_URL:-http://maintenance-runner:8090}
       BACKUP_RUNNER_TOKEN: \${BACKUP_RUNNER_TOKEN:-change-me-maintenance-runner}
       BACKUP_RUNNER_IMAGE: \${BACKUP_RUNNER_IMAGE:-}
-      BACKUP_POSTGRES_CONTAINER: \${BACKUP_POSTGRES_CONTAINER:-hardwareops-postgres-1}
-      BACKUP_MINIO_CONTAINER: \${BACKUP_MINIO_CONTAINER:-hardwareops-minio-1}
-      BACKUP_POSTGRES_USER: \${BACKUP_POSTGRES_USER:-hardwareops}
-      BACKUP_POSTGRES_DB: \${BACKUP_POSTGRES_DB:-hardwareops}
+      BACKUP_POSTGRES_CONTAINER: \${BACKUP_POSTGRES_CONTAINER:-parcel-postgres-1}
+      BACKUP_MINIO_CONTAINER: \${BACKUP_MINIO_CONTAINER:-parcel-minio-1}
+      BACKUP_POSTGRES_USER: \${BACKUP_POSTGRES_USER:-parcel}
+      BACKUP_POSTGRES_DB: \${BACKUP_POSTGRES_DB:-parcel}
       STACK_DIR: \${STACK_DIR:-/stack}
     volumes:
-      - \${CERTS_DIR:-/opt/hardwareops/certs}:/certs:ro
-      - controlplane-logs:/var/lib/hardwareops/logs
+      - \${CERTS_DIR:-/opt/parcel/certs}:/certs:ro
+      - controlplane-logs:/var/lib/parcel/logs
       - \${STACK_DIR:-.}:/stack
     depends_on:
       - postgres
@@ -493,7 +493,7 @@ services:
       MAINTENANCE_TOKEN: \${MAINTENANCE_TOKEN:-change-me}
       UPGRADE_APPLY_CMD: \${UPGRADE_APPLY_CMD:-/app/scripts/apply-upgrade.sh}
       UPGRADE_WORK_DIR: \${UPGRADE_WORK_DIR:-/stack}
-      UPGRADE_LOG_DIR: \${UPGRADE_LOG_DIR:-/var/lib/hardwareops/logs}
+      UPGRADE_LOG_DIR: \${UPGRADE_LOG_DIR:-/var/lib/parcel/logs}
       UPGRADE_UPDATES_DIR: \${UPGRADE_UPDATES_DIR:-/stack/updates}
       UPGRADE_RUNNER_MODE: docker
       UPGRADE_RUNNER_IMAGE: \${UPGRADE_RUNNER_IMAGE:-${cp_tag}}
@@ -502,19 +502,19 @@ services:
       RESTORE_CMD: \${RESTORE_CMD:-/app/scripts/restore-stack.sh}
       BACKUP_DIR: \${BACKUP_DIR:-/stack/backups}
       BACKUP_WORK_DIR: \${BACKUP_WORK_DIR:-/stack}
-      BACKUP_LOG_DIR: \${BACKUP_LOG_DIR:-/var/lib/hardwareops/logs}
+      BACKUP_LOG_DIR: \${BACKUP_LOG_DIR:-/var/lib/parcel/logs}
       BACKUP_RUNNER_MODE: docker
       BACKUP_RUNNER_IMAGE: \${BACKUP_RUNNER_IMAGE:-}
       BACKUP_RUNNER_TOKEN: \${BACKUP_RUNNER_TOKEN:-change-me-maintenance-runner}
-      BACKUP_POSTGRES_CONTAINER: \${BACKUP_POSTGRES_CONTAINER:-hardwareops-postgres-1}
-      BACKUP_MINIO_CONTAINER: \${BACKUP_MINIO_CONTAINER:-hardwareops-minio-1}
-      BACKUP_POSTGRES_USER: \${BACKUP_POSTGRES_USER:-hardwareops}
-      BACKUP_POSTGRES_DB: \${BACKUP_POSTGRES_DB:-hardwareops}
+      BACKUP_POSTGRES_CONTAINER: \${BACKUP_POSTGRES_CONTAINER:-parcel-postgres-1}
+      BACKUP_MINIO_CONTAINER: \${BACKUP_MINIO_CONTAINER:-parcel-minio-1}
+      BACKUP_POSTGRES_USER: \${BACKUP_POSTGRES_USER:-parcel}
+      BACKUP_POSTGRES_DB: \${BACKUP_POSTGRES_DB:-parcel}
       MAINTENANCE_RUNNER_ADDR: \${MAINTENANCE_RUNNER_ADDR:-:8090}
       STACK_DIR: \${STACK_DIR:-/stack}
     volumes:
-      - \${CERTS_DIR:-/opt/hardwareops/certs}:/certs:ro
-      - controlplane-logs:/var/lib/hardwareops/logs
+      - \${CERTS_DIR:-/opt/parcel/certs}:/certs:ro
+      - controlplane-logs:/var/lib/parcel/logs
       - /var/run/docker.sock:/var/run/docker.sock
       - \${STACK_DIR:-.}:/stack
     depends_on:
@@ -528,7 +528,7 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - \${CERTS_DIR:-/opt/hardwareops/certs}:/certs:ro
+      - \${CERTS_DIR:-/opt/parcel/certs}:/certs:ro
     depends_on:
       - control-plane
     restart: unless-stopped
@@ -538,7 +538,7 @@ services:
   #   image: ${gp_tag}
   #   env_file: global-plane.env
   #   environment:
-  #     GLOBAL_DATABASE_URL: \${GLOBAL_DATABASE_URL:-postgres://hardwareops:hardwareops@postgres:5432/hardwareops_global?sslmode=disable}
+  #     GLOBAL_DATABASE_URL: \${GLOBAL_DATABASE_URL:-postgres://parcel:parcel@postgres:5432/parcel_global?sslmode=disable}
   #     GLOBAL_MIGRATIONS_DIR: /app/migrations/global
   #     GLOBAL_HTTP_ADDR: :8090
   #     GLOBAL_MINIO_ENDPOINT: \${GLOBAL_MINIO_ENDPOINT:-minio:9000}
@@ -549,7 +549,7 @@ services:
   #     GLOBAL_PUBLIC_BASE_URL: \${GLOBAL_PUBLIC_BASE_URL:-https://global-plane.example.com}
   #     AUTH_JWT_SECRET: \${AUTH_JWT_SECRET:-change-me}
   #     GLOBAL_TOKEN_ENCRYPTION_KEY: \${GLOBAL_TOKEN_ENCRYPTION_KEY:-}
-  #     CORS_ALLOWED_ORIGINS: \${CORS_ALLOWED_ORIGINS:-https://hardwareops.internal}
+  #     CORS_ALLOWED_ORIGINS: \${CORS_ALLOWED_ORIGINS:-https://parcel.internal}
   #   ports:
   #     - "8090:8090"
   #   depends_on:
@@ -565,7 +565,7 @@ EOF
 
   write_stack_readme "$stage" "$arch"
 
-  local out="$DIST_DIR/hardwareops-stack-${VERSION}-linux-${arch}.tar.gz"
+  local out="$DIST_DIR/parcel-stack-${VERSION}-linux-${arch}.tar.gz"
   package_dir "$stage" "$out" "linux"
   rm -rf "$stage"
   echo "built $out"
@@ -590,7 +590,7 @@ build_global_plane() {
   cp -a "$BASE_DIR/deploy/global-plane.env.example" "$stage/global-plane.env.example"
 
   cat > "$stage/README.txt" <<GLOBAL_README
-HardwareOps Global Plane
+Parcel Global Plane
 
 1) Create env file from example:
    cp global-plane.env.example global-plane.env
@@ -614,7 +614,7 @@ GLOBAL_README
 
   printf "\nPlatform: %s/%s\n" "$goos" "$goarch" >> "$stage/README.txt"
 
-  local out="$DIST_DIR/hardwareops-global-plane-${VERSION}-${goos}-${goarch}.tar.gz"
+  local out="$DIST_DIR/parcel-global-plane-${VERSION}-${goos}-${goarch}.tar.gz"
   package_dir "$stage" "$out" "$goos"
   rm -rf "$stage"
   echo "built $out"

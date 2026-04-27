@@ -39,8 +39,8 @@ Shape: ECS Fargate (control-plane + gateway) + RDS Postgres + S3 + ALB + ACM + C
 ### DNS + TLS (both modes)
 
 Use a customer-owned domain and split hostnames:
-- Human/UI host: `hardwareops.internal`
-- Agent/API host: `agent.hardwareops.internal`
+- Human/UI host: `parcel.internal`
+- Agent/API host: `agent.parcel.internal`
 
 Prefer a browser-trusted server cert on the human host. Keep agent traffic on mTLS device certs. For private CA onboarding, use the bootstrap token flow (`/api/v1/bootstrap/ca`) to fetch the CA cert before full login.
 

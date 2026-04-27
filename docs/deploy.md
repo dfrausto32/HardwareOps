@@ -1,6 +1,6 @@
 # Deployment Guide (Canonical)
 
-This is the primary deployment guide for HardwareOps. It consolidates the previous split across installer, AWS, and hardening docs.
+This is the primary deployment guide for Parcel. It consolidates the previous split across installer, AWS, and hardening docs.
 
 Use this file for:
 - on-prem deployment (installer bundle)
@@ -31,14 +31,14 @@ From repo root:
 ```
 
 Output bundle:
-- `dist/installers/<version>/hardwareops-stack-<version>-linux-<arch>.tar.gz`
+- `dist/installers/<version>/parcel-stack-<version>-linux-<arch>.tar.gz`
 
 ### 2.2 Install on target host
 
 Copy bundle to target host, then:
 
 ```bash
-tar -xzf hardwareops-stack-<version>-linux-<arch>.tar.gz
+tar -xzf parcel-stack-<version>-linux-<arch>.tar.gz
 cd stack-<version>-linux-<arch>
 sudo ./scripts/install-docker-ubuntu.sh
 cp .env.onprem.example .env.onprem
@@ -47,16 +47,16 @@ sudo ./scripts/run-stack.sh
 ```
 
 Alternative desktop flow:
-- run `./hardwareops-installer.sh` from bundle root.
+- run `./parcel-installer.sh` from bundle root.
 
 ### 2.3 Configure `.env.onprem`
 
 Edit the stack's `.env.onprem` and set at minimum:
 
 ```env
-DOMAIN=hardwareops.internal
-PUBLIC_BASE_URL=https://hardwareops.internal
-AGENT_BASE_URL=https://agent.hardwareops.internal
+DOMAIN=parcel.internal
+PUBLIC_BASE_URL=https://parcel.internal
+AGENT_BASE_URL=https://agent.parcel.internal
 AUTH_MODE=local
 AUTH_JWT_SECRET=<strong-random-secret>
 AUTH_BOOTSTRAP_EMAIL=<admin-email>
@@ -78,7 +78,7 @@ To enable directory authentication, add to `.env.onprem`:
 ```env
 AUTH_LDAP_URL=ldaps://ad.corp.example.com:636
 AUTH_LDAP_BASE_DN=ou=Employees,dc=corp,dc=example,dc=com
-AUTH_LDAP_BIND_DN=CN=hardwareops-svc,OU=ServiceAccounts,DC=corp,DC=example,DC=com
+AUTH_LDAP_BIND_DN=CN=parcel-svc,OU=ServiceAccounts,DC=corp,DC=example,DC=com
 AUTH_LDAP_BIND_PASSWORD=<service-account-password>
 AUTH_LDAP_USER_FILTER=(sAMAccountName=%s)
 AUTH_LDAP_ROLE_MAP={"CN=HW-Admins,DC=corp,DC=example,DC=com":"admin"}
@@ -94,7 +94,7 @@ To load artifact pull credentials from HashiCorp Vault KV v2 instead of static f
 ```env
 ARTIFACT_PULL_CREDENTIALS_VAULT_ADDR=https://vault.internal:8200
 ARTIFACT_PULL_CREDENTIALS_VAULT_TOKEN=<vault-token>
-ARTIFACT_PULL_CREDENTIALS_VAULT_PATH=secret/data/hardwareops/pull-creds
+ARTIFACT_PULL_CREDENTIALS_VAULT_PATH=secret/data/parcel/pull-creds
 ```
 
 See `docs/cloud-pull-adapters.md` for the expected secret format and rotation runbook.
@@ -114,11 +114,11 @@ See `docs/artifact-provenance.md` for provenance policy configuration.
 ### 2.4 Verify control-plane and UI
 
 ```bash
-curl --cacert /opt/hardwareops/certs/ca.crt https://hardwareops.internal/healthz
+curl --cacert /opt/parcel/certs/ca.crt https://parcel.internal/healthz
 ```
 
 Open:
-- `https://hardwareops.internal`
+- `https://parcel.internal`
 
 Login with:
 - `AUTH_BOOTSTRAP_EMAIL`
@@ -271,7 +271,7 @@ sudo chattr +i .env.onprem docker-compose.onprem.bundle.yml
 - **UI loads but API fails:** verify hostnames and TLS trust; open the exact domain in `PUBLIC_BASE_URL`.
 - **CORS 400/401 in cloud:** verify `PUBLIC_BASE_URL`, `CORS_ALLOWED_ORIGINS`, and auth mode/env in running control-plane task.
 - **Agents fail TLS:** verify agent CA path and matching control-plane server cert chain.
-- **Upgrade stuck:** check `/var/lib/hardwareops/logs/upgrade-*.log` inside control-plane container.
+- **Upgrade stuck:** check `/var/lib/parcel/logs/upgrade-*.log` inside control-plane container.
 
 ---
 

@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/globalplane"
+	"github.com/parcel/control-plane/internal/globalplane"
 )
 
 // regionalClient is a thin HTTP client for a single regional control plane.

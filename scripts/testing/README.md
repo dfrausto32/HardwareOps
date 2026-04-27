@@ -12,7 +12,7 @@ Current scripts:
 
 Defaults:
 
-- `LAB_ROOT=/tmp/hardwareops-prod-docker`
+- `LAB_ROOT=/tmp/parcel-prod-docker`
 - override with `LAB_ROOT=<path>` when you need repo-local state
 
 Conventions:

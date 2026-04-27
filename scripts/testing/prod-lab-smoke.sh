@@ -2,7 +2,7 @@
 set -euo pipefail
 
 BASE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-LAB_ROOT=${LAB_ROOT:-"${TMPDIR:-/tmp}/hardwareops-prod-docker"}
+LAB_ROOT=${LAB_ROOT:-"${TMPDIR:-/tmp}/parcel-prod-docker"}
 ENV_FILE=${ENV_FILE:-"$LAB_ROOT/.env.onprem"}
 CERTS_DIR=${CERTS_DIR:-"$LAB_ROOT/certs"}
 

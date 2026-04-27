@@ -15,11 +15,11 @@ import (
 	"strings"
 	"time"
 
-	agentbootstrap "github.com/hardwareops/agent/internal/bootstrap"
-	"github.com/hardwareops/agent/internal/client"
-	"github.com/hardwareops/agent/internal/config"
-	"github.com/hardwareops/agent/internal/logging"
-	"github.com/hardwareops/agent/internal/state"
+	agentbootstrap "github.com/parcel/agent/internal/bootstrap"
+	"github.com/parcel/agent/internal/client"
+	"github.com/parcel/agent/internal/config"
+	"github.com/parcel/agent/internal/logging"
+	"github.com/parcel/agent/internal/state"
 )
 
 func bootstrapApprovalIdentity(cfg config.Config, st *state.State, logger *logging.Logger, capabilities map[string]any) error {
@@ -342,7 +342,7 @@ func pendingCSRCommonName(capabilities map[string]any) string {
 	if host, err := os.Hostname(); err == nil && strings.TrimSpace(host) != "" {
 		return truncateCSRCommonName(host)
 	}
-	return "hardwareops-pending"
+	return "parcel-pending"
 }
 
 func truncateCSRCommonName(v string) string {

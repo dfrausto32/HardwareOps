@@ -1,13 +1,13 @@
-# HardwareOps
+# Parcel
 
-HardwareOps is a control-plane platform for deploying software and configuration to autonomous devices operating in unreliable, bandwidth-constrained, or offline environments. It handles device enrollment (mTLS), artifact packaging and delivery, fleet desired-state management, and audit/compliance — all from a single API and web console.
+Parcel is a control-plane platform for deploying software and configuration to autonomous devices operating in unreliable, bandwidth-constrained, or offline environments. It handles device enrollment (mTLS), artifact packaging and delivery, fleet desired-state management, and audit/compliance — all from a single API and web console.
 
 ---
 
 ## How the repo is organized
 
 ```
-HardwareOps/
+Parcel/
 ├── control-plane/     Go API server (PostgreSQL + MinIO)
 ├── agent/             Go device agent (runs on each managed device)
 ├── ui/                React 18 web console
@@ -50,7 +50,7 @@ make dev-up
 ```
 
 This brings up:
-- Postgres on `localhost:5432` (user/pass/db: `hardwareops`)
+- Postgres on `localhost:5432` (user/pass/db: `parcel`)
 - MinIO on `localhost:9000` (access: `minio` / `minio123`, console: `localhost:9001`)
 
 Verify they're running:
@@ -67,7 +67,7 @@ The control-plane signs device certificates with an internal CA. For local dev, 
 ```bash
 openssl req -x509 -newkey rsa:2048 -nodes \
   -keyout ./dev-ca.key -out ./dev-ca.crt \
-  -days 365 -subj "/CN=HardwareOps Dev CA"
+  -days 365 -subj "/CN=Parcel Dev CA"
 ```
 
 This CA cert (`dev-ca.crt`) is what agents and curl commands use to trust the server. You only need to do this once.
@@ -77,7 +77,7 @@ This CA cert (`dev-ca.crt`) is what agents and curl commands use to trust the se
 ## Step 3 — Run the control-plane
 
 ```bash
-export DATABASE_URL=postgres://hardwareops:hardwareops@localhost:5432/hardwareops?sslmode=disable
+export DATABASE_URL=postgres://parcel:parcel@localhost:5432/parcel?sslmode=disable
 export CA_CERT_PATH=./dev-ca.crt
 export CA_KEY_PATH=./dev-ca.key
 export AUTO_MIGRATE=1

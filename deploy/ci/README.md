@@ -29,7 +29,7 @@ They are scaffolds, not final production pipelines. Adjust build/sign stages, br
 
 ## Workload identity (Phase C)
 
-The control-plane can exchange an external OIDC job token for a short-lived HardwareOps bearer token.
+The control-plane can exchange an external OIDC job token for a short-lived Parcel bearer token.
 
 Current shipped path:
 - GitHub Actions helper built into `scripts/ci-exchange-workload-identity.sh`
@@ -50,7 +50,7 @@ Example GitHub Actions provider:
   {
     "name": "github-actions",
     "issuer": "https://token.actions.githubusercontent.com",
-    "audience": "hardwareops-ci",
+    "audience": "parcel-ci",
     "allowedScopes": ["artifact.publish"],
     "defaultScopes": ["artifact.publish"],
     "ttl": "15m",
@@ -71,7 +71,7 @@ GitHub Actions usage:
   - `.github/workflows/workload-identity-smoke.yml`
   - requires repository variable `HWOPS_BASE_URL`
   - optional repository variable `HWOPS_WORKLOAD_IDENTITY_PROVIDER` (defaults to `github-actions`)
-  - optional repository variable `HWOPS_WORKLOAD_IDENTITY_AUDIENCE` (defaults to `hardwareops-ci`)
+  - optional repository variable `HWOPS_WORKLOAD_IDENTITY_AUDIENCE` (defaults to `parcel-ci`)
   - optional repository secret `HWOPS_CA_CERT_B64` when the target uses a private CA
   - optional repository secret `HWOPS_SIGNING_KEY_B64` plus repository variable `HWOPS_SIGNING_KEY_ID` when `publish_smoke=true` should upload a signed artifact
 
@@ -82,7 +82,7 @@ Example GitLab provider:
   {
     "name": "gitlab-ci",
     "issuer": "https://gitlab.com",
-    "audience": "hardwareops-ci",
+    "audience": "parcel-ci",
     "allowedScopes": ["artifact.publish"],
     "defaultScopes": ["artifact.publish"],
     "ttl": "15m",

@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/hardwareops/control-plane/internal/store"
-	"github.com/hardwareops/control-plane/internal/store/memory"
-	whcrypto "github.com/hardwareops/control-plane/internal/webhooks"
+	"github.com/parcel/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/store/memory"
+	whcrypto "github.com/parcel/control-plane/internal/webhooks"
 )
 
 func testWebhookKey() []byte {
@@ -59,7 +59,7 @@ func TestTestWebhook_SignsPayload(t *testing.T) {
 			signature string
 			body      []byte
 		}{
-			signature: r.Header.Get("X-HardwareOps-Signature"),
+			signature: r.Header.Get("X-Parcel-Signature"),
 			body:      body,
 		}
 		w.WriteHeader(http.StatusOK)

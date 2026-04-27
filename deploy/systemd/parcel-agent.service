@@ -1,0 +1,18 @@
+[Unit]
+Description=Parcel Agent
+After=network-online.target parcel-machine-id-init.service
+Wants=network-online.target
+Requires=parcel-machine-id-init.service
+
+[Service]
+Type=simple
+User=parcel
+Group=parcel
+EnvironmentFile=/etc/parcel/agent/agent.env
+ExecStart=/usr/local/bin/parcel-agent
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

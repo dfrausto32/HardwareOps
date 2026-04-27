@@ -1,6 +1,6 @@
 # Cloud-Native Pull Adapters (S3, GCS) and Vault Credentials
 
-HardwareOps can pull artifacts directly from Amazon S3 and Google Cloud Storage in addition to the existing HTTP and Artifactory adapters. Credentials for all pull sources — including the new cloud adapters — can be backed by HashiCorp Vault KV in addition to static files and AWS Secrets Manager.
+Parcel can pull artifacts directly from Amazon S3 and Google Cloud Storage in addition to the existing HTTP and Artifactory adapters. Credentials for all pull sources — including the new cloud adapters — can be backed by HashiCorp Vault KV in addition to static files and AWS Secrets Manager.
 
 ---
 
@@ -64,7 +64,7 @@ When `access_key_id` and `secret_access_key` are **not** provided, the adapter u
 }
 ```
 
-Point to this file with `ARTIFACT_PULL_CREDENTIALS_FILE=/etc/hardwareops/pull-creds.json`.
+Point to this file with `ARTIFACT_PULL_CREDENTIALS_FILE=/etc/parcel/pull-creds.json`.
 
 ### 2.4 IAM-native (no credential entry required)
 
@@ -86,7 +86,7 @@ The adapter picks up credentials from the task role, pod identity, or instance p
 ```bash
 SHA256=$(sha256sum firmware-v2.tar.gz | awk '{print $1}')
 
-curl -X POST https://hardwareops.internal/api/v1/artifacts/pull \
+curl -X POST https://parcel.internal/api/v1/artifacts/pull \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -153,7 +153,7 @@ In GKE with Workload Identity configured, omit `credentialRef`:
 ### 3.5 Full pull example
 
 ```bash
-curl -X POST https://hardwareops.internal/api/v1/artifacts/pull \
+curl -X POST https://parcel.internal/api/v1/artifacts/pull \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -182,7 +182,7 @@ In addition to static files and AWS Secrets Manager, pull credentials can be loa
 |---|---|---|
 | `ARTIFACT_PULL_CREDENTIALS_VAULT_ADDR` | yes (Vault) | Vault server address, e.g. `https://vault.internal:8200` |
 | `ARTIFACT_PULL_CREDENTIALS_VAULT_TOKEN` | yes (Vault) | Vault token with `read` permission on the KV path |
-| `ARTIFACT_PULL_CREDENTIALS_VAULT_PATH` | yes (Vault) | KV v2 secret path, e.g. `secret/data/hardwareops/pull-creds` |
+| `ARTIFACT_PULL_CREDENTIALS_VAULT_PATH` | yes (Vault) | KV v2 secret path, e.g. `secret/data/parcel/pull-creds` |
 
 Vault and AWS Secrets Manager backends are mutually exclusive. Inline JSON/file credentials can coexist with either.
 
@@ -192,7 +192,7 @@ The secret at the configured path must contain a `data` object (KV v2 envelope) 
 
 ```
 # Write the secret (Vault CLI)
-vault kv put secret/hardwareops/pull-creds \
+vault kv put secret/parcel/pull-creds \
   data='{"prod-s3-creds":{"access_key_id":"AKIA...","secret_access_key":"...","region":"us-west-2"},"prod-gcs-creds":{"service_account_json":"..."}}'
 ```
 
@@ -207,7 +207,7 @@ On control-plane startup, credentials are loaded from all configured sources. If
 Trigger a reload without restarting the control-plane:
 
 ```bash
-curl -X POST https://hardwareops.internal/api/v1/artifacts/pull-credentials/reload \
+curl -X POST https://parcel.internal/api/v1/artifacts/pull-credentials/reload \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
@@ -218,7 +218,7 @@ Response includes `vault_backed`, `vault_addr`, `vault_path`, and per-source ref
   "configured": true,
   "vault_backed": true,
   "vault_addr": "https://vault.internal:8200",
-  "vault_path": "secret/data/hardwareops/pull-creds",
+  "vault_path": "secret/data/parcel/pull-creds",
   "resolverAvailable": true,
   "credentialRefCount": 3,
   "credentialRefs": ["prod-gcs-creds", "prod-s3-creds", "staging-s3-creds"],
@@ -231,11 +231,11 @@ Response includes `vault_backed`, `vault_addr`, `vault_path`, and per-source ref
 
 1. Update the Vault secret with new credentials:
    ```bash
-   vault kv put secret/hardwareops/pull-creds data='{"prod-s3-creds":{...new...}}'
+   vault kv put secret/parcel/pull-creds data='{"prod-s3-creds":{...new...}}'
    ```
 2. Trigger a reload (no restart required):
    ```bash
-   curl -X POST https://hardwareops.internal/api/v1/artifacts/pull-credentials/reload \
+   curl -X POST https://parcel.internal/api/v1/artifacts/pull-credentials/reload \
      -H "Authorization: Bearer $ADMIN_TOKEN"
    ```
 3. Verify the reload audit event in `GET /api/v1/audit` (action: `artifact.pull_credentials.reload`).
@@ -246,7 +246,7 @@ Response includes `vault_backed`, `vault_addr`, `vault_path`, and per-source ref
 ## 5) Credential status and monitoring
 
 ```bash
-curl https://hardwareops.internal/api/v1/artifacts/pull-credentials \
+curl https://parcel.internal/api/v1/artifacts/pull-credentials \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 

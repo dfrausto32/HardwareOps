@@ -31,7 +31,7 @@ WEBHOOK_PUBLIC_URL=${WEBHOOK_PUBLIC_URL:-}
 PASS=0
 FAIL=0
 SKIP=0
-TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/hardwareops-ci-feedback-XXXXXX")
+TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/parcel-ci-feedback-XXXXXX")
 LISTENER_PID=""
 WEBHOOK_MODE_FILE="$TMP_ROOT/webhook-mode"
 
@@ -133,7 +133,7 @@ PY
 }
 
 # ─── Setup ───────────────────────────────────────────────────────────────────
-echo "=== HardwareOps CI feedback-loop integration test ==="
+echo "=== Parcel CI feedback-loop integration test ==="
 echo "Base URL: $BASE_URL"
 if [ -n "$WEBHOOK_PUBLIC_URL" ]; then
   echo "Webhook callback: $WEBHOOK_PUBLIC_URL"
@@ -296,7 +296,7 @@ class Handler(BaseHTTPRequestHandler):
         with open(received_file, "w") as f:
             json.dump({
                 "path": self.path,
-                "signature": self.headers.get("X-HardwareOps-Signature", ""),
+                "signature": self.headers.get("X-Parcel-Signature", ""),
                 "body": body.decode("utf-8", errors="replace"),
             }, f)
         mode = "ok"
@@ -504,7 +504,7 @@ PY
   echo "[trigger] Trigger is pending. On next device check-in the response will contain:"
   echo '  {"immediateRecheckin": true}'
   echo "  Watching for it — if a demo agent is running you should see it connect:"
-  echo "    journalctl -u hardwareops-agent -f   (on the device)"
+  echo "    journalctl -u parcel-agent -f   (on the device)"
 fi
 
 echo ""

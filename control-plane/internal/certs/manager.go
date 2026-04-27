@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	cpcrypto "github.com/hardwareops/control-plane/internal/crypto"
+	cpcrypto "github.com/parcel/control-plane/internal/crypto"
 )
 
 type Signer interface {

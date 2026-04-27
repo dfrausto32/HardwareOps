@@ -5,19 +5,20 @@ import (
 	"io"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/artifactingest"
-	"github.com/hardwareops/control-plane/internal/auth"
-	"github.com/hardwareops/control-plane/internal/backup"
-	"github.com/hardwareops/control-plane/internal/certs"
-	"github.com/hardwareops/control-plane/internal/events"
-	"github.com/hardwareops/control-plane/internal/license"
-	"github.com/hardwareops/control-plane/internal/lifecycle"
-	"github.com/hardwareops/control-plane/internal/mailer"
-	"github.com/hardwareops/control-plane/internal/metrics"
-	"github.com/hardwareops/control-plane/internal/releaseautoupdate"
-	"github.com/hardwareops/control-plane/internal/store"
-	"github.com/hardwareops/control-plane/internal/upgrade"
-	"github.com/hardwareops/control-plane/internal/vulnscan"
+	"github.com/parcel/control-plane/internal/artifactingest"
+	"github.com/parcel/control-plane/internal/auth"
+	"github.com/parcel/control-plane/internal/backup"
+	"github.com/parcel/control-plane/internal/certs"
+	"github.com/parcel/control-plane/internal/events"
+	"github.com/parcel/control-plane/internal/license"
+	"github.com/parcel/control-plane/internal/lifecycle"
+	"github.com/parcel/control-plane/internal/mailer"
+	"github.com/parcel/control-plane/internal/metrics"
+	"github.com/parcel/control-plane/internal/releaseautoupdate"
+	"github.com/parcel/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/upgrade"
+	"github.com/parcel/control-plane/internal/sbom"
+	"github.com/parcel/control-plane/internal/vulnscan"
 )
 
 type CertSigner interface {
@@ -108,11 +109,17 @@ type Dependencies struct {
 	ArtifactScanJob       *vulnscan.ArtifactScanJob
 	NessusSyncJob         *vulnscan.NessusSyncJob
 	VulnSkipArtifactTypes []string
+	// SBOM generation (nil when disabled).
+	ArtifactSBOMJob       *sbom.ArtifactSBOMJob
+	SBOMSkipArtifactTypes []string
 	// Email delivery.
 	Mailer       mailer.Mailer
 	AppPublicURL string
 	SMTPEnabled  bool
 	// Webhook outbound delivery.
+	// TOTPEncryptionKey is a 32-byte AES-256 key used to encrypt TOTP secrets
+	// at rest. If nil/empty, TOTP enrollment is disabled.
+	TOTPEncryptionKey []byte
 	// WebhookEncryptionKey is a 32-byte AES-256 key used to encrypt webhook
 	// signing secrets at rest. If nil/empty, webhook creation is disabled.
 	WebhookEncryptionKey []byte

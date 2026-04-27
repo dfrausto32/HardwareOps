@@ -3,7 +3,7 @@ set -euo pipefail
 
 BASE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
-SIGNING_DIR=${SIGNING_DIR:-/tmp/hardwareops-demo/signing}
+SIGNING_DIR=${SIGNING_DIR:-/tmp/parcel-demo/signing}
 SIGNING_KEY=${SIGNING_KEY:-$SIGNING_DIR/ed25519.key}
 SIGNING_PUB=${SIGNING_PUB_KEY_PATH:-$SIGNING_DIR/ed25519.pub}
 SIGNING_KEY_ID=${SIGNING_KEY_ID:-}

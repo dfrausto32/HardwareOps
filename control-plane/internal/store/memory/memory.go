@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 type Store struct {
@@ -1087,6 +1087,18 @@ func (s *Store) GetArtifact(artifactID string) (store.Artifact, bool, error) {
 	return a, ok, nil
 }
 
+func (s *Store) SetArtifactSBOMObjectKey(artifactID, sbomObjectKey string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.artifacts[artifactID]
+	if !ok {
+		return errors.New("artifact not found")
+	}
+	a.SBOMObjectKey = sbomObjectKey
+	s.artifacts[artifactID] = a
+	return nil
+}
+
 func (s *Store) FindArtifactByNameTypeVersion(name, artifactType, version string) (store.Artifact, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1641,6 +1653,20 @@ func (s *Store) SetUserRecoveryCodes(userID string, recoveryCodesJSON []byte, ge
 	}
 	user.RecoveryCodesJSON = append([]byte(nil), recoveryCodesJSON...)
 	user.RecoveryCodesGeneratedAt = generatedAt
+	user.UpdatedAt = time.Now().UTC()
+	s.users[user.UserID] = user
+	return nil
+}
+
+func (s *Store) SetUserTOTP(userID, encryptedSecret string, enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user, ok := s.users[userID]
+	if !ok {
+		return errors.New("user not found")
+	}
+	user.TOTPSecret = encryptedSecret
+	user.TOTPEnabled = enabled
 	user.UpdatedAt = time.Now().UTC()
 	s.users[user.UserID] = user
 	return nil

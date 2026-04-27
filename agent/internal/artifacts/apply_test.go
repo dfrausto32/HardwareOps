@@ -272,7 +272,7 @@ func createTestBundle(t *testing.T, root, version, atype string) (string, string
 	}
 
 	filePath := filepath.Join(filesDir, "app.txt")
-	content := []byte("hello hardwareops")
+	content := []byte("hello parcel")
 	if err := os.WriteFile(filePath, content, 0o644); err != nil {
 		t.Fatalf("write file: %v", err)
 	}

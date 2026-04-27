@@ -33,7 +33,7 @@ Artifactory adapter cloud smoke (with Secrets Manager-backed resolver):
 BASE_URL=https://app.<customer-domain> \
 INSECURE=1 \
 RUN_SETUP=0 \
-SETUP_OUTPUT_DIR=/tmp/hardwareops-artifactory-demo \
+SETUP_OUTPUT_DIR=/tmp/parcel-artifactory-demo \
 ./scripts/test-artifactory-adapter.sh
 ```
 

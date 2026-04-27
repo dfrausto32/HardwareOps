@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/hardwareops/control-plane/internal/globalplane"
+	"github.com/parcel/control-plane/internal/globalplane"
 )
 
 type planesStore interface {

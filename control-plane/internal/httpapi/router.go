@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/hardwareops/control-plane/internal/artifacttrust"
-	"github.com/hardwareops/control-plane/internal/auth"
-	"github.com/hardwareops/control-plane/internal/httpapi/handlers"
+	"github.com/parcel/control-plane/internal/artifacttrust"
+	"github.com/parcel/control-plane/internal/auth"
+	"github.com/parcel/control-plane/internal/httpapi/handlers"
 )
 
 func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
@@ -100,6 +100,11 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 	if deps.ArtifactScanJob != nil {
 		vulnScanTrigger = deps.ArtifactScanJob
 	}
+	// sbomGenTrigger follows the same nil-safety pattern.
+	var sbomGenTrigger handlers.ArtifactSBOMGenerator
+	if deps.ArtifactSBOMJob != nil {
+		sbomGenTrigger = deps.ArtifactSBOMJob
+	}
 	// nessusTrigger follows the same nil-safety pattern.
 	var nessusTrigger handlers.NessusSyncJobTrigger
 	if deps.NessusSyncJob != nil {
@@ -157,6 +162,10 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(viewer).Get("/auth/me", handlers.GetMe(deps.Store))
 		r.With(viewer).Post("/auth/recovery-codes/generate", handlers.GenerateRecoveryCodes(logger, deps.Auth, deps.Store, deps.TrustProxy))
 		r.With(loginLimiter.Middleware).Post("/auth/recovery-codes/reset", handlers.ResetPasswordWithRecoveryCode(logger, deps.Auth, deps.Store, deps.TrustProxy))
+		r.With(viewer).Post("/auth/totp/enroll", handlers.TOTPEnroll(logger, deps.Auth, deps.Store, deps.TOTPEncryptionKey, deps.TrustProxy))
+		r.With(viewer).Post("/auth/totp/confirm", handlers.TOTPConfirm(logger, deps.Auth, deps.Store, deps.TOTPEncryptionKey, deps.TrustProxy))
+		r.With(loginLimiter.Middleware).Post("/auth/totp/verify", handlers.TOTPVerify(logger, deps.Auth, deps.Store, deps.TOTPEncryptionKey, deps.TrustProxy))
+		r.With(viewer).Post("/auth/totp/disable", handlers.TOTPDisable(logger, deps.Auth, deps.Store, deps.TrustProxy))
 		r.With(admin).Post("/auth/vouchers", handlers.CreateAuthVoucher(logger, deps.Store, deps.TrustProxy))
 		r.With(admin).Post("/auth/service-tokens", handlers.CreateServiceToken(logger, deps.Store, deps.TrustProxy))
 		r.With(admin).Get("/auth/service-tokens", handlers.ListServiceTokens(logger, deps.Store, deps.TrustProxy))
@@ -184,11 +193,11 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(admin).Post("/trusted-signing-keys/{keyId}/retire", handlers.RetireTrustedSigningKey(logger, deps.Store, deps.TrustProxy))
 		r.With(operator).Get("/artifact-trust/policy", handlers.GetArtifactTrustPolicy(logger, deps.Store, deps.TrustProxy, artifactSigPolicy))
 		r.With(admin).Put("/artifact-trust/policy", handlers.PutArtifactTrustPolicy(logger, deps.Store, deps.TrustProxy, artifactSigPolicy))
-		r.With(operator).Post("/artifacts", handlers.CreateArtifactWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events, vulnScanTrigger, deps.VulnSkipArtifactTypes))
-		r.With(operator).Post("/artifacts/upload", handlers.UploadArtifactWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, deps.Metrics, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events, vulnScanTrigger, deps.VulnSkipArtifactTypes))
-		r.With(artifactPublisher).Post("/artifacts/pull", handlers.PullArtifactWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.ArtifactPullHosts, deps.ArtifactPullMaxBytes, deps.ArtifactPullTimeout, deps.ArtifactPullAllowInsecureHTTP, deps.ArtifactPullCreds, deps.TrustProxy, deps.Metrics, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events, vulnScanTrigger, deps.VulnSkipArtifactTypes))
+		r.With(operator).Post("/artifacts", handlers.CreateArtifactWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events, vulnScanTrigger, deps.VulnSkipArtifactTypes, sbomGenTrigger, deps.SBOMSkipArtifactTypes))
+		r.With(operator).Post("/artifacts/upload", handlers.UploadArtifactWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, deps.Metrics, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events, vulnScanTrigger, deps.VulnSkipArtifactTypes, sbomGenTrigger, deps.SBOMSkipArtifactTypes))
+		r.With(artifactPublisher).Post("/artifacts/pull", handlers.PullArtifactWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.ArtifactPullHosts, deps.ArtifactPullMaxBytes, deps.ArtifactPullTimeout, deps.ArtifactPullAllowInsecureHTTP, deps.ArtifactPullCreds, deps.TrustProxy, deps.Metrics, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events, vulnScanTrigger, deps.VulnSkipArtifactTypes, sbomGenTrigger, deps.SBOMSkipArtifactTypes))
 		r.With(artifactPublisher).Post("/artifacts/presign-upload", handlers.PresignArtifactUpload(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.PresignExpires, deps.TrustProxy, deps.Metrics))
-		r.With(artifactPublisher).Post("/artifacts/complete", handlers.CompleteArtifactUploadWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, deps.Metrics, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events, vulnScanTrigger, deps.VulnSkipArtifactTypes))
+		r.With(artifactPublisher).Post("/artifacts/complete", handlers.CompleteArtifactUploadWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, deps.Metrics, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events, vulnScanTrigger, deps.VulnSkipArtifactTypes, sbomGenTrigger, deps.SBOMSkipArtifactTypes))
 		r.With(admin).Get("/artifacts/pull-credentials", handlers.GetPullCredentialStatus(logger, deps.ArtifactPullCredsManager))
 		r.With(admin).Post("/artifacts/pull-credentials/reload", handlers.ReloadPullCredentials(logger, deps.Store, deps.ArtifactPullCredsManager, deps.TrustProxy))
 		r.With(artifactViewer).Get("/artifacts/{artifactId}", handlers.GetArtifact(logger, deps.Store, deps.TrustProxy))
@@ -196,6 +205,7 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(operator).Post("/artifacts/{artifactId}/restore", handlers.RestoreArtifact(logger, deps.Store, deps.TrustProxy))
 		r.With(operator).Delete("/artifacts/{artifactId}", handlers.DeleteArtifact(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy))
 		r.With(artifactViewer).Post("/artifacts/{artifactId}/presign", handlers.PresignArtifact(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.PresignExpires, deps.TrustProxy, deps.Metrics))
+		r.With(artifactViewer).Post("/artifacts/{artifactId}/sbom/presign", handlers.PresignArtifactSBOM(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.PresignExpires, deps.TrustProxy))
 		r.With(operator).Post("/artifacts/{artifactId}/attestations", handlers.PostArtifactAttestation(logger, deps.Store, deps.ArtifactFulcioRootCert, deps.ArtifactRekorURL, deps.ArtifactRequireRekorLog))
 		r.With(artifactViewer).Get("/artifacts/{artifactId}/attestations", handlers.ListArtifactAttestations(logger, deps.Store))
 		r.With(artifactViewer).Get("/artifacts/{artifactId}/vulnerability-scans", handlers.ListArtifactVulnScans(logger, deps.Store))

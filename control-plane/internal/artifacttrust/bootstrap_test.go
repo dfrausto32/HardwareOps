@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hardwareops/control-plane/internal/store/memory"
+	"github.com/parcel/control-plane/internal/store/memory"
 )
 
 func TestLoadBootstrapTrustedSigningKeys(t *testing.T) {

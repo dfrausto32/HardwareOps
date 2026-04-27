@@ -103,7 +103,7 @@ func NewDevCA() (*CA, error) {
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "HardwareOps Dev CA"},
+		Subject:      pkix.Name{CommonName: "Parcel Dev CA"},
 		NotBefore:    time.Now().UTC().Add(-5 * time.Minute),
 		NotAfter:     time.Now().UTC().Add(365 * 24 * time.Hour),
 		IsCA:         true,

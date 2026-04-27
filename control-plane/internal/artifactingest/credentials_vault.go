@@ -12,7 +12,7 @@ import (
 
 // LoadStaticCredentialsFromVault fetches pull credentials from a HashiCorp Vault
 // KV v2 secret. The path must be the full KV v2 data path
-// (e.g. "secret/data/hardwareops/pull-creds"). The secret value must be a
+// (e.g. "secret/data/parcel/pull-creds"). The secret value must be a
 // JSON object with the same shape as the static credentials format:
 //
 //	{ "<ref>": { "username": "...", "password": "..." }, ... }

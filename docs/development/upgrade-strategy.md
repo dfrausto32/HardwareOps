@@ -1,6 +1,6 @@
 # Upgrade Strategy (Control‑Plane, DB, UI, Agent)
 
-This document defines a **safe, repeatable** upgrade process for HardwareOps in real environments. It is designed for on‑prem first, with a path to cloud later.
+This document defines a **safe, repeatable** upgrade process for Parcel in real environments. It is designed for on‑prem first, with a path to cloud later.
 
 ## Goals
 - **Zero data loss** during upgrades.
@@ -48,7 +48,7 @@ This document defines a **safe, repeatable** upgrade process for HardwareOps in 
    - For UI auto‑apply, extract the upgrade package **into the mounted stack dir**
      (the same path as `STACK_DIR`, mounted to `/stack` in the control‑plane container).
    - The UI checks for bundles in `/stack/updates` (`UPGRADE_UPDATES_DIR`).
-     Place `hardwareops-upgrade-*.tar.gz` there to mark an update available.
+     Place `parcel-upgrade-*.tar.gz` there to mark an update available.
    - If using the auto‑apply flow, the control‑plane will run `scripts/apply-upgrade.sh`.
 
 4) **Apply update**
@@ -58,8 +58,8 @@ This document defines a **safe, repeatable** upgrade process for HardwareOps in 
    - Or run manually:
      ```bash
      # upgrade package (images + compose)
-     tar -xf hardwareops-upgrade-*.tar.gz
-     cd hardwareops-upgrade-*
+     tar -xf parcel-upgrade-*.tar.gz
+     cd parcel-upgrade-*
      STACK_DIR=$PWD ENV_FILE=.env.onprem.example ./scripts/apply-upgrade.sh
 
      # stack bundle (if already on host)
@@ -93,7 +93,7 @@ Use this to catch missing mounts or packages before applying.
 **Scope (v1):**
 - Remote maintenance-runner model (`UPGRADE_RUNNER_MODE=remote`).
 - Docker socket is mounted only in the maintenance-runner container.
-- On‑prem stack bundles (`hardwareops-upgrade-*.tar.gz`).
+- On‑prem stack bundles (`parcel-upgrade-*.tar.gz`).
 - Rollback covers **gateway + control‑plane images** only (DB rollback requires backup restore).
 
 **Inputs (must be present before apply):**
@@ -115,7 +115,7 @@ Use this to catch missing mounts or packages before applying.
 - Maintenance-runner starts a dedicated runner container with explicit image + env:
   - `--env-file /stack/.env.onprem`
   - `COMPOSE_FILE=/stack/updates/current/<bundle>/docker-compose.onprem.bundle.yml`
-  - `PROJECT_NAME=hardwareops`
+  - `PROJECT_NAME=parcel`
 - Load images from `images/*.tar` (if present), else pull.
 - Run `docker compose up -d`.
 
@@ -143,7 +143,7 @@ Use this to catch missing mounts or packages before applying.
  - Staged bundle path is recorded in `updates/current/ACTIVE` for traceability.
 
 **Observability:**
-- Runner writes logs to `/var/lib/hardwareops/logs/upgrade-<ts>.log`.
+- Runner writes logs to `/var/lib/parcel/logs/upgrade-<ts>.log`.
 - Upgrade status endpoint reports:
   - `state`, `running`, `exitCode`, `logPath`, `error`.
 

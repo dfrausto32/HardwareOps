@@ -214,7 +214,7 @@ Expected:
 ## 6) Evidence to Capture
 
 For each run, retain:
-- lab env file used (`<LAB_ROOT>/.env.onprem`, default `/tmp/hardwareops-prod-docker/.env.onprem`)
+- lab env file used (`<LAB_ROOT>/.env.onprem`, default `/tmp/parcel-prod-docker/.env.onprem`)
 - control-plane + runner logs
 - screenshots of UI pass/fail states
 - `curl` outputs for key endpoints (`/healthz`, `/metrics`, cert rotation status)

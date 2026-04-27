@@ -93,9 +93,9 @@ TOKEN_JSON=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/enrollments" -H
 TOKEN=$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["token"])' <<<"$TOKEN_JSON")
 
 # Generate CSR + enroll
-CSR_DIR=/tmp/hardwareops-fail
+CSR_DIR=/tmp/parcel-fail
 mkdir -p "$CSR_DIR"
-openssl req -newkey rsa:2048 -nodes -keyout "$CSR_DIR/device.key" -out "$CSR_DIR/device.csr" -subj "/CN=hardwareops-device"
+openssl req -newkey rsa:2048 -nodes -keyout "$CSR_DIR/device.key" -out "$CSR_DIR/device.csr" -subj "/CN=parcel-device"
 CSR=$(awk 'NF {sub(/\r/, ""); printf "%s\\n",$0;}' "$CSR_DIR/device.csr")
 ENROLL_JSON=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/devices/enroll" -H "Content-Type: application/json" -d "{\"token\":\"$TOKEN\",\"csr\":\"$CSR\"}")
 DEVICE_ID=$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["deviceId"])' <<<"$ENROLL_JSON")
@@ -124,7 +124,7 @@ if [[ "$BASE_URL" == https:* ]]; then
 fi
 
 if [ "$SKIP_BASELINE" != "1" ]; then
-  GOOD_DIR=/tmp/hardwareops-good
+  GOOD_DIR=/tmp/parcel-good
   rm -rf "$GOOD_DIR"
   mkdir -p "$GOOD_DIR/files"
   dd if=/dev/urandom of="$GOOD_DIR/files/hello.bin" bs=1M count=5 status=none
@@ -210,7 +210,7 @@ fi
   fi
 fi
 
-BAD_DIR=/tmp/hardwareops-bad
+BAD_DIR=/tmp/parcel-bad
 rm -rf "$BAD_DIR"
 mkdir -p "$BAD_DIR/files"
 echo "Creating ${FAIL_ARTIFACT_SIZE_GB}GB artifact (this may take a while)..."

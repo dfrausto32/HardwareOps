@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DOMAIN=${DOMAIN:-hardwareops.internal}
+DOMAIN=${DOMAIN:-parcel.internal}
 DNS_IP=${DNS_IP:-}
-CONTAINER_NAME=${CONTAINER_NAME:-hardwareops-coredns}
-DATA_DIR=${DATA_DIR:-/tmp/hardwareops-coredns}
+CONTAINER_NAME=${CONTAINER_NAME:-parcel-coredns}
+DATA_DIR=${DATA_DIR:-/tmp/parcel-coredns}
 FORCE=${FORCE:-0}
 HOST_NET=${HOST_NET:-0}
 
 if [ -z "$DNS_IP" ]; then
-  echo "DNS_IP is required (the IP that hardwareops.internal should resolve to)." >&2
+  echo "DNS_IP is required (the IP that parcel.internal should resolve to)." >&2
   echo "Example: DNS_IP=192.168.1.10 ./scripts/run-coredns.sh" >&2
   exit 1
 fi

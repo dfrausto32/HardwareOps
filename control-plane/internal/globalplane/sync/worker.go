@@ -6,7 +6,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/globalplane"
+	"github.com/parcel/control-plane/internal/globalplane"
 )
 
 // planeWorker polls a single regional plane on a ticker and upserts cached data.

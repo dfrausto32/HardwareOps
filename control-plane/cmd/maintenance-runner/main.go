@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/backup"
-	"github.com/hardwareops/control-plane/internal/config"
-	"github.com/hardwareops/control-plane/internal/upgrade"
+	"github.com/parcel/control-plane/internal/backup"
+	"github.com/parcel/control-plane/internal/config"
+	"github.com/parcel/control-plane/internal/upgrade"
 )
 
 type startRequest struct {

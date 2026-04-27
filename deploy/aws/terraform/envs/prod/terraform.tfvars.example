@@ -30,16 +30,19 @@ device_mtls_key    = "mtls/device-ca-bundle.pem"
 device_mtls_mode   = "passthrough"
 # WAF is enabled for app ingress by default. Uncomment to add a per-IP rate limit.
 # waf_rate_limit    = 2000
+# OFAC-sanctioned countries are blocked by default (CU, IR, KP, RU, SY).
+# To remove geo-blocking entirely, set an empty list:
+# waf_blocked_country_codes = []
 
-control_plane_image = "111122223333.dkr.ecr.us-east-1.amazonaws.com/hardwareops-control-plane:latest"
-gateway_image       = "111122223333.dkr.ecr.us-east-1.amazonaws.com/hardwareops-gateway:latest"
+control_plane_image = "111122223333.dkr.ecr.us-east-1.amazonaws.com/parcel-control-plane:latest"
+gateway_image       = "111122223333.dkr.ecr.us-east-1.amazonaws.com/parcel-gateway:latest"
 # Optional: Secrets Manager secret containing pull adapter credential map JSON.
 # Example value (ARN recommended):
-# artifact_pull_credentials_aws_secret_id = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/customer-a/prod/artifact-pull-credentials-AbCdEf"
+# artifact_pull_credentials_aws_secret_id = "arn:aws:secretsmanager:us-east-1:111122223333:secret:parcel/customer-a/prod/artifact-pull-credentials-AbCdEf"
 # Optional: Secrets Manager secret containing trusted signing key bootstrap JSON.
-# trusted_signing_keys_aws_secret_id = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/customer-a/prod/trusted-signing-keys-AbCdEf"
+# trusted_signing_keys_aws_secret_id = "arn:aws:secretsmanager:us-east-1:111122223333:secret:parcel/customer-a/prod/trusted-signing-keys-AbCdEf"
 # Optional: Secrets Manager secret containing CI workload identity provider config JSON.
-# ci_workload_identity_providers_aws_secret_id = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/customer-a/prod/workload-identity-providers-AbCdEf"
+# ci_workload_identity_providers_aws_secret_id = "arn:aws:secretsmanager:us-east-1:111122223333:secret:parcel/customer-a/prod/workload-identity-providers-AbCdEf"
 # If referenced Secrets Manager secrets use customer-managed CMKs, list those key ARNs.
 # secret_kms_key_arns = ["arn:aws:kms:us-east-1:111122223333:key/00000000-0000-0000-0000-000000000000"]
 
@@ -94,10 +97,10 @@ demo_bootstrap_password = "replace-with-bootstrap-password"
 
 # Recommended for production: store DATABASE_URL in Secrets Manager instead of plaintext.
 # Create a secret with the full connection string:
-#   aws secretsmanager create-secret --name "hardwareops/customer-a/prod/database-url" \
-#     --secret-string "postgres://hardwareops:<password>@<rds-endpoint>:5432/hardwareops?sslmode=require"
+#   aws secretsmanager create-secret --name "parcel/customer-a/prod/database-url" \
+#     --secret-string "postgres://parcel:<password>@<rds-endpoint>:5432/parcel?sslmode=require"
 # Then reference the ARN here:
-# database_url_secret_arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/customer-a/prod/database-url-AbCdEf"
+# database_url_secret_arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:parcel/customer-a/prod/database-url-AbCdEf"
 # Note: When db_manage_master_user_password = true, use the database_master_secret_arn output
 # to locate the RDS-managed secret, but note it stores JSON (not a URL) — create a separate URL secret.
 
@@ -109,9 +112,9 @@ demo_bootstrap_password = "replace-with-bootstrap-password"
 # app_public_url            = "https://app.customer-a.example.com"
 # smtp_host                 = "smtp.example.com"
 # smtp_port                 = 587
-# smtp_user                 = "hardwareops"
-# smtp_from                 = "HardwareOps <noreply@example.com>"
+# smtp_user                 = "parcel"
+# smtp_from                 = "Parcel <noreply@example.com>"
 # smtp_tls_mode             = "starttls"
 # smtp_timeout              = "10s"
 # In production, store the SMTP password in Secrets Manager instead of plaintext.
-# smtp_password_secret_arn  = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/customer-a/prod/smtp-password-AbCdEf"
+# smtp_password_secret_arn  = "arn:aws:secretsmanager:us-east-1:111122223333:secret:parcel/customer-a/prod/smtp-password-AbCdEf"

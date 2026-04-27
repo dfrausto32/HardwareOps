@@ -9,7 +9,7 @@ rm -f ./dev-ca.crt ./dev-ca.key
 rm -f ./agent/agent-state.json ./agent-state.json
 
 # Remove temp artifacts from curl quickstart
-rm -rf /tmp/hardwareops
+rm -rf /tmp/parcel
 
 # Remove agent artifact data
 rm -rf ./agent-data

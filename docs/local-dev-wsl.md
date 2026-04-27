@@ -20,12 +20,12 @@ make dev-up
 ```
 openssl req -x509 -newkey rsa:2048 -nodes \
   -keyout ./dev-ca.key -out ./dev-ca.crt \
-  -days 365 -subj "/CN=HardwareOps Dev CA"
+  -days 365 -subj "/CN=Parcel Dev CA"
 ```
 
 ## 3) Run the control‑plane (TLS + mTLS)
 ```
-export DATABASE_URL=postgres://hardwareops:hardwareops@localhost:5432/hardwareops?sslmode=disable
+export DATABASE_URL=postgres://parcel:parcel@localhost:5432/parcel?sslmode=disable
 export CA_CERT_PATH=./dev-ca.crt
 export CA_KEY_PATH=./dev-ca.key
 export AUTO_MIGRATE=1
@@ -117,8 +117,8 @@ CHECKIN_AFTER_CLAIM=1 \
 
 ### `permission denied` on device certs
 ```
-sudo chown -R hardwareops:hardwareops /etc/hardwareops/agent/certs
-sudo systemctl restart hardwareops-agent
+sudo chown -R parcel:parcel /etc/parcel/agent/certs
+sudo systemctl restart parcel-agent
 ```
 
 ### UI fails with `Unexpected token '??='`

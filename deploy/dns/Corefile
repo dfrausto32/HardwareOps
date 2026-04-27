@@ -1,7 +1,7 @@
 .:53 {
   log
   errors
-  file /etc/coredns/db.hardwareops.internal hardwareops.internal
+  file /etc/coredns/db.parcel.internal parcel.internal
   forward . /etc/resolv.conf
   cache 30
 }

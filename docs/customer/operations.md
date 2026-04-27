@@ -30,7 +30,7 @@ Flow:
 4. verify services return healthy
 
 If an upgrade fails:
-- inspect upgrade logs under `/var/lib/hardwareops/logs`
+- inspect upgrade logs under `/var/lib/parcel/logs`
 
 ## 3. Certificate rotation
 

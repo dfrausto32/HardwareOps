@@ -6,13 +6,13 @@ variable "name_prefix" {
 variable "db_name" {
   description = "Database name."
   type        = string
-  default     = "hardwareops"
+  default     = "parcel"
 }
 
 variable "username" {
   description = "Master username."
   type        = string
-  default     = "hardwareops"
+  default     = "parcel"
 }
 
 variable "master_password" {

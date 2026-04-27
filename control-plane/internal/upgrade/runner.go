@@ -219,7 +219,7 @@ func (r *Runner) Start() (Status, error) {
 	r.status.Command = r.applyCmd
 	r.status.WorkingDir = r.workDir
 	if strings.EqualFold(r.mode, "docker") {
-		r.status.RunnerContainer = "hardwareops-upgrade-runner"
+		r.status.RunnerContainer = "parcel-upgrade-runner"
 	} else {
 		r.status.RunnerContainer = ""
 	}
@@ -341,7 +341,7 @@ func buildDockerCmd(applyCmd, image, certsDir, runnerContainer string, env map[s
 
 	name := strings.TrimSpace(runnerContainer)
 	if name == "" {
-		name = "hardwareops-upgrade-runner"
+		name = "parcel-upgrade-runner"
 	}
 	args := []string{
 		"run",
@@ -392,7 +392,7 @@ func (r *Runner) validateDockerInputs() error {
 	if stat, err := os.Stat(updatesDir); err != nil || !stat.IsDir() {
 		return fmt.Errorf("updates dir missing: %s", updatesDir)
 	}
-	matches, _ := filepath.Glob(filepath.Join(updatesDir, "hardwareops-upgrade-*.tar.gz"))
+	matches, _ := filepath.Glob(filepath.Join(updatesDir, "parcel-upgrade-*.tar.gz"))
 	if len(matches) == 0 {
 		return fmt.Errorf("no upgrade bundle found in %s", updatesDir)
 	}

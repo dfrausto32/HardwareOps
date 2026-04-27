@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Parcel Stack Installer
+Comment=Install and start the Parcel control-plane + UI stack
+Exec=sh -c 'cd "$(dirname "%k")"; ./parcel-installer.sh'
+Terminal=true
+Icon=utilities-terminal
+Categories=Utility;

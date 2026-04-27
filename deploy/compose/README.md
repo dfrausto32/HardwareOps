@@ -50,8 +50,8 @@ docker compose -f docker-compose.onprem.yml --env-file .env.onprem up -d
 ```
 
 On-prem defaults now assume:
-- Human UI/API: `PUBLIC_BASE_URL` (for example `https://hardwareops.internal`)
-- Agent/API host: `AGENT_BASE_URL` (for example `https://agent.hardwareops.internal`)
+- Human UI/API: `PUBLIC_BASE_URL` (for example `https://parcel.internal`)
+- Agent/API host: `AGENT_BASE_URL` (for example `https://agent.parcel.internal`)
 - Local auth enabled (`AUTH_MODE=local`)
 - Device identity hardening in audit mode (`DEVICE_IDENTITY_MODE=audit`)
 
@@ -74,4 +74,4 @@ Metrics stack (Prometheus + Grafana):
 ```
 docker compose -f docker-compose.metrics.yml up -d
 ```
-Grafana is pre-provisioned with a HardwareOps dashboard on `http://localhost:3000` (admin/admin).
+Grafana is pre-provisioned with a Parcel dashboard on `http://localhost:3000` (admin/admin).

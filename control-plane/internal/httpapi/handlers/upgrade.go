@@ -9,9 +9,9 @@ import (
 	"sort"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/metrics"
-	"github.com/hardwareops/control-plane/internal/store"
-	"github.com/hardwareops/control-plane/internal/upgrade"
+	"github.com/parcel/control-plane/internal/metrics"
+	"github.com/parcel/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/upgrade"
 )
 
 type MaintenanceStateView interface {
@@ -95,7 +95,7 @@ func GetUpgradeAvailable(updatesDir string) http.HandlerFunc {
 			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
-		matches, err := filepath.Glob(filepath.Join(updatesDir, "hardwareops-upgrade-*.tar.gz"))
+		matches, err := filepath.Glob(filepath.Join(updatesDir, "parcel-upgrade-*.tar.gz"))
 		if err != nil || len(matches) == 0 {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(resp)

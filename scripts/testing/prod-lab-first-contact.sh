@@ -4,7 +4,7 @@ set -euo pipefail
 BASE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 RUN_ID=$(date +%s)
 
-LAB_ROOT=${LAB_ROOT:-"${TMPDIR:-/tmp}/hardwareops-prod-docker"}
+LAB_ROOT=${LAB_ROOT:-"${TMPDIR:-/tmp}/parcel-prod-docker"}
 ENV_FILE=${ENV_FILE:-"$LAB_ROOT/.env.onprem"}
 CERTS_DIR=${CERTS_DIR:-"$LAB_ROOT/certs"}
 WORK_DIR=${WORK_DIR:-"$LAB_ROOT/first-contact"}
@@ -63,7 +63,7 @@ detect_arch() {
 
 locate_agent_bundle() {
   local arch="$1"
-  find "$BASE_DIR/dist/installers" -type f -name "hardwareops-agent-*-linux-${arch}.tar.gz" | sort | tail -n1
+  find "$BASE_DIR/dist/installers" -type f -name "parcel-agent-*-linux-${arch}.tar.gz" | sort | tail -n1
 }
 
 PUBLIC_BASE_URL=$(read_env PUBLIC_BASE_URL)
@@ -117,7 +117,7 @@ mkdir -p "$WORK_DIR/bundle"
 tar -xzf "$AGENT_BUNDLE" -C "$WORK_DIR/bundle"
 
 bundle_dir=$(find "$WORK_DIR/bundle" -mindepth 1 -maxdepth 1 -type d | head -n1)
-if [ -z "$bundle_dir" ] || [ ! -f "$bundle_dir/hardwareops-agent" ]; then
+if [ -z "$bundle_dir" ] || [ ! -f "$bundle_dir/parcel-agent" ]; then
   echo "Extracted bundle missing expected files: $AGENT_BUNDLE" >&2
   exit 1
 fi
@@ -200,13 +200,13 @@ container_cmd=$(cat <<'EOF'
 set -euo pipefail
 cd /bundle
 ./scripts/agent-install.sh \
-  AGENT_SRC=/bundle/hardwareops-agent \
+  AGENT_SRC=/bundle/parcel-agent \
   CONTROL_PLANE_URL="$CONTROL_PLANE_URL" \
   CONTROL_PLANE_CA_CERT_SRC=/input/ca.crt \
   AGENT_ENROLL_MODE=approval \
   ENROLLMENT_PROFILE_TOKEN="$ENROLLMENT_PROFILE_TOKEN" \
   ENABLE_SERVICE=0
-exec su -s /bin/sh hardwareops -c 'set -a; . /etc/hardwareops/agent/agent.env; exec /usr/local/bin/hardwareops-agent'
+exec su -s /bin/sh parcel -c 'set -a; . /etc/parcel/agent/agent.env; exec /usr/local/bin/parcel-agent'
 EOF
 )
 
@@ -271,10 +271,10 @@ while true; do
     exit 1
   fi
 
-  device_id=$(docker exec "$CONTAINER_NAME" sh -lc 'if [ -s /var/lib/hardwareops/agent/device-id ]; then cat /var/lib/hardwareops/agent/device-id; fi' 2>/dev/null || true)
+  device_id=$(docker exec "$CONTAINER_NAME" sh -lc 'if [ -s /var/lib/parcel/agent/device-id ]; then cat /var/lib/parcel/agent/device-id; fi' 2>/dev/null || true)
   if [ -n "$device_id" ]; then
-    if docker exec "$CONTAINER_NAME" test -s /etc/hardwareops/agent/certs/device.crt; then
-      if docker exec "$CONTAINER_NAME" test ! -e /var/lib/hardwareops/agent/bootstrap-state.json; then
+    if docker exec "$CONTAINER_NAME" test -s /etc/parcel/agent/certs/device.crt; then
+      if docker exec "$CONTAINER_NAME" test ! -e /var/lib/parcel/agent/bootstrap-state.json; then
         break
       fi
     fi

@@ -18,17 +18,23 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/hardwareops/control-plane/internal/artifactingest"
-	"github.com/hardwareops/control-plane/internal/artifacttrust"
-	"github.com/hardwareops/control-plane/internal/events"
-	"github.com/hardwareops/control-plane/internal/lifecycle"
-	"github.com/hardwareops/control-plane/internal/metrics"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/artifactingest"
+	"github.com/parcel/control-plane/internal/artifacttrust"
+	"github.com/parcel/control-plane/internal/events"
+	"github.com/parcel/control-plane/internal/lifecycle"
+	"github.com/parcel/control-plane/internal/metrics"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 // ArtifactVulnScanTrigger is a narrow interface so this package does not
 // directly import the vulnscan package.
 type ArtifactVulnScanTrigger interface {
+	Trigger(artifactID, objectKey, sha256 string)
+}
+
+// ArtifactSBOMGenerator is a narrow interface so this package does not
+// directly import the sbom package.
+type ArtifactSBOMGenerator interface {
 	Trigger(artifactID, objectKey, sha256 string)
 }
 
@@ -57,26 +63,27 @@ type CreateArtifactRequest struct {
 }
 
 type ArtifactResponse struct {
-	ArtifactID     string          `json:"artifactId"`
-	Name           string          `json:"name"`
-	Version        string          `json:"version"`
-	Type           string          `json:"type"`
-	Status         string          `json:"status"`
-	ObjectKey      string          `json:"objectKey"`
-	SHA256         string          `json:"sha256"`
-	Signature      string          `json:"signature,omitempty"`
-	SignatureType  string          `json:"signatureType,omitempty"`
-	SignatureKeyID string          `json:"signatureKeyId,omitempty"`
-	VerificationStatus string      `json:"verificationStatus,omitempty"`
-	VerificationError  string      `json:"verificationError,omitempty"`
-	VerifiedAt     *time.Time      `json:"verifiedAt,omitempty"`
-	SizeBytes      int64           `json:"sizeBytes"`
-	Metadata       json.RawMessage `json:"metadata,omitempty"`
-	CreatedAt      time.Time       `json:"createdAt"`
-	DeprecatedAt   *time.Time      `json:"deprecatedAt,omitempty"`
-	DeleteAfter    *time.Time      `json:"deleteAfter,omitempty"`
-	ReferenceCount int             `json:"referenceCount"`
-	Duplicate      bool            `json:"duplicate,omitempty"`
+	ArtifactID         string          `json:"artifactId"`
+	Name               string          `json:"name"`
+	Version            string          `json:"version"`
+	Type               string          `json:"type"`
+	Status             string          `json:"status"`
+	ObjectKey          string          `json:"objectKey"`
+	SHA256             string          `json:"sha256"`
+	Signature          string          `json:"signature,omitempty"`
+	SignatureType      string          `json:"signatureType,omitempty"`
+	SignatureKeyID     string          `json:"signatureKeyId,omitempty"`
+	VerificationStatus string          `json:"verificationStatus,omitempty"`
+	VerificationError  string          `json:"verificationError,omitempty"`
+	VerifiedAt         *time.Time      `json:"verifiedAt,omitempty"`
+	SizeBytes          int64           `json:"sizeBytes"`
+	Metadata           json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt          time.Time       `json:"createdAt"`
+	DeprecatedAt       *time.Time      `json:"deprecatedAt,omitempty"`
+	DeleteAfter        *time.Time      `json:"deleteAfter,omitempty"`
+	ReferenceCount     int             `json:"referenceCount"`
+	Duplicate          bool            `json:"duplicate,omitempty"`
+	SBOMObjectKey      string          `json:"sbomObjectKey,omitempty"`
 }
 
 type ArtifactListResponse struct {
@@ -190,26 +197,26 @@ type ArtifactLifecycleStatusResponse struct {
 }
 
 func CreateArtifact(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
-	return createArtifact(logger, st, nil, "", trustProxy, sigPolicy, nil, nil, nil, nil)
+	return createArtifact(logger, st, nil, "", trustProxy, sigPolicy, nil, nil, nil, nil, nil, nil)
 }
 
 func CreateArtifactWithReleaseAuto(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger) http.HandlerFunc {
-	return createArtifact(logger, st, nil, "", trustProxy, sigPolicy, releaseAuto, nil, nil, nil)
+	return createArtifact(logger, st, nil, "", trustProxy, sigPolicy, releaseAuto, nil, nil, nil, nil, nil)
 }
 
 func CreateArtifactWithObjectStore(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
-	return createArtifact(logger, st, objStore, bucket, trustProxy, sigPolicy, nil, nil, nil, nil)
+	return createArtifact(logger, st, objStore, bucket, trustProxy, sigPolicy, nil, nil, nil, nil, nil, nil)
 }
 
 func CreateArtifactWithReleaseAutoObjectStore(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger) http.HandlerFunc {
-	return createArtifact(logger, st, objStore, bucket, trustProxy, sigPolicy, releaseAuto, nil, nil, nil)
+	return createArtifact(logger, st, objStore, bucket, trustProxy, sigPolicy, releaseAuto, nil, nil, nil, nil, nil)
 }
 
-func CreateArtifactWithRealtime(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string) http.HandlerFunc {
-	return createArtifact(logger, st, objStore, bucket, trustProxy, sigPolicy, releaseAuto, hub, vulnScan, vulnSkipTypes)
+func CreateArtifactWithRealtime(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string, sbomGen ArtifactSBOMGenerator, sbomSkipTypes []string) http.HandlerFunc {
+	return createArtifact(logger, st, objStore, bucket, trustProxy, sigPolicy, releaseAuto, hub, vulnScan, vulnSkipTypes, sbomGen, sbomSkipTypes)
 }
 
-func createArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string) http.HandlerFunc {
+func createArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string, sbomGen ArtifactSBOMGenerator, sbomSkipTypes []string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req CreateArtifactRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -323,6 +330,9 @@ func createArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 		if vulnScan != nil && shouldScanArtifact(artifact.Type, vulnSkipTypes) {
 			vulnScan.Trigger(artifact.ArtifactID, artifact.ObjectKey, artifact.SHA256)
 		}
+		if sbomGen != nil && shouldScanArtifact(artifact.Type, sbomSkipTypes) {
+			sbomGen.Trigger(artifact.ArtifactID, artifact.ObjectKey, artifact.SHA256)
+		}
 
 		resp := artifactToResponse(artifact, 0)
 		w.Header().Set("Content-Type", "application/json")
@@ -346,18 +356,18 @@ func emitArtifactRegisteredEvent(logger *log.Logger, st store.Store, hub *events
 }
 
 func UploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
-	return uploadArtifact(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, nil, nil, nil, nil)
+	return uploadArtifact(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, nil, nil, nil, nil, nil, nil)
 }
 
 func UploadArtifactWithReleaseAuto(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger) http.HandlerFunc {
-	return uploadArtifact(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, releaseAuto, nil, nil, nil)
+	return uploadArtifact(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, releaseAuto, nil, nil, nil, nil, nil)
 }
 
-func UploadArtifactWithRealtime(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string) http.HandlerFunc {
-	return uploadArtifact(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, releaseAuto, hub, vulnScan, vulnSkipTypes)
+func UploadArtifactWithRealtime(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string, sbomGen ArtifactSBOMGenerator, sbomSkipTypes []string) http.HandlerFunc {
+	return uploadArtifact(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, releaseAuto, hub, vulnScan, vulnSkipTypes, sbomGen, sbomSkipTypes)
 }
 
-func uploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string) http.HandlerFunc {
+func uploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string, sbomGen ArtifactSBOMGenerator, sbomSkipTypes []string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		record := func(status string) {
 			if metricsCollector != nil {
@@ -528,6 +538,9 @@ func uploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 		if vulnScan != nil && shouldScanArtifact(atype, vulnSkipTypes) {
 			vulnScan.Trigger(artifactID, objectKey, actualSHA)
 		}
+		if sbomGen != nil && shouldScanArtifact(atype, sbomSkipTypes) {
+			sbomGen.Trigger(artifactID, objectKey, actualSHA)
+		}
 
 		resp := UploadArtifactResponse{
 			ArtifactID: artifactID,
@@ -544,18 +557,18 @@ func uploadArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 }
 
 func PullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, allowedHosts []string, maxBytes int64, timeout time.Duration, allowInsecureHTTP bool, credentialResolver artifactingest.CredentialResolver, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
-	return pullArtifact(logger, st, objStore, bucket, allowedHosts, maxBytes, timeout, allowInsecureHTTP, credentialResolver, trustProxy, metricsCollector, sigPolicy, nil, nil, nil, nil)
+	return pullArtifact(logger, st, objStore, bucket, allowedHosts, maxBytes, timeout, allowInsecureHTTP, credentialResolver, trustProxy, metricsCollector, sigPolicy, nil, nil, nil, nil, nil, nil)
 }
 
 func PullArtifactWithReleaseAuto(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, allowedHosts []string, maxBytes int64, timeout time.Duration, allowInsecureHTTP bool, credentialResolver artifactingest.CredentialResolver, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger) http.HandlerFunc {
-	return pullArtifact(logger, st, objStore, bucket, allowedHosts, maxBytes, timeout, allowInsecureHTTP, credentialResolver, trustProxy, metricsCollector, sigPolicy, releaseAuto, nil, nil, nil)
+	return pullArtifact(logger, st, objStore, bucket, allowedHosts, maxBytes, timeout, allowInsecureHTTP, credentialResolver, trustProxy, metricsCollector, sigPolicy, releaseAuto, nil, nil, nil, nil, nil)
 }
 
-func PullArtifactWithRealtime(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, allowedHosts []string, maxBytes int64, timeout time.Duration, allowInsecureHTTP bool, credentialResolver artifactingest.CredentialResolver, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string) http.HandlerFunc {
-	return pullArtifact(logger, st, objStore, bucket, allowedHosts, maxBytes, timeout, allowInsecureHTTP, credentialResolver, trustProxy, metricsCollector, sigPolicy, releaseAuto, hub, vulnScan, vulnSkipTypes)
+func PullArtifactWithRealtime(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, allowedHosts []string, maxBytes int64, timeout time.Duration, allowInsecureHTTP bool, credentialResolver artifactingest.CredentialResolver, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string, sbomGen ArtifactSBOMGenerator, sbomSkipTypes []string) http.HandlerFunc {
+	return pullArtifact(logger, st, objStore, bucket, allowedHosts, maxBytes, timeout, allowInsecureHTTP, credentialResolver, trustProxy, metricsCollector, sigPolicy, releaseAuto, hub, vulnScan, vulnSkipTypes, sbomGen, sbomSkipTypes)
 }
 
-func pullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, allowedHosts []string, maxBytes int64, timeout time.Duration, allowInsecureHTTP bool, credentialResolver artifactingest.CredentialResolver, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string) http.HandlerFunc {
+func pullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, allowedHosts []string, maxBytes int64, timeout time.Duration, allowInsecureHTTP bool, credentialResolver artifactingest.CredentialResolver, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string, sbomGen ArtifactSBOMGenerator, sbomSkipTypes []string) http.HandlerFunc {
 	adapterRegistry := artifactingest.NewPullAdapterRegistry(
 		artifactingest.NewHTTPPullAdapter(allowedHosts, timeout, allowInsecureHTTP),
 		artifactingest.NewArtifactoryPullAdapter(allowedHosts, timeout, allowInsecureHTTP),
@@ -688,7 +701,7 @@ func pullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, buck
 			return
 		}
 
-		tmpFile, err := os.CreateTemp("", "hardwareops-artifact-pull-*.tar.gz")
+		tmpFile, err := os.CreateTemp("", "parcel-artifact-pull-*.tar.gz")
 		if err != nil {
 			logger.Printf("create temp artifact file error: %v", err)
 			record("error")
@@ -844,6 +857,9 @@ func pullArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, buck
 		if vulnScan != nil && shouldScanArtifact(atype, vulnSkipTypes) {
 			vulnScan.Trigger(artifactID, objectKey, actualSHA)
 		}
+		if sbomGen != nil && shouldScanArtifact(atype, sbomSkipTypes) {
+			sbomGen.Trigger(artifactID, objectKey, actualSHA)
+		}
 
 		out := UploadArtifactResponse{
 			ArtifactID: artifactID,
@@ -937,18 +953,18 @@ func PresignArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectSt
 }
 
 func CompleteArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy) http.HandlerFunc {
-	return completeArtifactUpload(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, nil, nil, nil, nil)
+	return completeArtifactUpload(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, nil, nil, nil, nil, nil, nil)
 }
 
 func CompleteArtifactUploadWithReleaseAuto(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger) http.HandlerFunc {
-	return completeArtifactUpload(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, releaseAuto, nil, nil, nil)
+	return completeArtifactUpload(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, releaseAuto, nil, nil, nil, nil, nil)
 }
 
-func CompleteArtifactUploadWithRealtime(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string) http.HandlerFunc {
-	return completeArtifactUpload(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, releaseAuto, hub, vulnScan, vulnSkipTypes)
+func CompleteArtifactUploadWithRealtime(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string, sbomGen ArtifactSBOMGenerator, sbomSkipTypes []string) http.HandlerFunc {
+	return completeArtifactUpload(logger, st, objStore, bucket, trustProxy, metricsCollector, sigPolicy, releaseAuto, hub, vulnScan, vulnSkipTypes, sbomGen, sbomSkipTypes)
 }
 
-func completeArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string) http.HandlerFunc {
+func completeArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, metricsCollector *metrics.Metrics, sigPolicy ArtifactSignaturePolicy, releaseAuto releaseAutoTrigger, hub *events.Hub, vulnScan ArtifactVulnScanTrigger, vulnSkipTypes []string, sbomGen ArtifactSBOMGenerator, sbomSkipTypes []string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		record := func(status string) {
 			if metricsCollector != nil {
@@ -1132,6 +1148,9 @@ func completeArtifactUpload(logger *log.Logger, st store.Store, objStore ObjectS
 		if vulnScan != nil && shouldScanArtifact(atype, vulnSkipTypes) {
 			vulnScan.Trigger(req.ArtifactID, req.ObjectKey, actualSHA)
 		}
+		if sbomGen != nil && shouldScanArtifact(atype, sbomSkipTypes) {
+			sbomGen.Trigger(req.ArtifactID, req.ObjectKey, actualSHA)
+		}
 
 		resp := UploadArtifactResponse{
 			ArtifactID: req.ArtifactID,
@@ -1283,6 +1302,56 @@ func PresignArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, b
 		event := buildAuditEvent(r, trustProxy, actorUser("system"), "artifact.presign", "artifact", artifactID)
 		event.MetadataJSON = auditJSON(map[string]any{"expiresAt": time.Now().UTC().Add(exp)})
 		writeAudit(logger, st, event, nil)
+
+		resp := PresignResponse{DownloadURL: url, ExpiresAt: time.Now().UTC().Add(exp)}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}
+}
+
+func PresignArtifactSBOM(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, expires time.Duration, trustProxy bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		artifactID := chi.URLParam(r, "artifactId")
+		if artifactID == "" {
+			http.Error(w, "artifactId required", http.StatusBadRequest)
+			return
+		}
+		if _, err := uuid.Parse(artifactID); err != nil {
+			http.Error(w, "artifactId must be uuid", http.StatusBadRequest)
+			return
+		}
+		if objStore == nil || bucket == "" {
+			http.Error(w, "object store not configured", http.StatusInternalServerError)
+			return
+		}
+
+		artifact, ok, err := st.GetArtifact(artifactID)
+		if err != nil {
+			logger.Printf("get artifact error: %v", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+		if !ok {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if artifact.SBOMObjectKey == "" {
+			http.Error(w, "sbom not yet generated", http.StatusNotFound)
+			return
+		}
+
+		exp := expires
+		if exp <= 0 {
+			exp = 15 * time.Minute
+		}
+		url, err := objStore.PresignGet(r.Context(), bucket, artifact.SBOMObjectKey, exp)
+		if err != nil {
+			logger.Printf("presign sbom error: %v", err)
+			http.Error(w, "presign error", http.StatusInternalServerError)
+			return
+		}
+
+		writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("system"), "artifact.sbom.presign", "artifact", artifactID), nil)
 
 		resp := PresignResponse{DownloadURL: url, ExpiresAt: time.Now().UTC().Add(exp)}
 		w.Header().Set("Content-Type", "application/json")
@@ -1707,6 +1776,7 @@ func artifactToResponse(a store.Artifact, refs int) ArtifactResponse {
 		DeprecatedAt:       timePtr(a.DeprecatedAt),
 		DeleteAfter:        timePtr(a.DeleteAfter),
 		ReferenceCount:     refs,
+		SBOMObjectKey:      a.SBOMObjectKey,
 	}
 }
 

@@ -22,8 +22,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hardwareops/agent/internal/plan"
-	"github.com/hardwareops/agent/internal/planexec"
+	"github.com/parcel/agent/internal/plan"
+	"github.com/parcel/agent/internal/planexec"
 )
 
 type Desired struct {

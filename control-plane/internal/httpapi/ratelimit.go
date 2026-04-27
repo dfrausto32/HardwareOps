@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/metrics"
+	"github.com/parcel/control-plane/internal/metrics"
 )
 
 type RateLimiter struct {

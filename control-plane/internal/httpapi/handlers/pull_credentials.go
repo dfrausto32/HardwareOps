@@ -5,8 +5,8 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/hardwareops/control-plane/internal/artifactingest"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/artifactingest"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 func GetPullCredentialStatus(logger *log.Logger, mgr *artifactingest.PullCredentialManager) http.HandlerFunc {

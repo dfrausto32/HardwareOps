@@ -4,7 +4,7 @@ set -euo pipefail
 BASE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 RUN_SETUP=${RUN_SETUP:-1}
-SETUP_OUTPUT_DIR=${SETUP_OUTPUT_DIR:-/tmp/hardwareops-artifactory-demo}
+SETUP_OUTPUT_DIR=${SETUP_OUTPUT_DIR:-/tmp/parcel-artifactory-demo}
 
 BASE_URL=${BASE_URL:-https://localhost:8080}
 CA_CERT_PATH=${CA_CERT_PATH:-$BASE_DIR/dev-ca.crt}

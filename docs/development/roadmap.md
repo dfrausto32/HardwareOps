@@ -22,12 +22,16 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Phase B Extension — UX + Realtime | 🟢 Complete | Bulk actions + realtime updates + auth-session UX reset shipped. |
 | Operational Hardening (between B and C) | 🟢 Complete | Pull-boundary, token exposure, startup guardrails, break-glass backend, proxy trust policy, and abuse controls are all shipped. |
 | Phase C — Enterprise Readiness | 🟢 Complete | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, artifact tracking policies, the local-auth recovery stack (recovery codes, reset tokens, break-glass CLI), CI workload identity federation, supply-chain provenance policy (Cosign/Sigstore), LDAP/AD auth, and Vault secrets integration are all shipped. |
-| Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Connected email delivery complete. Remaining Phase D work is live-deployment acceptance gate execution (operational) and full VPC reference diagram (docs). |
+| Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Connected email delivery complete. TOTP MFA for local accounts shipped. Remaining Phase D work is live-deployment acceptance gate execution (operational) and full VPC reference diagram (docs). |
 | Phase E — Federated Multi-Region | 🟡 In progress | Hub-and-spoke federation layer: global management plane above regional control planes. Agents unchanged. E1 (global aggregation plane), E2 (artifact federation), and E3 (global desired state / policy push) complete. E4–E6 planned. |
 
 ### Active work queue (what is still to do)
 
-No items currently in-flight. Queue is clear.
+- **Create `security@parcel.io` inbox** — `SECURITY.md` (VDP) is published and references this address. The mailbox must exist before the repo goes public or is shared with customers. Assign to ops/legal owner.
+- **Populate IR runbook escalation contacts** — `docs/incidents/ir-runbook.md` Section 5 has placeholder names/contacts for IC, Technical Lead, Communications Lead, Legal, and Executive escalation. Replace before first production deployment.
+- **Submit BIS/NSA annual self-classification report** — Due February 1, 2027 (covering calendar year 2026). File via SNAP-R. See `docs/export-compliance.md` Section 2.
+- **Insert export control clause into Terms of Service** — Clause text is in `docs/export-compliance.md` Section 4. Required before commercial distribution outside the U.S.
+- **Assign export compliance responsible parties** — `docs/export-compliance.md` Section 6 has TBD owners for BIS filing, restricted-party screening, and ToS maintenance.
 
 ### Prepared next tasks (agent-scoped)
 - `E4-SYNC-RECONCILER` — periodic reconciler on the global plane re-pushes policies and artifact metadata to regional planes that missed a fan-out; exponential backoff on failure; last-sync timestamps visible in the global UI
@@ -543,7 +547,7 @@ Confirm priorities with the team before mapping to agents.
 - **Risks:** Directory inconsistency (deprovisioned users still have cached store records); LDAP connection pooling and latency under load; AD vs. OpenLDAP filter differences; TLS cert validation for LDAPS.
 - **Acceptance:**
   - Users can authenticate with `POST /api/v1/auth/ldap/login` using their directory credentials and receive a JWT identical to local/OIDC tokens.
-  - LDAP group membership is mapped to HardwareOps roles via `AUTH_LDAP_ROLE_MAP` (same JSON map pattern as OIDC).
+  - LDAP group membership is mapped to Parcel roles via `AUTH_LDAP_ROLE_MAP` (same JSON map pattern as OIDC).
   - Failed login emits an audit event; successful login updates `last_login_at`.
   - Disabled LDAP users (store `disabled = true`) are rejected regardless of directory state.
   - TLS/LDAPS connections are supported; plain LDAP is supported for dev.
@@ -629,7 +633,21 @@ Confirm priorities with the team before mapping to agents.
   - IAM policy review passed with scoped permissions.
   - ECS exec disabled by default for production.
   - Security alarms routed to on-call channel.
-- **Notes:** IAM roles, WAFv2, ingress CIDR split, acceptance gate, and operator runbook shipped in the March 2026 IAM/WAF batch. Plaintext `DATABASE_URL` eliminated (#18); `enable_execute_command` default enforced to `false` (#19); CloudWatch alarm resources added to Terraform (#17). Remaining residual: live-deployment acceptance gate execution against a real AWS environment.
+- **Notes:** IAM roles, WAFv2, ingress CIDR split, acceptance gate, and operator runbook shipped in the March 2026 IAM/WAF batch. Plaintext `DATABASE_URL` eliminated (#18); `enable_execute_command` default enforced to `false` (#19); CloudWatch alarm resources added to Terraform (#17). April 2026: OFAC geo-block rule added to WAFv2 ACL (`waf_blocked_country_codes`, default CU/IR/KP/RU/SY); `SECURITY.md` VDP published at repo root. Remaining residual: live-deployment acceptance gate execution against a real AWS environment; `security@parcel.io` inbox creation (see active work queue).
+
+#### TOTP multi-factor authentication
+- **Status:** 🟢 Complete
+- **Scope:** Time-based one-time password (RFC 6238) as a second factor for local accounts. Two-step login: password check issues a short-lived `totp_pending` JWT (5 min TTL); TOTP code exchange issues the full session JWT. Secrets encrypted at rest with AES-256-GCM. Self-service enroll/confirm/disable endpoints. Closes NIST SP 800-63B MFA gap.
+- **Dependencies:** Local auth mode, `TOTP_ENCRYPTION_KEY` env var (base64-encoded 32-byte AES key), `github.com/pquerna/otp`.
+- **Acceptance:**
+  - `POST /auth/login` returns 202 + `pendingToken` when TOTP is enabled.
+  - `POST /auth/totp/verify` with valid code issues a full JWT.
+  - `POST /auth/totp/verify` with invalid code returns 401; invalid `pendingToken` returns 401.
+  - `POST /auth/totp/disable` requires current password.
+  - TOTP secret stored as AES-256-GCM ciphertext; never returned after enroll response.
+  - All four TOTP actions emit structured audit events.
+  - Endpoints return 503 when `TOTP_ENCRYPTION_KEY` is unset.
+- **Notes:** April 2026. Migration `0036_totp.sql` adds `totp_secret` and `totp_enabled` to `users`. Auth flow in `auth/totp.go`; handlers in `handlers/auth_totp.go`. `GET /auth/me` and login responses include `totpEnabled` field. `docs/icd.md` §6.5 documents full setup flow. `docs/deployment-hardening.md` §3 includes `TOTP_ENCRYPTION_KEY` in on-prem template.
 
 #### Connected email delivery for auth recovery/setup
 - **Status:** 🟢 Complete

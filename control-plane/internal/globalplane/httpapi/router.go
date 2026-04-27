@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/hardwareops/control-plane/internal/auth"
-	"github.com/hardwareops/control-plane/internal/globalplane/httpapi/handlers"
+	"github.com/parcel/control-plane/internal/auth"
+	"github.com/parcel/control-plane/internal/globalplane/httpapi/handlers"
 )
 
 // syncManagerIface is the subset of sync.Manager used by the router.

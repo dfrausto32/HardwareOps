@@ -256,6 +256,7 @@ module "alb" {
   device_mtls_key            = var.device_mtls_key
   device_mtls_object_version = var.device_mtls_object_version
   enable_waf                 = var.enable_waf
+  waf_blocked_country_codes  = var.waf_blocked_country_codes
   waf_rate_limit             = var.waf_rate_limit
   waf_managed_rule_groups    = var.waf_managed_rule_groups
   tags                       = var.tags

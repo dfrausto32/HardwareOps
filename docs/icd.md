@@ -1,11 +1,11 @@
-# HardwareOps Integration Control Document (ICD)
+# Parcel Integration Control Document (ICD)
 
 Status: Active (living document)  
 API namespace: `v1`  
 Last updated: 2026-03-24
 Source of truth for routes: `control-plane/internal/httpapi/router.go`
 
-This is the canonical contract for integrating with HardwareOps without relying on the GUI.
+This is the canonical contract for integrating with Parcel without relying on the GUI.
 
 ## 1) Purpose and Scope
 
@@ -57,7 +57,7 @@ Auth modes:
 - `AUTH_MODE=disabled`: role gates are bypassed
 - local/JWT auth: use `Authorization: Bearer <token>`
 - service tokens: scoped machine tokens for automation
-- workload identity exchange: external CI OIDC token exchanged for short-lived HardwareOps bearer token
+- workload identity exchange: external CI OIDC token exchanged for short-lived Parcel bearer token
 
 Service token scopes — each scope grants access to a specific slice of the API without requiring a user role:
 
@@ -86,12 +86,16 @@ All paths below are full paths.
 | GET | `/api/v1/bootstrap` | public | bootstrap status |
 | GET | `/api/v1/bootstrap/ca` | public + bootstrap-token logic | downloads bootstrap CA |
 | GET | `/api/v1/auth/status` | public | auth mode and enabled state; includes `ldapEnabled: bool` when LDAP is configured; includes `smtpEnabled: bool` when SMTP is configured |
-| POST | `/api/v1/auth/login` | public | rate limited, returns JWT |
+| POST | `/api/v1/auth/login` | public | rate limited; returns JWT on success, or HTTP 202 with `{"totpRequired":true,"pendingToken":"..."}` when TOTP is enabled for the account |
 | POST | `/api/v1/auth/ldap/login` | public | rate limited; LDAP/AD credential exchange, returns JWT identical to local login |
 | POST | `/api/v1/auth/register` | public | voucher/bootstrap-driven local registration |
 | POST | `/api/v1/auth/forgot-password` | public | rate limited; accepts `{"email":"..."}`, always returns 200 regardless of whether address is registered (no user-existence leak); sends reset link email when `SMTP_HOST` is configured |
 | POST | `/api/v1/auth/password-reset/complete` | public | rate limited; accepts `{"email":"...","token":"...","newPassword":"..."}` to redeem a reset token |
-| GET | `/api/v1/auth/me` | viewer | caller identity |
+| POST | `/api/v1/auth/totp/verify` | public (rate limited) | second step of TOTP login; body: `{"pendingToken":"...","code":"123456"}`; exchanges a `totp_pending` JWT + valid TOTP code for a full session JWT |
+| POST | `/api/v1/auth/totp/enroll` | viewer | generate a new TOTP key; returns `{"otpUri":"...","secret":"..."}` for QR display; key is stored encrypted but not yet active |
+| POST | `/api/v1/auth/totp/confirm` | viewer | activate TOTP after verifying ownership; body: `{"code":"123456"}`; idempotent — re-runs enrollment if already enabled |
+| POST | `/api/v1/auth/totp/disable` | viewer | disable TOTP; body: `{"password":"..."}` (current password required to prevent session-hijack downgrade) |
+| GET | `/api/v1/auth/me` | viewer | caller identity; `totpEnabled` field reflects current TOTP status |
 | GET | `/api/v1/auth/workload-identity/status` | admin | configured workload identity providers |
 | POST | `/api/v1/auth/vouchers` | admin | create registration voucher |
 | POST | `/api/v1/auth/service-tokens` | admin | create service token |
@@ -230,7 +234,7 @@ All paths below are full paths.
 
 ### 5.8 Webhooks
 
-Webhooks deliver real-time event payloads to an external HTTPS endpoint via POST. Each delivery is signed with HMAC-SHA256 (key = the webhook's `secret`; header: `X-HardwareOps-Signature`).
+Webhooks deliver real-time event payloads to an external HTTPS endpoint via POST. Each delivery is signed with HMAC-SHA256 (key = the webhook's `secret`; header: `X-Parcel-Signature`).
 
 | Method | Path | Access | Notes |
 |---|---|---|---|
@@ -266,7 +270,7 @@ Webhooks deliver real-time event payloads to an external HTTPS endpoint via POST
 # Python example
 import hmac, hashlib
 expected = hmac.new(secret.encode(), payload_bytes, hashlib.sha256).hexdigest()
-assert request.headers["X-HardwareOps-Signature"] == expected
+assert request.headers["X-Parcel-Signature"] == expected
 ```
 
 ### 5.9 Deploy Triggers
@@ -357,7 +361,42 @@ Supported integration patterns:
 3. Agents consume desired state through `/api/v1/devices/checkin`.
 4. Agents report execution via `/api/v1/devices/{deviceId}/apply-result`.
 
-### 6.5 LDAP/AD login
+### 6.5 TOTP two-step login
+
+When a user account has TOTP enabled, `POST /api/v1/auth/login` returns HTTP 202 instead of 200:
+
+```json
+{
+  "totpRequired": true,
+  "pendingToken": "<short-lived JWT, 5 min TTL>",
+  "expiresAt": "2026-04-06T12:05:00Z"
+}
+```
+
+The client prompts for the six-digit code and calls:
+
+```json
+POST /api/v1/auth/totp/verify
+{
+  "pendingToken": "<pendingToken from above>",
+  "code": "123456"
+}
+```
+
+On success, the response is the same shape as a standard login (HTTP 200 with `token`, `expiresAt`, `user`).
+
+**Setup flow (operator self-enrollment):**
+
+1. `POST /api/v1/auth/totp/enroll` — returns `otpUri` (scan with any TOTP app) and `secret` (manual entry fallback).
+2. Scan the QR code or enter the secret in an authenticator app (Google Authenticator, Authy, 1Password, etc.).
+3. `POST /api/v1/auth/totp/confirm` with `{"code":"<first code from app>"}` — activates TOTP.
+4. Subsequent logins require the TOTP code as a second factor.
+
+To disable: `POST /api/v1/auth/totp/disable` with `{"password":"<current password>"}`.
+
+**Server requirements:** `TOTP_ENCRYPTION_KEY` must be set (base64-encoded 32-byte key). When unset, all `/auth/totp/*` endpoints return 503.
+
+### 6.6 LDAP/AD login
 
 Only available when `AUTH_LDAP_URL` is configured. Confirm availability first:
 
@@ -497,7 +536,7 @@ See `docs/vulnerability-scanning.md` for configuration details and device-matchi
 POST /api/v1/webhooks
 {
   "name": "ci-listener",
-  "url": "https://ci.example.com/hooks/hardwareops",
+  "url": "https://ci.example.com/hooks/parcel",
   "secret": "shared-hmac-secret",
   "events": ["apply.result", "deploy.trigger"],
   "active": true

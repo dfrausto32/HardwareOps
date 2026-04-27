@@ -12,9 +12,9 @@ case "$host_arch" in
     exit 1
     ;;
 esac
-DIST_NAME=${DIST_NAME:-hardwareops-upgrade-${VERSION}-linux-${arch}}
+DIST_NAME=${DIST_NAME:-parcel-upgrade-${VERSION}-linux-${arch}}
 DIST_DIR=${DIST_DIR:-$BASE_DIR/dist/upgrades/$DIST_NAME}
-PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://hardwareops.internal}
+PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://parcel.internal}
 ENV_FILE=${ENV_FILE:-}
 LICENSE_EMBED_PUBKEY_PATH=${LICENSE_EMBED_PUBKEY_PATH:-}
 LICENSE_EMBED_PUBKEY_B64=${LICENSE_EMBED_PUBKEY_B64:-}
@@ -26,8 +26,8 @@ fi
 
 mkdir -p "$DIST_DIR/images" "$DIST_DIR/scripts"
 
-cp_tag="hardwareops-control-plane:${VERSION}-${arch}"
-gw_tag="hardwareops-gateway:${VERSION}-${arch}"
+cp_tag="parcel-control-plane:${VERSION}-${arch}"
+gw_tag="parcel-gateway:${VERSION}-${arch}"
 
 if [ -z "$LICENSE_EMBED_PUBKEY_B64" ] && [ -n "$LICENSE_EMBED_PUBKEY_PATH" ]; then
   if [ ! -f "$LICENSE_EMBED_PUBKEY_PATH" ]; then
@@ -64,9 +64,9 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_USER: \${POSTGRES_USER:-hardwareops}
-      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-hardwareops}
-      POSTGRES_DB: \${POSTGRES_DB:-hardwareops}
+      POSTGRES_USER: \${POSTGRES_USER:-parcel}
+      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-parcel}
+      POSTGRES_DB: \${POSTGRES_DB:-parcel}
     volumes:
       - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
@@ -84,7 +84,7 @@ services:
   control-plane:
     image: ${cp_tag}
     environment:
-      DATABASE_URL: \${DATABASE_URL:-postgres://hardwareops:hardwareops@postgres:5432/hardwareops?sslmode=disable}
+      DATABASE_URL: \${DATABASE_URL:-postgres://parcel:parcel@postgres:5432/parcel?sslmode=disable}
       AUTO_MIGRATE: "1"
       MIGRATIONS_DIR: /app/migrations
       S3_ENDPOINT: \${S3_ENDPOINT:-minio:9000}
@@ -133,7 +133,7 @@ services:
       AUTH_LOGIN_BACKOFF_BASE: \${AUTH_LOGIN_BACKOFF_BASE:-2s}
       AUTH_LOGIN_BACKOFF_MAX: \${AUTH_LOGIN_BACKOFF_MAX:-5m}
       AUTH_LOGIN_BACKOFF_WINDOW: \${AUTH_LOGIN_BACKOFF_WINDOW:-15m}
-      AUTH_ISSUER: \${AUTH_ISSUER:-hardwareops}
+      AUTH_ISSUER: \${AUTH_ISSUER:-parcel}
       AUTH_BOOTSTRAP_EMAIL: \${AUTH_BOOTSTRAP_EMAIL:-admin@example.com}
       AUTH_BOOTSTRAP_PASSWORD: \${AUTH_BOOTSTRAP_PASSWORD:-change-me}
       AUTH_OIDC_ISSUER: \${AUTH_OIDC_ISSUER:-}
@@ -153,14 +153,14 @@ services:
       DEVICE_IDENTITY_MODE: \${DEVICE_IDENTITY_MODE:-audit}
       DEVICE_IDENTITY_REQUIRE_ON_ENROLL: \${DEVICE_IDENTITY_REQUIRE_ON_ENROLL:-0}
       DEVICE_IDENTITY_REQUIRE_ON_CHECKIN: \${DEVICE_IDENTITY_REQUIRE_ON_CHECKIN:-0}
-      LOG_DIR: /var/lib/hardwareops/logs
+      LOG_DIR: /var/lib/parcel/logs
       DISABLE_HTTP2: "1"
       MAINTENANCE_MODE: \${MAINTENANCE_MODE:-0}
       MAINTENANCE_MESSAGE: \${MAINTENANCE_MESSAGE:-}
       MAINTENANCE_TOKEN: \${MAINTENANCE_TOKEN:-change-me}
       UPGRADE_APPLY_CMD: \${UPGRADE_APPLY_CMD:-/app/scripts/apply-upgrade.sh}
       UPGRADE_WORK_DIR: \${UPGRADE_WORK_DIR:-/stack}
-      UPGRADE_LOG_DIR: \${UPGRADE_LOG_DIR:-/var/lib/hardwareops/logs}
+      UPGRADE_LOG_DIR: \${UPGRADE_LOG_DIR:-/var/lib/parcel/logs}
       UPGRADE_UPDATES_DIR: \${UPGRADE_UPDATES_DIR:-/stack/updates}
       UPGRADE_RUNNER_MODE: \${UPGRADE_RUNNER_MODE:-remote}
       UPGRADE_RUNNER_URL: \${UPGRADE_RUNNER_URL:-http://maintenance-runner:8090}
@@ -170,19 +170,19 @@ services:
       RESTORE_CMD: \${RESTORE_CMD:-/app/scripts/restore-stack.sh}
       BACKUP_DIR: \${BACKUP_DIR:-/stack/backups}
       BACKUP_WORK_DIR: \${BACKUP_WORK_DIR:-/stack}
-      BACKUP_LOG_DIR: \${BACKUP_LOG_DIR:-/var/lib/hardwareops/logs}
+      BACKUP_LOG_DIR: \${BACKUP_LOG_DIR:-/var/lib/parcel/logs}
       BACKUP_RUNNER_MODE: \${BACKUP_RUNNER_MODE:-remote}
       BACKUP_RUNNER_URL: \${BACKUP_RUNNER_URL:-http://maintenance-runner:8090}
       BACKUP_RUNNER_TOKEN: \${BACKUP_RUNNER_TOKEN:-change-me-maintenance-runner}
       BACKUP_RUNNER_IMAGE: \${BACKUP_RUNNER_IMAGE:-}
-      BACKUP_POSTGRES_CONTAINER: \${BACKUP_POSTGRES_CONTAINER:-hardwareops-postgres-1}
-      BACKUP_MINIO_CONTAINER: \${BACKUP_MINIO_CONTAINER:-hardwareops-minio-1}
-      BACKUP_POSTGRES_USER: \${BACKUP_POSTGRES_USER:-hardwareops}
-      BACKUP_POSTGRES_DB: \${BACKUP_POSTGRES_DB:-hardwareops}
+      BACKUP_POSTGRES_CONTAINER: \${BACKUP_POSTGRES_CONTAINER:-parcel-postgres-1}
+      BACKUP_MINIO_CONTAINER: \${BACKUP_MINIO_CONTAINER:-parcel-minio-1}
+      BACKUP_POSTGRES_USER: \${BACKUP_POSTGRES_USER:-parcel}
+      BACKUP_POSTGRES_DB: \${BACKUP_POSTGRES_DB:-parcel}
       STACK_DIR: \${STACK_DIR:-/stack}
     volumes:
-      - \${CERTS_DIR:-/opt/hardwareops/certs}:/certs:ro
-      - controlplane-logs:/var/lib/hardwareops/logs
+      - \${CERTS_DIR:-/opt/parcel/certs}:/certs:ro
+      - controlplane-logs:/var/lib/parcel/logs
       - \${STACK_DIR:-.}:/stack
     depends_on:
       - postgres
@@ -198,7 +198,7 @@ services:
       MAINTENANCE_TOKEN: \${MAINTENANCE_TOKEN:-change-me}
       UPGRADE_APPLY_CMD: \${UPGRADE_APPLY_CMD:-/app/scripts/apply-upgrade.sh}
       UPGRADE_WORK_DIR: \${UPGRADE_WORK_DIR:-/stack}
-      UPGRADE_LOG_DIR: \${UPGRADE_LOG_DIR:-/var/lib/hardwareops/logs}
+      UPGRADE_LOG_DIR: \${UPGRADE_LOG_DIR:-/var/lib/parcel/logs}
       UPGRADE_UPDATES_DIR: \${UPGRADE_UPDATES_DIR:-/stack/updates}
       UPGRADE_RUNNER_MODE: docker
       UPGRADE_RUNNER_IMAGE: \${UPGRADE_RUNNER_IMAGE:-${cp_tag}}
@@ -207,19 +207,19 @@ services:
       RESTORE_CMD: \${RESTORE_CMD:-/app/scripts/restore-stack.sh}
       BACKUP_DIR: \${BACKUP_DIR:-/stack/backups}
       BACKUP_WORK_DIR: \${BACKUP_WORK_DIR:-/stack}
-      BACKUP_LOG_DIR: \${BACKUP_LOG_DIR:-/var/lib/hardwareops/logs}
+      BACKUP_LOG_DIR: \${BACKUP_LOG_DIR:-/var/lib/parcel/logs}
       BACKUP_RUNNER_MODE: docker
       BACKUP_RUNNER_IMAGE: \${BACKUP_RUNNER_IMAGE:-}
       BACKUP_RUNNER_TOKEN: \${BACKUP_RUNNER_TOKEN:-change-me-maintenance-runner}
-      BACKUP_POSTGRES_CONTAINER: \${BACKUP_POSTGRES_CONTAINER:-hardwareops-postgres-1}
-      BACKUP_MINIO_CONTAINER: \${BACKUP_MINIO_CONTAINER:-hardwareops-minio-1}
-      BACKUP_POSTGRES_USER: \${BACKUP_POSTGRES_USER:-hardwareops}
-      BACKUP_POSTGRES_DB: \${BACKUP_POSTGRES_DB:-hardwareops}
+      BACKUP_POSTGRES_CONTAINER: \${BACKUP_POSTGRES_CONTAINER:-parcel-postgres-1}
+      BACKUP_MINIO_CONTAINER: \${BACKUP_MINIO_CONTAINER:-parcel-minio-1}
+      BACKUP_POSTGRES_USER: \${BACKUP_POSTGRES_USER:-parcel}
+      BACKUP_POSTGRES_DB: \${BACKUP_POSTGRES_DB:-parcel}
       MAINTENANCE_RUNNER_ADDR: \${MAINTENANCE_RUNNER_ADDR:-:8090}
       STACK_DIR: \${STACK_DIR:-/stack}
     volumes:
-      - \${CERTS_DIR:-/opt/hardwareops/certs}:/certs:ro
-      - controlplane-logs:/var/lib/hardwareops/logs
+      - \${CERTS_DIR:-/opt/parcel/certs}:/certs:ro
+      - controlplane-logs:/var/lib/parcel/logs
       - /var/run/docker.sock:/var/run/docker.sock
       - \${STACK_DIR:-.}:/stack
     depends_on:
@@ -233,7 +233,7 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - \${CERTS_DIR:-/opt/hardwareops/certs}:/certs:ro
+      - \${CERTS_DIR:-/opt/parcel/certs}:/certs:ro
     depends_on:
       - control-plane
     restart: unless-stopped
@@ -245,7 +245,7 @@ volumes:
 EOF
 
 cat > "$DIST_DIR/README.txt" <<'README'
-HardwareOps Upgrade Package
+Parcel Upgrade Package
 
 Contents:
 - images/control-plane.tar
@@ -257,7 +257,7 @@ Contents:
 
 Usage:
 1) Copy this folder to the stack host (same box as the running stack).
-2) Ensure /opt/hardwareops/certs exists on the host (from initial install).
+2) Ensure /opt/parcel/certs exists on the host (from initial install).
 3) Run:
    STACK_DIR=$PWD \
    ENV_FILE=.env.onprem.example \
@@ -268,6 +268,6 @@ and disables maintenance mode if MAINTENANCE_TOKEN is set.
 If you pass ENV_FILE when building the package, .env.onprem is bundled.
 README
 
-out="$BASE_DIR/dist/hardwareops-upgrade-${VERSION}-linux-${arch}.tar.gz"
+out="$BASE_DIR/dist/parcel-upgrade-${VERSION}-linux-${arch}.tar.gz"
 tar -C "$(dirname "$DIST_DIR")" -czf "$out" "$(basename "$DIST_DIR")"
 echo "Upgrade package written to $out"

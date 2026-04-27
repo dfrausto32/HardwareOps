@@ -15,7 +15,7 @@ APP_NAMES=${APP_NAMES:-customer,integration}
 VERSIONS=${VERSIONS:-0.1.0,0.2.0}
 ARTIFACT_TYPE=${ARTIFACT_TYPE:-app_bundle}
 COMPONENT_PREFIX=${COMPONENT_PREFIX:-app:}
-OUT_DIR=${OUT_DIR:-/tmp/hardwareops-aws-demo}
+OUT_DIR=${OUT_DIR:-/tmp/parcel-aws-demo}
 SIGN_ARTIFACTS=${SIGN_ARTIFACTS:-1}
 
 if [ -z "$BASE_URL" ]; then

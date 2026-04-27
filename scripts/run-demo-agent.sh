@@ -5,10 +5,10 @@ BASE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 BASE_URL=${BASE_URL:-https://localhost:8080}
 AGENT_BASE_URL=${AGENT_BASE_URL:-}
-CERT_DIR_BASE=${CERT_DIR:-/tmp/hardwareops-demo/certs}
-DATA_DIR_BASE=${DATA_DIR:-/tmp/hardwareops-demo/data}
-IMAGE_NAME=${IMAGE_NAME:-hardwareops-agent-demo}
-CONTAINER_NAME=${CONTAINER_NAME:-hardwareops-demo-agent}
+CERT_DIR_BASE=${CERT_DIR:-/tmp/parcel-demo/certs}
+DATA_DIR_BASE=${DATA_DIR:-/tmp/parcel-demo/data}
+IMAGE_NAME=${IMAGE_NAME:-parcel-agent-demo}
+CONTAINER_NAME=${CONTAINER_NAME:-parcel-demo-agent}
 DEMO_HTTP_PORT=${DEMO_HTTP_PORT:-8081}
 DEMO_AGENT_PORT_STEP=${DEMO_AGENT_PORT_STEP:-1000}
 DEMO_COMPONENT_PORT_STEP=${DEMO_COMPONENT_PORT_STEP:-10}
@@ -157,10 +157,10 @@ if [ -n "$AUTH_TOKEN" ]; then
 fi
 
 if [ "$UPLOAD_AGENT_BUNDLE" = "1" ]; then
-  AGENT_BUNDLE_DIR=${AGENT_BUNDLE_DIR:-"${TMPDIR:-/tmp}/hardwareops-demo/agent-bundle"}
+  AGENT_BUNDLE_DIR=${AGENT_BUNDLE_DIR:-"${TMPDIR:-/tmp}/parcel-demo/agent-bundle"}
   mkdir -p "$AGENT_BUNDLE_DIR/files"
   cat > "$AGENT_BUNDLE_DIR/files/readme.txt" <<EOF
-HardwareOps agent bundle demo
+Parcel agent bundle demo
 version=${AGENT_ARTIFACT_VERSION}
 EOF
   cat > "$AGENT_BUNDLE_DIR/files/preapply.sh" <<'EOF'
@@ -334,7 +334,7 @@ PY
     if [ ! -s "$DEVICE_CSR_PATH" ] || [ ! -s "$DEVICE_KEY_PATH" ]; then
       openssl req -newkey rsa:2048 -nodes \
         -keyout "$DEVICE_KEY_PATH" -out "$DEVICE_CSR_PATH" \
-        -subj "/CN=hardwareops-device"
+        -subj "/CN=parcel-device"
     fi
     if [ "$ENROLLMENT_MODE" = "pending" ]; then
       PROFILE_JSON_PATH="$DATA_DIR/pending-profile.json"

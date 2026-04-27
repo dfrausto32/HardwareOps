@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OUT_DIR=${OUT_DIR:-/opt/hardwareops/certs}
-DOMAIN=${DOMAIN:-hardwareops.internal}
+OUT_DIR=${OUT_DIR:-/opt/parcel/certs}
+DOMAIN=${DOMAIN:-parcel.internal}
 AGENT_DOMAIN=${AGENT_DOMAIN:-agent.${DOMAIN}}
 SERVER_DAYS=${SERVER_DAYS:-825}
 

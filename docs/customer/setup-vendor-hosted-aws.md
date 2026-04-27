@@ -1,6 +1,6 @@
 # Vendor-Hosted AWS Customer Operator Guide
 
-Use this guide when HardwareOps is hosted by the vendor in AWS and the customer is only operating the fleet and integrations.
+Use this guide when Parcel is hosted by the vendor in AWS and the customer is only operating the fleet and integrations.
 
 This is not an infrastructure deployment guide. It explains what the customer operator is responsible for and how that differs from on-prem.
 
@@ -19,7 +19,7 @@ The customer should not need direct AWS access for normal operations.
 ## 2. Customer responsibilities
 
 Customer operators are responsible for:
-- local user/admin management inside HardwareOps
+- local user/admin management inside Parcel
 - enrollment profile creation and first-agent approval
 - desired-state management
 - artifact upload or CI/repository integration

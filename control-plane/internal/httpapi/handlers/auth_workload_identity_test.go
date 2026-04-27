@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/auth"
-	"github.com/hardwareops/control-plane/internal/store"
-	"github.com/hardwareops/control-plane/internal/store/memory"
+	"github.com/parcel/control-plane/internal/auth"
+	"github.com/parcel/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/store/memory"
 )
 
 type fakeWorkloadIdentityExchanger struct {
@@ -31,7 +31,7 @@ func (f fakeWorkloadIdentityExchanger) Exchange(ctx context.Context, provider, r
 
 func TestExchangeWorkloadIdentityToken(t *testing.T) {
 	mem := memory.New()
-	manager, err := auth.NewManager("local", "0123456789abcdef0123456789abcdef", time.Hour, "hardwareops", mem)
+	manager, err := auth.NewManager("local", "0123456789abcdef0123456789abcdef", time.Hour, "parcel", mem)
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestExchangeWorkloadIdentityToken(t *testing.T) {
 
 func TestExchangeWorkloadIdentityTokenFailure(t *testing.T) {
 	mem := memory.New()
-	manager, err := auth.NewManager("local", "0123456789abcdef0123456789abcdef", time.Hour, "hardwareops", mem)
+	manager, err := auth.NewManager("local", "0123456789abcdef0123456789abcdef", time.Hour, "parcel", mem)
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}

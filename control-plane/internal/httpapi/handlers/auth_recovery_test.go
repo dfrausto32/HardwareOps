@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/auth"
-	"github.com/hardwareops/control-plane/internal/mailer"
-	"github.com/hardwareops/control-plane/internal/store"
-	"github.com/hardwareops/control-plane/internal/store/memory"
+	"github.com/parcel/control-plane/internal/auth"
+	"github.com/parcel/control-plane/internal/mailer"
+	"github.com/parcel/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/store/memory"
 )
 
 func TestRecoveryCodesGenerateAndResetPassword(t *testing.T) {
@@ -33,7 +33,7 @@ func TestRecoveryCodesGenerateAndResetPassword(t *testing.T) {
 	if err := mem.CreateUser(user); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	manager, err := auth.NewManager("local", "0123456789abcdef0123456789abcdef", 12*time.Hour, "hardwareops", mem)
+	manager, err := auth.NewManager("local", "0123456789abcdef0123456789abcdef", 12*time.Hour, "parcel", mem)
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
@@ -82,10 +82,10 @@ func TestRecoveryCodesGenerateAndResetPassword(t *testing.T) {
 	if resetRec.Code != http.StatusOK {
 		t.Fatalf("expected 200 resetting password, got %d: %s", resetRec.Code, resetRec.Body.String())
 	}
-	if _, _, _, err := manager.Authenticate(user.Email, "new-password-1"); err != nil {
+	if _, _, _, _, err := manager.Authenticate(user.Email, "new-password-1"); err != nil {
 		t.Fatalf("authenticate with new password: %v", err)
 	}
-	if _, _, _, err := manager.Authenticate(user.Email, "old-password"); err == nil {
+	if _, _, _, _, err := manager.Authenticate(user.Email, "old-password"); err == nil {
 		t.Fatalf("expected old password to fail after recovery reset")
 	}
 
@@ -139,7 +139,7 @@ func TestPasswordResetTokenIssueAndComplete(t *testing.T) {
 	if err := mem.CreateUser(targetUser); err != nil {
 		t.Fatalf("create target user: %v", err)
 	}
-	manager, err := auth.NewManager("local", "0123456789abcdef0123456789abcdef", 12*time.Hour, "hardwareops", mem)
+	manager, err := auth.NewManager("local", "0123456789abcdef0123456789abcdef", 12*time.Hour, "parcel", mem)
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
@@ -185,10 +185,10 @@ func TestPasswordResetTokenIssueAndComplete(t *testing.T) {
 	if completeRec.Code != http.StatusOK {
 		t.Fatalf("expected 200 completing password reset token, got %d: %s", completeRec.Code, completeRec.Body.String())
 	}
-	if _, _, _, err := manager.Authenticate(targetUser.Email, "user-password-updated"); err != nil {
+	if _, _, _, _, err := manager.Authenticate(targetUser.Email, "user-password-updated"); err != nil {
 		t.Fatalf("authenticate with updated password: %v", err)
 	}
-	if _, _, _, err := manager.Authenticate(targetUser.Email, "user-password"); err == nil {
+	if _, _, _, _, err := manager.Authenticate(targetUser.Email, "user-password"); err == nil {
 		t.Fatalf("expected old password to fail after reset token completion")
 	}
 

@@ -1,4 +1,4 @@
-module github.com/hardwareops/agent
+module github.com/parcel/agent
 
 go 1.22
 

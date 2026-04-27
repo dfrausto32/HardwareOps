@@ -14,27 +14,28 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/artifactingest"
-	"github.com/hardwareops/control-plane/internal/artifacttrust"
-	"github.com/hardwareops/control-plane/internal/auth"
-	"github.com/hardwareops/control-plane/internal/backup"
-	"github.com/hardwareops/control-plane/internal/certs"
-	"github.com/hardwareops/control-plane/internal/config"
-	"github.com/hardwareops/control-plane/internal/events"
-	"github.com/hardwareops/control-plane/internal/httpapi"
-	"github.com/hardwareops/control-plane/internal/license"
-	"github.com/hardwareops/control-plane/internal/lifecycle"
-	"github.com/hardwareops/control-plane/internal/logging"
-	"github.com/hardwareops/control-plane/internal/mailer"
-	"github.com/hardwareops/control-plane/internal/metrics"
-	"github.com/hardwareops/control-plane/internal/migrate"
-	"github.com/hardwareops/control-plane/internal/objectstore"
-	"github.com/hardwareops/control-plane/internal/releaseautoupdate"
-	storepkg "github.com/hardwareops/control-plane/internal/store"
-	"github.com/hardwareops/control-plane/internal/store/postgres"
-	"github.com/hardwareops/control-plane/internal/upgrade"
-	"github.com/hardwareops/control-plane/internal/vulnscan"
-	webhookspkg "github.com/hardwareops/control-plane/internal/webhooks"
+	"github.com/parcel/control-plane/internal/artifactingest"
+	"github.com/parcel/control-plane/internal/artifacttrust"
+	"github.com/parcel/control-plane/internal/auth"
+	"github.com/parcel/control-plane/internal/backup"
+	"github.com/parcel/control-plane/internal/certs"
+	"github.com/parcel/control-plane/internal/config"
+	"github.com/parcel/control-plane/internal/events"
+	"github.com/parcel/control-plane/internal/httpapi"
+	"github.com/parcel/control-plane/internal/license"
+	"github.com/parcel/control-plane/internal/lifecycle"
+	"github.com/parcel/control-plane/internal/logging"
+	"github.com/parcel/control-plane/internal/mailer"
+	"github.com/parcel/control-plane/internal/metrics"
+	"github.com/parcel/control-plane/internal/migrate"
+	"github.com/parcel/control-plane/internal/objectstore"
+	"github.com/parcel/control-plane/internal/releaseautoupdate"
+	storepkg "github.com/parcel/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/store/postgres"
+	"github.com/parcel/control-plane/internal/upgrade"
+	"github.com/parcel/control-plane/internal/sbom"
+	"github.com/parcel/control-plane/internal/vulnscan"
+	webhookspkg "github.com/parcel/control-plane/internal/webhooks"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -396,6 +397,14 @@ func main() {
 		}
 	}
 
+	// --- SBOM generation -----------------------------------------------------
+	var artifactSBOMJob *sbom.ArtifactSBOMJob
+	if cfg.SBOMEnabled && objStore != nil {
+		artifactSBOMJob = sbom.NewArtifactSBOMJob(cfg.SBOMBin, objStore.(sbom.ObjectStore), cfg.S3Bucket, store, logger)
+		logger.Printf("artifact SBOM generation enabled (trivy CycloneDX)")
+	}
+	// --------------------------------------------------------------------------
+
 	var nessusSyncJob *vulnscan.NessusSyncJob
 	if cfg.VulnNessusURL != "" {
 		nessusClient := vulnscan.NewNessusClient(cfg.VulnNessusURL, cfg.VulnNessusAccessKey, cfg.VulnNessusSecretKey)
@@ -411,6 +420,20 @@ func main() {
 		logger.Printf("nessus sync job started url=%s interval=%s", cfg.VulnNessusURL, cfg.VulnNessusSyncInterval)
 	}
 	// --------------------------------------------------------------------------
+
+	// TOTP MFA encryption key.
+	var totpEncryptionKey []byte
+	if cfg.TOTPEncryptionKey != "" {
+		key, err := base64.StdEncoding.DecodeString(cfg.TOTPEncryptionKey)
+		if err != nil {
+			logger.Fatalf("TOTP_ENCRYPTION_KEY: base64 decode: %v", err)
+		}
+		if len(key) != 32 {
+			logger.Fatalf("TOTP_ENCRYPTION_KEY: must decode to exactly 32 bytes (got %d)", len(key))
+		}
+		totpEncryptionKey = key
+		logger.Printf("TOTP MFA enabled")
+	}
 
 	// Webhook dispatcher — wired before deps so the hub is ready before routes.
 	var webhookEncryptionKey []byte
@@ -517,9 +540,12 @@ func main() {
 		ArtifactScanJob:                 artifactScanJob,
 		NessusSyncJob:                   nessusSyncJob,
 		VulnSkipArtifactTypes:           cfg.VulnArtifactSkipTypes,
+		ArtifactSBOMJob:                 artifactSBOMJob,
+		SBOMSkipArtifactTypes:           cfg.SBOMSkipTypes,
 		Mailer:                          mailSender,
 		AppPublicURL:                    cfg.AppPublicURL,
 		SMTPEnabled:                     cfg.SMTPEnabled(),
+		TOTPEncryptionKey:               totpEncryptionKey,
 		WebhookEncryptionKey:            webhookEncryptionKey,
 		TriggerFanoutLimit:              cfg.TriggerFanoutLimit,
 	}
@@ -895,7 +921,7 @@ func newBreakglassAuditEvent(action, targetType, targetID, reason string) storep
 		ActorID:      strings.TrimSpace(os.Getenv("USER")),
 		AuthMethod:   "local_cli",
 		SourceIP:     "local",
-		UserAgent:    "hardwareops-control-plane-cli",
+		UserAgent:    "parcel-control-plane-cli",
 		Action:       action,
 		TargetType:   targetType,
 		TargetID:     targetID,
@@ -950,7 +976,7 @@ func materializePEMFiles(cfg *config.Config) (func(), error) {
 		return func() {}, nil
 	}
 
-	dir, err := os.MkdirTemp("", "hardwareops-control-plane-pems-*")
+	dir, err := os.MkdirTemp("", "parcel-control-plane-pems-*")
 	if err != nil {
 		return nil, err
 	}

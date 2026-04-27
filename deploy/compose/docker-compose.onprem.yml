@@ -4,9 +4,9 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-hardwareops}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hardwareops}
-      POSTGRES_DB: ${POSTGRES_DB:-hardwareops}
+      POSTGRES_USER: ${POSTGRES_USER:-parcel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-parcel}
+      POSTGRES_DB: ${POSTGRES_DB:-parcel}
     volumes:
       - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
@@ -22,12 +22,12 @@ services:
     restart: unless-stopped
 
   control-plane:
-    image: hardwareops-control-plane:dev
+    image: parcel-control-plane:dev
     build:
       context: ../..
       dockerfile: control-plane/Dockerfile
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgres://hardwareops:hardwareops@postgres:5432/hardwareops?sslmode=disable}
+      DATABASE_URL: ${DATABASE_URL:-postgres://parcel:parcel@postgres:5432/parcel?sslmode=disable}
       AUTO_MIGRATE: "1"
       MIGRATIONS_DIR: /app/migrations
       S3_ENDPOINT: ${S3_ENDPOINT:-minio:9000}
@@ -45,7 +45,7 @@ services:
       TRUST_PROXY: ${TRUST_PROXY:-1}
       TRUST_PROXY_CIDRS: ${TRUST_PROXY_CIDRS:-127.0.0.1/32,::1/128}
       CLIENT_CERT_HEADER: X-Client-Cert
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://hardwareops.internal}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://parcel.internal}
       METRICS_ENABLED: ${METRICS_ENABLED:-1}
       METRICS_PATH: ${METRICS_PATH:-/metrics}
       METRICS_REFRESH_INTERVAL: ${METRICS_REFRESH_INTERVAL:-30s}
@@ -91,7 +91,7 @@ services:
       AUTH_LOGIN_BACKOFF_BASE: ${AUTH_LOGIN_BACKOFF_BASE:-2s}
       AUTH_LOGIN_BACKOFF_MAX: ${AUTH_LOGIN_BACKOFF_MAX:-5m}
       AUTH_LOGIN_BACKOFF_WINDOW: ${AUTH_LOGIN_BACKOFF_WINDOW:-15m}
-      AUTH_ISSUER: ${AUTH_ISSUER:-hardwareops}
+      AUTH_ISSUER: ${AUTH_ISSUER:-parcel}
       AUTH_BOOTSTRAP_EMAIL: ${AUTH_BOOTSTRAP_EMAIL:-admin@example.com}
       AUTH_BOOTSTRAP_PASSWORD: ${AUTH_BOOTSTRAP_PASSWORD:-change-me}
       AUTH_OIDC_ISSUER: ${AUTH_OIDC_ISSUER:-}
@@ -134,18 +134,18 @@ services:
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      SMTP_FROM: ${SMTP_FROM:-HardwareOps <noreply@example.com>}
+      SMTP_FROM: ${SMTP_FROM:-Parcel <noreply@example.com>}
       SMTP_TLS_MODE: ${SMTP_TLS_MODE:-starttls}
       SMTP_TIMEOUT: ${SMTP_TIMEOUT:-10s}
       SMTP_SKIP_VERIFY: ${SMTP_SKIP_VERIFY:-0}
-      LOG_DIR: /var/lib/hardwareops/logs
+      LOG_DIR: /var/lib/parcel/logs
       DISABLE_HTTP2: "1"
       MAINTENANCE_MODE: ${MAINTENANCE_MODE:-0}
       MAINTENANCE_MESSAGE: ${MAINTENANCE_MESSAGE:-}
       MAINTENANCE_TOKEN: ${MAINTENANCE_TOKEN:-change-me}
       UPGRADE_APPLY_CMD: ${UPGRADE_APPLY_CMD:-/app/scripts/apply-upgrade.sh}
       UPGRADE_WORK_DIR: ${UPGRADE_WORK_DIR:-/stack}
-      UPGRADE_LOG_DIR: ${UPGRADE_LOG_DIR:-/var/lib/hardwareops/logs}
+      UPGRADE_LOG_DIR: ${UPGRADE_LOG_DIR:-/var/lib/parcel/logs}
       UPGRADE_UPDATES_DIR: ${UPGRADE_UPDATES_DIR:-/stack/updates}
       UPGRADE_RUNNER_MODE: ${UPGRADE_RUNNER_MODE:-remote}
       UPGRADE_RUNNER_URL: ${UPGRADE_RUNNER_URL:-http://maintenance-runner:8090}
@@ -155,19 +155,19 @@ services:
       RESTORE_CMD: ${RESTORE_CMD:-/app/scripts/restore-stack.sh}
       BACKUP_DIR: ${BACKUP_DIR:-/stack/backups}
       BACKUP_WORK_DIR: ${BACKUP_WORK_DIR:-/stack}
-      BACKUP_LOG_DIR: ${BACKUP_LOG_DIR:-/var/lib/hardwareops/logs}
+      BACKUP_LOG_DIR: ${BACKUP_LOG_DIR:-/var/lib/parcel/logs}
       BACKUP_RUNNER_MODE: ${BACKUP_RUNNER_MODE:-remote}
       BACKUP_RUNNER_URL: ${BACKUP_RUNNER_URL:-http://maintenance-runner:8090}
       BACKUP_RUNNER_TOKEN: ${BACKUP_RUNNER_TOKEN:-change-me-maintenance-runner}
       BACKUP_RUNNER_IMAGE: ${BACKUP_RUNNER_IMAGE:-}
-      BACKUP_POSTGRES_CONTAINER: ${BACKUP_POSTGRES_CONTAINER:-hardwareops-postgres-1}
-      BACKUP_MINIO_CONTAINER: ${BACKUP_MINIO_CONTAINER:-hardwareops-minio-1}
-      BACKUP_POSTGRES_USER: ${BACKUP_POSTGRES_USER:-hardwareops}
-      BACKUP_POSTGRES_DB: ${BACKUP_POSTGRES_DB:-hardwareops}
+      BACKUP_POSTGRES_CONTAINER: ${BACKUP_POSTGRES_CONTAINER:-parcel-postgres-1}
+      BACKUP_MINIO_CONTAINER: ${BACKUP_MINIO_CONTAINER:-parcel-minio-1}
+      BACKUP_POSTGRES_USER: ${BACKUP_POSTGRES_USER:-parcel}
+      BACKUP_POSTGRES_DB: ${BACKUP_POSTGRES_DB:-parcel}
       STACK_DIR: ${STACK_DIR:-/stack}
     volumes:
       - ${CERTS_DIR:-./certs}:/certs:ro
-      - controlplane-logs:/var/lib/hardwareops/logs
+      - controlplane-logs:/var/lib/parcel/logs
       - ${STACK_DIR:-.}:/stack
     depends_on:
       - postgres
@@ -176,7 +176,7 @@ services:
     restart: unless-stopped
 
   maintenance-runner:
-    image: hardwareops-control-plane:dev
+    image: parcel-control-plane:dev
     build:
       context: ../..
       dockerfile: control-plane/Dockerfile
@@ -186,7 +186,7 @@ services:
       MAINTENANCE_TOKEN: ${MAINTENANCE_TOKEN:-change-me}
       UPGRADE_APPLY_CMD: ${UPGRADE_APPLY_CMD:-/app/scripts/apply-upgrade.sh}
       UPGRADE_WORK_DIR: ${UPGRADE_WORK_DIR:-/stack}
-      UPGRADE_LOG_DIR: ${UPGRADE_LOG_DIR:-/var/lib/hardwareops/logs}
+      UPGRADE_LOG_DIR: ${UPGRADE_LOG_DIR:-/var/lib/parcel/logs}
       UPGRADE_UPDATES_DIR: ${UPGRADE_UPDATES_DIR:-/stack/updates}
       UPGRADE_RUNNER_MODE: docker
       UPGRADE_RUNNER_IMAGE: ${UPGRADE_RUNNER_IMAGE:-}
@@ -195,19 +195,19 @@ services:
       RESTORE_CMD: ${RESTORE_CMD:-/app/scripts/restore-stack.sh}
       BACKUP_DIR: ${BACKUP_DIR:-/stack/backups}
       BACKUP_WORK_DIR: ${BACKUP_WORK_DIR:-/stack}
-      BACKUP_LOG_DIR: ${BACKUP_LOG_DIR:-/var/lib/hardwareops/logs}
+      BACKUP_LOG_DIR: ${BACKUP_LOG_DIR:-/var/lib/parcel/logs}
       BACKUP_RUNNER_MODE: docker
       BACKUP_RUNNER_IMAGE: ${BACKUP_RUNNER_IMAGE:-}
       BACKUP_RUNNER_TOKEN: ${BACKUP_RUNNER_TOKEN:-change-me-maintenance-runner}
-      BACKUP_POSTGRES_CONTAINER: ${BACKUP_POSTGRES_CONTAINER:-hardwareops-postgres-1}
-      BACKUP_MINIO_CONTAINER: ${BACKUP_MINIO_CONTAINER:-hardwareops-minio-1}
-      BACKUP_POSTGRES_USER: ${BACKUP_POSTGRES_USER:-hardwareops}
-      BACKUP_POSTGRES_DB: ${BACKUP_POSTGRES_DB:-hardwareops}
+      BACKUP_POSTGRES_CONTAINER: ${BACKUP_POSTGRES_CONTAINER:-parcel-postgres-1}
+      BACKUP_MINIO_CONTAINER: ${BACKUP_MINIO_CONTAINER:-parcel-minio-1}
+      BACKUP_POSTGRES_USER: ${BACKUP_POSTGRES_USER:-parcel}
+      BACKUP_POSTGRES_DB: ${BACKUP_POSTGRES_DB:-parcel}
       MAINTENANCE_RUNNER_ADDR: ${MAINTENANCE_RUNNER_ADDR:-:8090}
       STACK_DIR: ${STACK_DIR:-/stack}
     volumes:
       - ${CERTS_DIR:-./certs}:/certs:ro
-      - controlplane-logs:/var/lib/hardwareops/logs
+      - controlplane-logs:/var/lib/parcel/logs
       - /var/run/docker.sock:/var/run/docker.sock
       - ${STACK_DIR:-.}:/stack
     depends_on:
@@ -216,12 +216,12 @@ services:
     restart: unless-stopped
 
   gateway:
-    image: hardwareops-gateway:dev
+    image: parcel-gateway:dev
     build:
       context: ../..
       dockerfile: deploy/compose/nginx/Dockerfile
       args:
-        VITE_API_BASE_URL: ${PUBLIC_BASE_URL:-https://hardwareops.internal}
+        VITE_API_BASE_URL: ${PUBLIC_BASE_URL:-https://parcel.internal}
         VITE_SIMULATE_PROD: "1"
     ports:
       - "80:80"

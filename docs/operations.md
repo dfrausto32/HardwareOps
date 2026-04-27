@@ -9,8 +9,8 @@ This is the primary day-2 operations guide. Use it for backup/restore, upgrades,
 ### 1.1 Put system in maintenance mode
 
 ```bash
-curl --cacert /opt/hardwareops/certs/ca.crt -X POST \
-  https://hardwareops.internal/api/v1/maintenance \
+curl --cacert /opt/parcel/certs/ca.crt -X POST \
+  https://parcel.internal/api/v1/maintenance \
   -H "Content-Type: application/json" \
   -d '{"enabled":true,"message":"Maintenance operation in progress"}'
 ```
@@ -45,7 +45,7 @@ Always validate after restore:
 Place the generated tarball under:
 
 ```bash
-/opt/hardwareops/stack/updates/
+/opt/parcel/stack/updates/
 ```
 
 ### 2.3 Run preflight and apply
@@ -55,7 +55,7 @@ Place the generated tarball under:
 - Apply upgrade
 
 If apply fails:
-- inspect `upgrade-*.log` under `/var/lib/hardwareops/logs` in control-plane container
+- inspect `upgrade-*.log` under `/var/lib/parcel/logs` in control-plane container
 
 For strategy and rollback behavior, see:
 - `development/upgrade-strategy.md`
@@ -94,11 +94,11 @@ After rotation is complete:
 Use decommission instead of raw delete so slot reclaim has an explicit audit trail.
 
 ```bash
-curl --cacert /opt/hardwareops/certs/ca.crt \
+curl --cacert /opt/parcel/certs/ca.crt \
   -H "Authorization: Bearer <admin-jwt>" \
   -H "Content-Type: application/json" \
   -X POST \
-  https://hardwareops.internal/api/v1/devices/<device-id>/decommission \
+  https://parcel.internal/api/v1/devices/<device-id>/decommission \
   -d '{"reason":"device retired","ticketId":"OPS-123"}'
 ```
 
@@ -121,17 +121,17 @@ Use this when rotating repository credentials used by pull ingest (`source.crede
 ### 4.2 Reload in control-plane (no restart)
 
 ```bash
-curl --cacert /opt/hardwareops/certs/ca.crt \
+curl --cacert /opt/parcel/certs/ca.crt \
   -H "Authorization: Bearer <admin-jwt>" \
-  -X POST https://hardwareops.internal/api/v1/artifacts/pull-credentials/reload
+  -X POST https://parcel.internal/api/v1/artifacts/pull-credentials/reload
 ```
 
 Check status:
 
 ```bash
-curl --cacert /opt/hardwareops/certs/ca.crt \
+curl --cacert /opt/parcel/certs/ca.crt \
   -H "Authorization: Bearer <admin-jwt>" \
-  https://hardwareops.internal/api/v1/artifacts/pull-credentials
+  https://parcel.internal/api/v1/artifacts/pull-credentials
 ```
 
 ### 4.3 Helper script

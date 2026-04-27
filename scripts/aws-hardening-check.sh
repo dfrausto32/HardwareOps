@@ -52,7 +52,7 @@ Examples:
   scripts/aws-hardening-check.sh config --tfvars .aws-customers/acme/prod/terraform.tfvars
   scripts/aws-hardening-check.sh deployment --customer acme --env prod --region us-east-1
   scripts/aws-hardening-check.sh deployment --customer acme --env prod --region us-east-1 \
-    --alarm-prefix hardwareops-acme-prod --sns-topic-arn arn:aws:sns:us-east-1:111122223333:hardwareops-acme-prod-security
+    --alarm-prefix parcel-acme-prod --sns-topic-arn arn:aws:sns:us-east-1:111122223333:parcel-acme-prod-security
 EOF
 }
 

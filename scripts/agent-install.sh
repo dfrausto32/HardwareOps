@@ -7,8 +7,8 @@ Usage:
   sudo ./scripts/agent-install.sh KEY=VALUE ...
 
 Common keys:
-  AGENT_SRC=/path/to/hardwareops-agent
-  CONTROL_PLANE_URL=https://agent.hardwareops.internal
+  AGENT_SRC=/path/to/parcel-agent
+  CONTROL_PLANE_URL=https://agent.parcel.internal
   CONTROL_PLANE_CA_CERT_SRC=/path/to/ca.crt
   USE_SYSTEM_CA=1
   AGENT_ENROLL_MODE=approval
@@ -41,18 +41,21 @@ done
 BASE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 AGENT_SRC=${AGENT_SRC:-}
-AGENT_BIN=${AGENT_BIN:-/usr/local/bin/hardwareops-agent}
-AGENT_USER=${AGENT_USER:-hardwareops}
-AGENT_GROUP=${AGENT_GROUP:-hardwareops}
-SERVICE_NAME=${SERVICE_NAME:-hardwareops-agent}
+AGENT_BIN=${AGENT_BIN:-/usr/local/bin/parcel-agent}
+AGENT_USER=${AGENT_USER:-parcel}
+AGENT_GROUP=${AGENT_GROUP:-parcel}
+SERVICE_NAME=${SERVICE_NAME:-parcel-agent}
 SERVICE_UNIT_PATH=${SERVICE_UNIT_PATH:-/etc/systemd/system/${SERVICE_NAME}.service}
+MACHINE_ID_INIT_SERVICE_NAME=${MACHINE_ID_INIT_SERVICE_NAME:-parcel-machine-id-init}
+MACHINE_ID_INIT_UNIT_PATH=${MACHINE_ID_INIT_UNIT_PATH:-/etc/systemd/system/${MACHINE_ID_INIT_SERVICE_NAME}.service}
+MACHINE_ID_INIT_BIN=${MACHINE_ID_INIT_BIN:-/usr/local/bin/parcel-machine-id-init.sh}
 SYSTEMCTL_BIN=${SYSTEMCTL_BIN:-systemctl}
 ENABLE_SERVICE=${ENABLE_SERVICE:-1}
 START_SERVICE=${START_SERVICE:-0}
-CONFIG_DIR=${CONFIG_DIR:-/etc/hardwareops/agent}
+CONFIG_DIR=${CONFIG_DIR:-/etc/parcel/agent}
 ENV_FILE=${ENV_FILE:-$CONFIG_DIR/agent.env}
-DATA_DIR=${DATA_DIR:-/var/lib/hardwareops/agent}
-CERT_DIR=${CERT_DIR:-/etc/hardwareops/agent/certs}
+DATA_DIR=${DATA_DIR:-/var/lib/parcel/agent}
+CERT_DIR=${CERT_DIR:-/etc/parcel/agent/certs}
 STATE_PATH=${STATE_PATH:-$DATA_DIR/state.json}
 ARTIFACT_ROOT=${ARTIFACT_ROOT:-$DATA_DIR/artifacts}
 DEVICE_CERT_PATH=${DEVICE_CERT_PATH:-$CERT_DIR/device.crt}
@@ -77,7 +80,7 @@ if [ -n "$ENROLLMENT_PROFILE_TOKEN" ] && [ -z "$AGENT_ENROLL_MODE" ]; then
   AGENT_ENROLL_MODE=approval
 fi
 if [ -z "$CONTROL_PLANE_URL" ]; then
-  CONTROL_PLANE_URL=https://agent.hardwareops.internal
+  CONTROL_PLANE_URL=https://agent.parcel.internal
 fi
 if [ -z "$ENV_TEMPLATE_PATH" ]; then
   if [ -f "$BASE_DIR/deploy/systemd/agent.env.example" ]; then
@@ -90,13 +93,31 @@ if [ -z "$ENV_TEMPLATE_PATH" ]; then
   fi
 fi
 if [ -z "$SERVICE_TEMPLATE_PATH" ]; then
-  if [ -f "$BASE_DIR/deploy/systemd/hardwareops-agent.service" ]; then
-    SERVICE_TEMPLATE_PATH=$BASE_DIR/deploy/systemd/hardwareops-agent.service
-  elif [ -f "$BASE_DIR/hardwareops-agent.service" ]; then
-    SERVICE_TEMPLATE_PATH=$BASE_DIR/hardwareops-agent.service
+  if [ -f "$BASE_DIR/deploy/systemd/parcel-agent.service" ]; then
+    SERVICE_TEMPLATE_PATH=$BASE_DIR/deploy/systemd/parcel-agent.service
+  elif [ -f "$BASE_DIR/parcel-agent.service" ]; then
+    SERVICE_TEMPLATE_PATH=$BASE_DIR/parcel-agent.service
   else
-    echo "hardwareops-agent.service not found beside installer script." >&2
+    echo "parcel-agent.service not found beside installer script." >&2
     exit 1
+  fi
+fi
+
+MACHINE_ID_INIT_SERVICE_TEMPLATE_PATH=${MACHINE_ID_INIT_SERVICE_TEMPLATE_PATH:-}
+if [ -z "$MACHINE_ID_INIT_SERVICE_TEMPLATE_PATH" ]; then
+  if [ -f "$BASE_DIR/deploy/systemd/parcel-machine-id-init.service" ]; then
+    MACHINE_ID_INIT_SERVICE_TEMPLATE_PATH=$BASE_DIR/deploy/systemd/parcel-machine-id-init.service
+  elif [ -f "$BASE_DIR/parcel-machine-id-init.service" ]; then
+    MACHINE_ID_INIT_SERVICE_TEMPLATE_PATH=$BASE_DIR/parcel-machine-id-init.service
+  fi
+fi
+
+MACHINE_ID_INIT_SCRIPT_SRC=${MACHINE_ID_INIT_SCRIPT_SRC:-}
+if [ -z "$MACHINE_ID_INIT_SCRIPT_SRC" ]; then
+  if [ -f "$BASE_DIR/scripts/parcel-machine-id-init.sh" ]; then
+    MACHINE_ID_INIT_SCRIPT_SRC=$BASE_DIR/scripts/parcel-machine-id-init.sh
+  elif [ -f "$BASE_DIR/parcel-machine-id-init.sh" ]; then
+    MACHINE_ID_INIT_SCRIPT_SRC=$BASE_DIR/parcel-machine-id-init.sh
   fi
 fi
 
@@ -157,7 +178,7 @@ chown -R "$AGENT_USER:$AGENT_GROUP" "$CERT_DIR"
 chmod 0700 "$CERT_DIR"
 
 if [ -z "$AGENT_SRC" ]; then
-  echo "AGENT_SRC is required (path to hardwareops-agent binary)." >&2
+  echo "AGENT_SRC is required (path to parcel-agent binary)." >&2
   exit 1
 fi
 
@@ -211,6 +232,15 @@ if [ -n "$AUTO_REENROLL" ]; then
   upsert_env "$ENV_FILE" "AUTO_REENROLL" "$AUTO_REENROLL"
 fi
 
+# Install machine-id init script and service (used for ISO/cloned-image deployments).
+if [ -n "$MACHINE_ID_INIT_SCRIPT_SRC" ]; then
+  install -m 0755 "$MACHINE_ID_INIT_SCRIPT_SRC" "$MACHINE_ID_INIT_BIN"
+fi
+if [ -n "$MACHINE_ID_INIT_SERVICE_TEMPLATE_PATH" ]; then
+  mkdir -p "$(dirname "$MACHINE_ID_INIT_UNIT_PATH")"
+  install -m 0644 "$MACHINE_ID_INIT_SERVICE_TEMPLATE_PATH" "$MACHINE_ID_INIT_UNIT_PATH"
+fi
+
 mkdir -p "$(dirname "$SERVICE_UNIT_PATH")"
 install -m 0644 "$SERVICE_TEMPLATE_PATH" "$SERVICE_UNIT_PATH"
 
@@ -223,13 +253,16 @@ fi
 
 if [ "$ENABLE_SERVICE" = "1" ]; then
   "$SYSTEMCTL_BIN" daemon-reload
+  if [ -f "$MACHINE_ID_INIT_UNIT_PATH" ]; then
+    "$SYSTEMCTL_BIN" enable "$MACHINE_ID_INIT_SERVICE_NAME"
+  fi
   "$SYSTEMCTL_BIN" enable "$SERVICE_NAME"
   if [ "$START_SERVICE" = "1" ]; then
     "$SYSTEMCTL_BIN" restart "$SERVICE_NAME"
   fi
 fi
 
-echo "Installed hardwareops-agent."
+echo "Installed parcel-agent."
 echo "Binary: $AGENT_BIN"
 echo "Env file: $ENV_FILE"
 

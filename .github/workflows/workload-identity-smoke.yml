@@ -17,7 +17,7 @@ jobs:
       id-token: write
     env:
       HWOPS_BASE_URL: ${{ vars.HWOPS_BASE_URL }}
-      CI_WORKLOAD_IDENTITY_AUDIENCE: ${{ vars.HWOPS_WORKLOAD_IDENTITY_AUDIENCE || 'hardwareops-ci' }}
+      CI_WORKLOAD_IDENTITY_AUDIENCE: ${{ vars.HWOPS_WORKLOAD_IDENTITY_AUDIENCE || 'parcel-ci' }}
       WORKLOAD_IDENTITY_PROVIDER: ${{ vars.HWOPS_WORKLOAD_IDENTITY_PROVIDER || 'github-actions' }}
       SIGNING_KEY_ID: ${{ vars.HWOPS_SIGNING_KEY_ID }}
       HWOPS_CA_CERT_B64: ${{ secrets.HWOPS_CA_CERT_B64 }}

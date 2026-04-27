@@ -2,8 +2,8 @@
 set -euo pipefail
 
 BASE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-OUT_DIR=${OUT_DIR:-/opt/hardwareops/certs}
-DOMAIN=${DOMAIN:-hardwareops.internal}
+OUT_DIR=${OUT_DIR:-/opt/parcel/certs}
+DOMAIN=${DOMAIN:-parcel.internal}
 AGENT_DOMAIN=${AGENT_DOMAIN:-agent.${DOMAIN}}
 SERVER_CERT_MODE=${SERVER_CERT_MODE:-device-ca}
 SERVER_CERT_INPUT=${SERVER_CERT_INPUT:-}

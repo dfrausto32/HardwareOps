@@ -349,7 +349,7 @@ NessusSyncJob.Start(ctx)
   └─► ticker fires every VULN_NESSUS_SYNC_INTERVAL (default 1h)
       └─► NessusClient.ListScans() → filter by VULN_NESSUS_SCAN_IDS if set
           └─► for each scan → GetScanHosts(scanID)
-              └─► for each host → match to HardwareOps device
+              └─► for each host → match to Parcel device
                   └─► compare nessus host.hostname / host.ip against device.MetadataJSON
                       keys: hwops.network.hostname, hwops.network.ip
                   └─► if matched: GetHostFindings → store.UpsertDeviceVulnScan(...)

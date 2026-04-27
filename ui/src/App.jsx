@@ -1613,14 +1613,14 @@ export default function App() {
   function doDownloadRecoveryCodes() {
     if (recoveryCodes.length === 0) return
     const lines = [
-      'HardwareOps recovery codes',
+      'Parcel recovery codes',
       `Generated: ${recoveryCodesGeneratedAt ? formatTime(recoveryCodesGeneratedAt) : new Date().toLocaleString()}`,
       '',
       ...recoveryCodes,
       '',
       'Each code can be used once.',
     ]
-    downloadTextFile('hardwareops-recovery-codes.txt', lines.join('\n'))
+    downloadTextFile('parcel-recovery-codes.txt', lines.join('\n'))
   }
 
   async function doResetWithRecoveryCode() {
@@ -1716,12 +1716,12 @@ export default function App() {
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = 'hardwareops-ca.crt'
+      a.download = 'parcel-ca.crt'
       document.body.appendChild(a)
       a.click()
       a.remove()
       window.URL.revokeObjectURL(url)
-      setBootstrapStatusMessage('Downloaded hardwareops-ca.crt')
+      setBootstrapStatusMessage('Downloaded parcel-ca.crt')
     } catch (err) {
       setBootstrapStatusMessage(err.message || String(err))
     }
@@ -4552,7 +4552,7 @@ export default function App() {
     return (
       <div className="login-screen">
         <div className="login-card">
-          <div className="brand">HardwareOps</div>
+          <div className="brand">Parcel</div>
           <div className="status">Checking authentication...</div>
         </div>
       </div>
@@ -4563,7 +4563,7 @@ export default function App() {
     return (
       <div className="login-screen">
         <div className="login-card">
-          <div className="brand">HardwareOps</div>
+          <div className="brand">Parcel</div>
           <div className="auth-toggle">
             <button
               className={`tab ${authView === 'login' ? 'active' : ''}`}
@@ -4781,7 +4781,7 @@ export default function App() {
   return (
     <div className="app">
       <aside className="sidebar">
-        <div className="brand">HardwareOps</div>
+        <div className="brand">Parcel</div>
         <nav className="nav">
           {visibleNav.map((item) => {
             const pendingCount = item.id === 'security'

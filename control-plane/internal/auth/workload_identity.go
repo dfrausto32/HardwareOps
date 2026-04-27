@@ -15,7 +15,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
-	"github.com/hardwareops/control-plane/internal/config"
+	"github.com/parcel/control-plane/internal/config"
 )
 
 type WorkloadIdentityExchanger interface {

@@ -36,7 +36,7 @@ dist/installers/<version>/
 ## 2) Bundle contents
 
 ### Agent bundles
-- `hardwareops-agent` binary
+- `parcel-agent` binary
 - `scripts/agent-install.sh` (Linux systemd install + approval-mode bootstrap config)
 - `scripts/agent-enroll.sh` (legacy direct-enroll helper)
 - `deploy/systemd/` service file + env example
@@ -56,8 +56,8 @@ dist/installers/<version>/
 - Prebuilt Docker images (control‑plane + gateway)
 - `docker-compose.onprem.bundle.yml`
 - `.env.onprem.example`
-- `hardwareops-installer.sh` (double‑click launcher script)
-- `desktop/hardwareops-installer.desktop`
+- `parcel-installer.sh` (double‑click launcher script)
+- `desktop/parcel-installer.desktop`
 - `scripts/run-stack.sh`
 - `scripts/apply-upgrade.sh`
 - `scripts/setup-control-plane.sh`
@@ -74,12 +74,12 @@ dist/installers/<version>/
 
 Copy the stack bundle to the control‑plane VM:
 ```
-scp dist/installers/<version>/hardwareops-stack-<version>-linux-<arch>.tar.gz <user>@<cp_vm_ip>:~/
+scp dist/installers/<version>/parcel-stack-<version>-linux-<arch>.tar.gz <user>@<cp_vm_ip>:~/
 ```
 
 On the control‑plane VM:
 ```
-tar -xzf hardwareops-stack-<version>-linux-<arch>.tar.gz
+tar -xzf parcel-stack-<version>-linux-<arch>.tar.gz
 cd stack-<version>-linux-<arch>
 
 sudo ./scripts/install-docker-ubuntu.sh
@@ -87,19 +87,19 @@ sudo ./scripts/run-stack.sh
 ```
 
 Alternative (Linux desktop double‑click):
-- Open `desktop/hardwareops-installer.desktop`
+- Open `desktop/parcel-installer.desktop`
 - Mark it as **Trusted** when prompted
-- It runs `hardwareops-installer.sh` and starts the stack in a terminal
+- It runs `parcel-installer.sh` and starts the stack in a terminal
 
 Verify:
 ```
-curl --cacert /opt/hardwareops/certs/ca.crt https://hardwareops.internal/healthz
+curl --cacert /opt/parcel/certs/ca.crt https://parcel.internal/healthz
 ```
 If DNS isn't ready yet, use:
 ```
-curl --cacert /opt/hardwareops/certs/ca.crt \
-  --resolve hardwareops.internal:443:127.0.0.1 \
-  https://hardwareops.internal/healthz
+curl --cacert /opt/parcel/certs/ca.crt \
+  --resolve parcel.internal:443:127.0.0.1 \
+  https://parcel.internal/healthz
 ```
 
 ---
@@ -117,25 +117,25 @@ Quick commands:
 
 Copy the agent bundle to the agent VM:
 ```
-scp dist/installers/<version>/hardwareops-agent-<version>-linux-<arch>.tar.gz <user>@<agent_vm_ip>:~/
+scp dist/installers/<version>/parcel-agent-<version>-linux-<arch>.tar.gz <user>@<agent_vm_ip>:~/
 ```
 
 On the agent VM:
 ```
-tar -xzf hardwareops-agent-<version>-linux-<arch>.tar.gz
-cd hardwareops-agent-<version>-linux-<arch>
+tar -xzf parcel-agent-<version>-linux-<arch>.tar.gz
+cd parcel-agent-<version>-linux-<arch>
 
 sudo ./scripts/install-agent-deps-ubuntu.sh
-sudo mkdir -p /opt/hardwareops/certs
+sudo mkdir -p /opt/parcel/certs
 ```
 
 Copy the CA cert from the control‑plane VM:
 ```
-scp /opt/hardwareops/certs/ca.crt <user>@<agent_vm_ip>:/opt/hardwareops/certs/ca.crt
+scp /opt/parcel/certs/ca.crt <user>@<agent_vm_ip>:/opt/parcel/certs/ca.crt
 ```
 
 Create an enrollment profile in the control-plane UI:
-- Open `https://hardwareops.internal`
+- Open `https://parcel.internal`
 - Go to `Security -> Enrollment profiles`
 - Create a profile with `Require approval` enabled
 - Copy the bootstrap token and deliver it to the operator performing the install
@@ -143,9 +143,9 @@ Create an enrollment profile in the control-plane UI:
 Install + start in approval mode:
 ```
 sudo ./scripts/agent-install.sh \
-  AGENT_SRC=./hardwareops-agent \
-  CONTROL_PLANE_URL=https://agent.hardwareops.internal \
-  CONTROL_PLANE_CA_CERT_SRC=/opt/hardwareops/certs/ca.crt \
+  AGENT_SRC=./parcel-agent \
+  CONTROL_PLANE_URL=https://agent.parcel.internal \
+  CONTROL_PLANE_CA_CERT_SRC=/opt/parcel/certs/ca.crt \
   AGENT_ENROLL_MODE=approval \
   ENROLLMENT_PROFILE_TOKEN=<bootstrap-token> \
   START_SERVICE=1
@@ -156,8 +156,8 @@ and add `USE_SYSTEM_CA=1`.
 
 Confirm the service is alive before approval:
 ```
-sudo systemctl status hardwareops-agent --no-pager
-sudo journalctl -u hardwareops-agent -f
+sudo systemctl status parcel-agent --no-pager
+sudo journalctl -u parcel-agent -f
 ```
 
 Expected log messages:
@@ -170,30 +170,30 @@ Approve the request:
 
 Verify the agent materialized identity and moved into mTLS check-in:
 ```
-sudo test -s /etc/hardwareops/agent/certs/device.crt
-sudo test -s /etc/hardwareops/agent/certs/device.key
-sudo cat /var/lib/hardwareops/agent/device-id
-sudo test ! -e /var/lib/hardwareops/agent/bootstrap-state.json
-sudo journalctl -u hardwareops-agent -n 50 --no-pager
+sudo test -s /etc/parcel/agent/certs/device.crt
+sudo test -s /etc/parcel/agent/certs/device.key
+sudo cat /var/lib/parcel/agent/device-id
+sudo test ! -e /var/lib/parcel/agent/bootstrap-state.json
+sudo journalctl -u parcel-agent -n 50 --no-pager
 ```
 
 If the agent fails with `permission denied` on `device.key`:
 ```
-sudo chown -R hardwareops:hardwareops /etc/hardwareops/agent/certs
-sudo systemctl restart hardwareops-agent
+sudo chown -R parcel:parcel /etc/parcel/agent/certs
+sudo systemctl restart parcel-agent
 ```
 
 Verify from control‑plane:
 ```
-curl --cacert /opt/hardwareops/certs/ca.crt https://hardwareops.internal/api/v1/devices
+curl --cacert /opt/parcel/certs/ca.crt https://parcel.internal/api/v1/devices
 ```
 
 Legacy direct enrollment (when you intentionally need the old token-enroll path):
 ```
-sudo CONTROL_PLANE_URL=https://agent.hardwareops.internal \
-     CA_CERT_PATH=/opt/hardwareops/certs/ca.crt \
+sudo CONTROL_PLANE_URL=https://agent.parcel.internal \
+     CA_CERT_PATH=/opt/parcel/certs/ca.crt \
      ./scripts/agent-enroll.sh
-sudo systemctl restart hardwareops-agent
+sudo systemctl restart parcel-agent
 ```
 
 For the full approval-mode agent runbook (persistence, CA rotation, re-enrollment), see `agent-systemd.md`.
@@ -207,7 +207,7 @@ For the full approval-mode agent runbook (persistence, CA rotation, re-enrollmen
 ```
 
 Outputs:
-- `dist/upgrades/<version>/hardwareops-upgrade-<version>-linux-<arch>.tar.gz`
+- `dist/upgrades/<version>/parcel-upgrade-<version>-linux-<arch>.tar.gz`
 
 ---
 
@@ -215,13 +215,13 @@ Outputs:
 
 Copy the upgrade bundle to the control‑plane VM:
 ```
-scp dist/upgrades/<version>/hardwareops-upgrade-<version>-linux-<arch>.tar.gz <user>@<cp_vm_ip>:~/
+scp dist/upgrades/<version>/parcel-upgrade-<version>-linux-<arch>.tar.gz <user>@<cp_vm_ip>:~/
 ```
 
 On the control‑plane VM:
 ```
-tar -xzf hardwareops-upgrade-<version>-linux-<arch>.tar.gz
-cd hardwareops-upgrade-<version>-linux-<arch>
+tar -xzf parcel-upgrade-<version>-linux-<arch>.tar.gz
+cd parcel-upgrade-<version>-linux-<arch>
 STACK_DIR=$PWD ENV_FILE=.env.onprem.example ./scripts/apply-upgrade.sh
 ```
 
@@ -231,8 +231,8 @@ Then enable maintenance in the UI and click **Apply update**.
 
 Alternative: place the upgrade tarball in `/stack/updates` and let the UI detect it:
 ```
-mkdir -p /opt/hardwareops/stack/updates
-cp hardwareops-upgrade-<version>-linux-<arch>.tar.gz /opt/hardwareops/stack/updates/
+mkdir -p /opt/parcel/stack/updates
+cp parcel-upgrade-<version>-linux-<arch>.tar.gz /opt/parcel/stack/updates/
 ```
 
 ---
@@ -266,6 +266,6 @@ Notes:
 - For gateway `502`, check `control-plane` container logs and restart the service.
 - If the agent fails with `permission denied` on device certs:
   ```
-  sudo chown -R hardwareops:hardwareops /etc/hardwareops/agent/certs
-  sudo systemctl restart hardwareops-agent
+  sudo chown -R parcel:parcel /etc/parcel/agent/certs
+  sudo systemctl restart parcel-agent
   ```

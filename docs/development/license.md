@@ -48,15 +48,15 @@ OUT=./license.json \
 ```
 
 3) Distribute:
-- Copy `license.json` to the target host, e.g. `/opt/hardwareops/license.json`
+- Copy `license.json` to the target host, e.g. `/opt/parcel/license.json`
 - Provide the **public key** to the control‑plane via `LICENSE_PUBLIC_KEY_PATH`
 
 ## Control‑Plane Configuration
 Set these in `.env.onprem` (or control‑plane env):
 ```
 LICENSE_ENFORCE=1
-LICENSE_PATH=/opt/hardwareops/license.json
-LICENSE_PUBLIC_KEY_PATH=/opt/hardwareops/license.pub
+LICENSE_PATH=/opt/parcel/license.json
+LICENSE_PUBLIC_KEY_PATH=/opt/parcel/license.pub
 LICENSE_KEY_MODE=embedded
 LICENSE_CACHE_TTL=30s
 ```
@@ -94,11 +94,11 @@ LICENSE_EMBED_PUBKEY_PATH=./license-keys/ed25519.pub \
 Device-slot reclaim now uses an explicit decommission API (admin-only) so slot release is auditable.
 
 ```bash
-curl --cacert /opt/hardwareops/certs/ca.crt \
+curl --cacert /opt/parcel/certs/ca.crt \
   -H "Authorization: Bearer <admin-jwt>" \
   -H "Content-Type: application/json" \
   -X POST \
-  https://hardwareops.internal/api/v1/devices/<device-id>/decommission \
+  https://parcel.internal/api/v1/devices/<device-id>/decommission \
   -d '{"reason":"device retired","ticketId":"OPS-123"}'
 ```
 

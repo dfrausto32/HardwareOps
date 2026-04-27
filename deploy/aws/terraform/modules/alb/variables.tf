@@ -87,6 +87,12 @@ variable "enable_waf" {
   default     = true
 }
 
+variable "waf_blocked_country_codes" {
+  description = "ISO 3166-1 alpha-2 country codes to block at the WAF layer. Applied before managed rule groups. Defaults to the current OFAC-sanctioned country list."
+  type        = list(string)
+  default     = ["CU", "IR", "KP", "RU", "SY"]
+}
+
 variable "waf_rate_limit" {
   description = "Optional per-5-minute rate limit for app-host traffic, aggregated by source IP."
   type        = number

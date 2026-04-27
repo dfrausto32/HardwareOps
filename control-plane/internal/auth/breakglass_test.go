@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/store"
-	"github.com/hardwareops/control-plane/internal/store/memory"
+	"github.com/parcel/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/store/memory"
 	"golang.org/x/crypto/bcrypt"
 )
 

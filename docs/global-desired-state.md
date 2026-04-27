@@ -1,6 +1,6 @@
 # Global Desired State (Policy Push)
 
-E3 adds a **global desired state** layer to HardwareOps that lets operators define label-based device groups and push deployment policies cross-region from a single global plane.
+E3 adds a **global desired state** layer to Parcel that lets operators define label-based device groups and push deployment policies cross-region from a single global plane.
 
 ## Concepts
 

@@ -5,7 +5,7 @@ BASE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 BASE_URL=${BASE_URL:-https://localhost:8080}
 CA_CERT_PATH=${CONTROL_PLANE_CA_CERT_PATH:-$BASE_DIR/dev-ca.crt}
-OUTPUT_DIR=${OUTPUT_DIR:-$(mktemp -d /tmp/hardwareops-pending-enroll.XXXXXX)}
+OUTPUT_DIR=${OUTPUT_DIR:-$(mktemp -d /tmp/parcel-pending-enroll.XXXXXX)}
 PROFILE_NAME=${PROFILE_NAME:-local-pending-enroll}
 PROFILE_EXPIRES_IN_SEC=${PROFILE_EXPIRES_IN_SEC:-86400}
 PROFILE_MAX_USES=${PROFILE_MAX_USES:-1}
@@ -22,7 +22,7 @@ import uuid
 print(uuid.uuid4().hex)
 PY
 )}
-CSR_SUBJECT=${CSR_SUBJECT:-/CN=hardwareops-pending-device}
+CSR_SUBJECT=${CSR_SUBJECT:-/CN=parcel-pending-device}
 POLL_FOR_CLAIM=${POLL_FOR_CLAIM:-1}
 CLAIM_POLL_INTERVAL_SEC=${CLAIM_POLL_INTERVAL_SEC:-5}
 AUTO_APPROVE_API=${AUTO_APPROVE_API:-0}

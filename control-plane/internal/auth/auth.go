@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/store"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -78,7 +78,7 @@ func NewManager(mode string, jwtSecret string, tokenTTL time.Duration, issuer st
 		tokenTTL = 12 * time.Hour
 	}
 	if issuer == "" {
-		issuer = "hardwareops"
+		issuer = "parcel"
 	}
 	return &Manager{
 		store:     st,
@@ -98,6 +98,18 @@ func (m *Manager) Mode() string {
 		return ModeDisabled
 	}
 	return m.mode
+}
+
+func (m *Manager) Issuer() string {
+	if m == nil {
+		return "parcel"
+	}
+	return m.issuer
+}
+
+// CheckPassword verifies the plaintext password against the user's stored hash.
+func (m *Manager) CheckPassword(user store.User, password string) error {
+	return bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password))
 }
 
 func (m *Manager) IssueToken(user store.User) (string, time.Time, error) {
@@ -125,26 +137,45 @@ func (m *Manager) IssueToken(user store.User) (string, time.Time, error) {
 	return signed, exp, nil
 }
 
-func (m *Manager) Authenticate(email, password string) (store.User, string, time.Time, error) {
+// AuthenticateResult indicates how the login flow should continue.
+type AuthenticateResult int
+
+const (
+	AuthResultOK          AuthenticateResult = iota // full JWT issued
+	AuthResultTOTPPending                           // TOTP step required; token is a totp_pending JWT
+)
+
+// Authenticate verifies email+password and returns a JWT.
+// When the user has TOTP enabled, a short-lived totp_pending token is returned
+// instead of a full session JWT, and result is AuthResultTOTPPending.
+// Callers must check result and direct the client to POST /auth/totp/verify.
+func (m *Manager) Authenticate(email, password string) (store.User, string, time.Time, AuthenticateResult, error) {
 	if m == nil || !m.Enabled() {
-		return store.User{}, "", time.Time{}, errors.New("auth disabled")
+		return store.User{}, "", time.Time{}, AuthResultOK, errors.New("auth disabled")
 	}
 	user, ok, err := m.store.GetUserByEmail(email)
 	if err != nil {
-		return store.User{}, "", time.Time{}, err
+		return store.User{}, "", time.Time{}, AuthResultOK, err
 	}
 	if !ok {
-		return store.User{}, "", time.Time{}, errors.New("invalid credentials")
+		return store.User{}, "", time.Time{}, AuthResultOK, errors.New("invalid credentials")
 	}
 	if user.Disabled {
-		return store.User{}, "", time.Time{}, errors.New("user disabled")
+		return store.User{}, "", time.Time{}, AuthResultOK, errors.New("user disabled")
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
-		return store.User{}, "", time.Time{}, errors.New("invalid credentials")
+		return store.User{}, "", time.Time{}, AuthResultOK, errors.New("invalid credentials")
 	}
 	_ = m.store.SetUserLastLogin(user.UserID, time.Now().UTC())
+	if user.TOTPEnabled {
+		pendingToken, exp, err := m.IssueTOTPPendingToken(user.UserID)
+		if err != nil {
+			return store.User{}, "", time.Time{}, AuthResultOK, err
+		}
+		return user, pendingToken, exp, AuthResultTOTPPending, nil
+	}
 	token, exp, err := m.IssueToken(user)
-	return user, token, exp, err
+	return user, token, exp, AuthResultOK, err
 }
 
 func (m *Manager) Middleware(next http.Handler) http.Handler {

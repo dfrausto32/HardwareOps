@@ -43,7 +43,7 @@ Collect these before first apply:
 - control-plane and gateway image URIs
 - device CA/trust-store bucket, key, and optional object version
 - on-call SNS topic ARN or the inputs required to create it
-- CloudWatch alarm prefix you will use for this stack, recommended: `hardwareops-<customer>-<env>`
+- CloudWatch alarm prefix you will use for this stack, recommended: `parcel-<customer>-<env>`
 - incident ticket ID or change record for the deployment
 
 Create one evidence directory per release candidate:
@@ -78,9 +78,9 @@ scripts/aws-customer.sh init \
   --customer-domain acme.example.com \
   --route53-zone-id Z1234567890 \
   --acm-cert-arn arn:aws:acm:us-east-1:111122223333:certificate/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee \
-  --device-mtls-bucket hardwareops-acme-prod-security-assets \
-  --control-plane-image 111122223333.dkr.ecr.us-east-1.amazonaws.com/hardwareops-control-plane:20260309 \
-  --gateway-image 111122223333.dkr.ecr.us-east-1.amazonaws.com/hardwareops-gateway:20260309
+  --device-mtls-bucket parcel-acme-prod-security-assets \
+  --control-plane-image 111122223333.dkr.ecr.us-east-1.amazonaws.com/parcel-control-plane:20260309 \
+  --gateway-image 111122223333.dkr.ecr.us-east-1.amazonaws.com/parcel-gateway:20260309
 ```
 
 The wrapper generates:
@@ -127,7 +127,7 @@ Upload the ALB trust bundle:
 ```bash
 aws s3 cp \
   "out/${CUSTOMER}-${ENV}-certs/device-ca-bundle.pem" \
-  "s3://hardwareops-${CUSTOMER}-${ENV}-security-assets/mtls/device-ca-bundle.pem"
+  "s3://parcel-${CUSTOMER}-${ENV}-security-assets/mtls/device-ca-bundle.pem"
 ```
 
 ### 6.2 Pull-adapter credentials secret
@@ -136,7 +136,7 @@ If pull ingest uses `credentialRef`, create the resolver secret first:
 
 ```bash
 aws secretsmanager create-secret \
-  --name hardwareops/acme/prod/artifact-pull-credentials \
+  --name parcel/acme/prod/artifact-pull-credentials \
   --secret-string '{
     "artifactory-demo": {
       "username": "admin",
@@ -148,7 +148,7 @@ aws secretsmanager create-secret \
 Recommended Terraform input form:
 
 ```hcl
-artifact_pull_credentials_aws_secret_id = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/acme/prod/artifact-pull-credentials-AbCdEf"
+artifact_pull_credentials_aws_secret_id = "arn:aws:secretsmanager:us-east-1:111122223333:secret:parcel/acme/prod/artifact-pull-credentials-AbCdEf"
 ```
 
 ### 6.3 Trusted signing key bootstrap secret
@@ -182,17 +182,17 @@ Payload shape:
 
 ```bash
 aws secretsmanager create-secret \
-  --name hardwareops/acme/prod/trusted-signing-keys \
+  --name parcel/acme/prod/trusted-signing-keys \
   --secret-string file:///tmp/trusted-signing-keys.json \
 || aws secretsmanager put-secret-value \
-  --secret-id hardwareops/acme/prod/trusted-signing-keys \
+  --secret-id parcel/acme/prod/trusted-signing-keys \
   --secret-string file:///tmp/trusted-signing-keys.json
 ```
 
 3. Reference it in Terraform:
 
 ```hcl
-trusted_signing_keys_aws_secret_id = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/acme/prod/trusted-signing-keys-AbCdEf"
+trusted_signing_keys_aws_secret_id = "arn:aws:secretsmanager:us-east-1:111122223333:secret:parcel/acme/prod/trusted-signing-keys-AbCdEf"
 
 control_plane_env = {
   ARTIFACT_TRUST_VERIFICATION_MODE       = "require_verified"
@@ -209,13 +209,13 @@ control_plane_env = {
 - signed upload with the pinned key succeeds
 
 Use one secret per customer environment:
-- `hardwareops/<customer>/<env>/trusted-signing-keys`
+- `parcel/<customer>/<env>/trusted-signing-keys`
 
 Treat this secret as the bootstrap/additive source. Ongoing key lifecycle still happens through the UI/API registry.
 
 ### 6.4 CI workload identity provider config secret
 
-If CI jobs should exchange GitHub/GitLab/Jenkins OIDC job tokens for short-lived HardwareOps publish tokens, bootstrap the provider config from Secrets Manager before apply.
+If CI jobs should exchange GitHub/GitLab/Jenkins OIDC job tokens for short-lived Parcel publish tokens, bootstrap the provider config from Secrets Manager before apply.
 
 1. Create the provider config payload:
 
@@ -224,7 +224,7 @@ If CI jobs should exchange GitHub/GitLab/Jenkins OIDC job tokens for short-lived
   {
     "name": "github-actions",
     "issuer": "https://token.actions.githubusercontent.com",
-    "audience": "hardwareops-ci",
+    "audience": "parcel-ci",
     "allowedScopes": ["artifact.publish"],
     "defaultScopes": ["artifact.publish"],
     "ttl": "15m",
@@ -241,17 +241,17 @@ If CI jobs should exchange GitHub/GitLab/Jenkins OIDC job tokens for short-lived
 
 ```bash
 aws secretsmanager create-secret \
-  --name hardwareops/acme/prod/workload-identity-providers \
+  --name parcel/acme/prod/workload-identity-providers \
   --secret-string file:///tmp/workload-identity-providers.json \
 || aws secretsmanager put-secret-value \
-  --secret-id hardwareops/acme/prod/workload-identity-providers \
+  --secret-id parcel/acme/prod/workload-identity-providers \
   --secret-string file:///tmp/workload-identity-providers.json
 ```
 
 3. Reference it in Terraform:
 
 ```hcl
-ci_workload_identity_providers_aws_secret_id = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/acme/prod/workload-identity-providers-AbCdEf"
+ci_workload_identity_providers_aws_secret_id = "arn:aws:secretsmanager:us-east-1:111122223333:secret:parcel/acme/prod/workload-identity-providers-AbCdEf"
 ```
 
 4. After apply, verify runtime:
@@ -505,8 +505,8 @@ Failure interpretation:
 Commands:
 
 ```bash
-ALARM_PREFIX="hardwareops-${CUSTOMER}-${ENV}"
-TOPIC_ARN="arn:aws:sns:${AWS_REGION}:111122223333:hardwareops-${CUSTOMER}-${ENV}-security"
+ALARM_PREFIX="parcel-${CUSTOMER}-${ENV}"
+TOPIC_ARN="arn:aws:sns:${AWS_REGION}:111122223333:parcel-${CUSTOMER}-${ENV}-security"
 
 aws --profile "$AWS_PROFILE" --region "$AWS_REGION" cloudwatch describe-alarms \
   --alarm-name-prefix "$ALARM_PREFIX" \
@@ -534,7 +534,7 @@ Failure interpretation:
 ### 10.1 Create or verify the SNS topic
 
 ```bash
-TOPIC_NAME="hardwareops-${CUSTOMER}-${ENV}-security"
+TOPIC_NAME="parcel-${CUSTOMER}-${ENV}-security"
 TOPIC_ARN=$(aws --profile "$AWS_PROFILE" --region "$AWS_REGION" sns create-topic \
   --name "$TOPIC_NAME" \
   --attributes KmsMasterKeyId=alias/aws/sns \
@@ -572,7 +572,7 @@ aws --profile "$AWS_PROFILE" --region "$AWS_REGION" sns list-subscriptions-by-to
 
 aws --profile "$AWS_PROFILE" --region "$AWS_REGION" sns publish \
   --topic-arn "$TOPIC_ARN" \
-  --subject "HardwareOps AWS hardening test" \
+  --subject "Parcel AWS hardening test" \
   --message "{\"customer\":\"$CUSTOMER\",\"env\":\"$ENV\",\"check\":\"sns-routing\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
 ```
 

@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/hardwareops/control-plane/internal/events"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/events"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 // Store is the narrow interface the Dispatcher needs from the data layer.
@@ -213,8 +213,8 @@ func (d *Dispatcher) send(url, secret string, body []byte) (int, error) {
 		return 0, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-HardwareOps-Signature", "sha256="+sig)
-	req.Header.Set("User-Agent", "HardwareOps-Webhook/1.0")
+	req.Header.Set("X-Parcel-Signature", "sha256="+sig)
+	req.Header.Set("User-Agent", "Parcel-Webhook/1.0")
 
 	resp, err := d.httpClient.Do(req)
 	if err != nil {

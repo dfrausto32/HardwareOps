@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/auth"
-	"github.com/hardwareops/control-plane/internal/releaseautoupdate"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/auth"
+	"github.com/parcel/control-plane/internal/releaseautoupdate"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 type ReleaseAutoUpdateSettingsRequest struct {

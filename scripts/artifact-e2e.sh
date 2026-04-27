@@ -43,10 +43,10 @@ PY
 }
 
 if [ "$GENERATE_ARTIFACT" = "1" ] || [ ! -f "$ARTIFACT_PATH" ]; then
-  GEN_DIR=$(mktemp -d /tmp/hardwareops-e2e-artifact.XXXXXX)
+  GEN_DIR=$(mktemp -d /tmp/parcel-e2e-artifact.XXXXXX)
   mkdir -p "$GEN_DIR"
   cat > "$GEN_DIR/readme.txt" <<EOF
-HardwareOps E2E artifact
+Parcel E2E artifact
 type=${ARTIFACT_TYPE}
 version=${ARTIFACT_VERSION}
 EOF
@@ -77,7 +77,7 @@ EOF
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>HardwareOps E2E Artifact</title>
+    <title>Parcel E2E Artifact</title>
     <style>
       body { font-family: Arial, sans-serif; margin: 32px; }
       .card { padding: 20px; border: 2px solid #111; max-width: 520px; }
@@ -85,7 +85,7 @@ EOF
   </head>
   <body>
     <div class="card">
-      <h1>HardwareOps E2E Artifact</h1>
+      <h1>Parcel E2E Artifact</h1>
       <p>Type: ${ARTIFACT_TYPE}</p>
       <p>Version: ${ARTIFACT_VERSION}</p>
       <p id="preapply">Pre-apply: loading...</p>
@@ -151,9 +151,9 @@ TOKEN_JSON=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/enrollments" -H
 TOKEN=$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["token"])' <<<"$TOKEN_JSON")
 
 # Generate CSR + enroll
-CSR_DIR=/tmp/hardwareops-e2e
+CSR_DIR=/tmp/parcel-e2e
 mkdir -p "$CSR_DIR"
-openssl req -newkey rsa:2048 -nodes -keyout "$CSR_DIR/device.key" -out "$CSR_DIR/device.csr" -subj "/CN=hardwareops-device"
+openssl req -newkey rsa:2048 -nodes -keyout "$CSR_DIR/device.key" -out "$CSR_DIR/device.csr" -subj "/CN=parcel-device"
 CSR=$(awk 'NF {sub(/\r/, ""); printf "%s\\n",$0;}' "$CSR_DIR/device.csr")
 ENROLL_JSON=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/devices/enroll" -H "Content-Type: application/json" -d "{\"token\":\"$TOKEN\",\"csr\":\"$CSR\"}")
 DEVICE_ID=$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["deviceId"])' <<<"$ENROLL_JSON")

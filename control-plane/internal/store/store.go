@@ -140,6 +140,7 @@ type Artifact struct {
 	CreatedAt          time.Time
 	DeprecatedAt       time.Time
 	DeleteAfter        time.Time
+	SBOMObjectKey      string
 }
 
 type TrustedSigningKey struct {
@@ -204,7 +205,7 @@ type ArtifactVulnerabilityScan struct {
 	CreatedAt          time.Time
 }
 
-// DeviceVulnerabilityScan is a Nessus scan result mapped to a HardwareOps device.
+// DeviceVulnerabilityScan is a Nessus scan result mapped to a Parcel device.
 type DeviceVulnerabilityScan struct {
 	ScanID             string
 	DeviceID           string
@@ -330,6 +331,8 @@ type User struct {
 	UpdatedAt                time.Time
 	LastLoginAt              time.Time
 	RecoveryCodesGeneratedAt time.Time
+	TOTPSecret               string // AES-256-GCM encrypted TOTP secret; empty when TOTP not configured
+	TOTPEnabled              bool
 }
 
 type UserUpdate struct {
@@ -537,6 +540,7 @@ type Store interface {
 	FindArtifactByNameTypeVersion(name, artifactType, version string) (Artifact, bool, error)
 	ListArtifacts(name, version string, limit, offset int) ([]Artifact, error)
 	CountArtifactsByVerificationStatus(status string) (int, error)
+	SetArtifactSBOMObjectKey(artifactID, sbomObjectKey string) error
 	DeprecateArtifact(artifactID string, deprecatedAt, deleteAfter time.Time) error
 	RestoreArtifact(artifactID string) error
 	ListArtifactsForPrune(cutoff time.Time, limit int) ([]Artifact, error)
@@ -588,6 +592,7 @@ type Store interface {
 	SetUserLastLogin(userID string, at time.Time) error
 	SetUserRecoveryCodes(userID string, recoveryCodesJSON []byte, generatedAt time.Time) error
 	ConsumeUserRecoveryCode(email, recoveryCodeHash, passwordHash string, at time.Time) (User, bool, error)
+	SetUserTOTP(userID, encryptedSecret string, enabled bool) error
 	CreatePasswordResetToken(token PasswordResetToken) error
 	ConsumePasswordResetToken(email, tokenHash, passwordHash string, at time.Time) (User, bool, error)
 	UpdatePasswordResetTokenEmailSent(tokenID string, sentAt time.Time) error

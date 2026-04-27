@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 type AuditEventResponse struct {

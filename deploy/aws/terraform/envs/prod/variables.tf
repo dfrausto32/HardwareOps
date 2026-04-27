@@ -70,7 +70,7 @@ variable "app_host" {
 }
 
 variable "app_public_url" {
-  description = "Public base URL of the HardwareOps UI (e.g. https://hardwareops.example.com). Used in password-reset and invite email links. Leave empty to omit."
+  description = "Public base URL of the Parcel UI (e.g. https://parcel.example.com). Used in password-reset and invite email links. Leave empty to omit."
   type        = string
   default     = ""
 }
@@ -168,7 +168,7 @@ variable "smtp_user" {
 variable "smtp_from" {
   description = "Sender address for outbound email."
   type        = string
-  default     = "HardwareOps <noreply@example.com>"
+  default     = "Parcel <noreply@example.com>"
 }
 
 variable "smtp_tls_mode" {
@@ -252,7 +252,7 @@ variable "db_multi_az" {
 variable "db_master_password" {
   description = "Database master password for non-managed mode."
   type        = string
-  default     = "hardwareops-dev-change-me"
+  default     = "parcel-dev-change-me"
   sensitive   = true
 }
 

@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/store/memory"
+	"github.com/parcel/control-plane/internal/store/memory"
 )
 
 func TestIssueAndParseWorkloadIdentityToken(t *testing.T) {
-	manager, err := NewManager(ModeLocal, "0123456789abcdef0123456789abcdef", time.Hour, "hardwareops-test", memory.New())
+	manager, err := NewManager(ModeLocal, "0123456789abcdef0123456789abcdef", time.Hour, "parcel-test", memory.New())
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestIssueAndParseWorkloadIdentityToken(t *testing.T) {
 }
 
 func TestMiddlewareAcceptsWorkloadIdentityToken(t *testing.T) {
-	manager, err := NewManager(ModeLocal, "0123456789abcdef0123456789abcdef", time.Hour, "hardwareops-test", memory.New())
+	manager, err := NewManager(ModeLocal, "0123456789abcdef0123456789abcdef", time.Hour, "parcel-test", memory.New())
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}

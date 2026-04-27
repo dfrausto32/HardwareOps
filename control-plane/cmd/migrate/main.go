@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/hardwareops/control-plane/internal/migrate"
+	"github.com/parcel/control-plane/internal/migrate"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

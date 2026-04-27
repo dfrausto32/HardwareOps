@@ -17,10 +17,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/hardwareops/control-plane/internal/auth"
-	"github.com/hardwareops/control-plane/internal/certs"
-	"github.com/hardwareops/control-plane/internal/store"
-	"github.com/hardwareops/control-plane/internal/store/memory"
+	"github.com/parcel/control-plane/internal/auth"
+	"github.com/parcel/control-plane/internal/certs"
+	"github.com/parcel/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/store/memory"
 )
 
 func TestBreakglassServiceTokenRevokeAllowsOperatorAndAudits(t *testing.T) {
@@ -290,7 +290,7 @@ func TestBreakglassCertCleanupConflictAuditsOutcome(t *testing.T) {
 func newBreakglassAuthFixture(t *testing.T, mem *memory.Store) (*auth.Manager, map[string]string) {
 	t.Helper()
 
-	manager, err := auth.NewManager("local", "0123456789abcdef0123456789abcdef", 12*time.Hour, "hardwareops", mem)
+	manager, err := auth.NewManager("local", "0123456789abcdef0123456789abcdef", 12*time.Hour, "parcel", mem)
 	if err != nil {
 		t.Fatalf("new auth manager: %v", err)
 	}
@@ -389,7 +389,7 @@ func newBreakglassCACert(t *testing.T) ([]byte, []byte) {
 	now := time.Now().UTC()
 	template := &x509.Certificate{
 		SerialNumber:          big.NewInt(now.UnixNano()),
-		Subject:               pkix.Name{CommonName: "HardwareOps Breakglass Test CA"},
+		Subject:               pkix.Name{CommonName: "Parcel Breakglass Test CA"},
 		NotBefore:             now.Add(-time.Hour),
 		NotAfter:              now.Add(365 * 24 * time.Hour),
 		IsCA:                  true,

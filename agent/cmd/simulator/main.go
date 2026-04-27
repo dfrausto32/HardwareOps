@@ -99,7 +99,7 @@ func runDevice(ctx context.Context, c *client, idx int, interval time.Duration, 
 		if err != nil {
 			return err
 		}
-		csr, key, err := generateCSR(fmt.Sprintf("hardwareops-device-%d", idx))
+		csr, key, err := generateCSR(fmt.Sprintf("parcel-device-%d", idx))
 		if err != nil {
 			return err
 		}

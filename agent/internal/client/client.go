@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hardwareops/agent/internal/state"
+	"github.com/parcel/agent/internal/state"
 )
 
 type Client struct {

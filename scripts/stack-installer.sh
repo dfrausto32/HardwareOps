@@ -3,7 +3,7 @@ set -euo pipefail
 
 BASE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
-echo "HardwareOps stack installer"
+echo "Parcel stack installer"
 echo "Bundle: $BASE_DIR"
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -16,11 +16,11 @@ sudo STACK_DIR="$BASE_DIR" \
   COMPOSE_FILE="${COMPOSE_FILE:-$BASE_DIR/docker-compose.onprem.bundle.yml}" \
   ENV_EXAMPLE="${ENV_EXAMPLE:-$BASE_DIR/.env.onprem.example}" \
   ENV_FILE="${ENV_FILE:-$BASE_DIR/.env.onprem}" \
-  CERTS_DIR="${CERTS_DIR:-/opt/hardwareops/certs}" \
-  DOMAIN="${DOMAIN:-hardwareops.internal}" \
-  PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://hardwareops.internal}" \
-  AGENT_BASE_URL="${AGENT_BASE_URL:-https://agent.hardwareops.internal}" \
-  PROJECT_NAME="${PROJECT_NAME:-hardwareops}" \
+  CERTS_DIR="${CERTS_DIR:-/opt/parcel/certs}" \
+  DOMAIN="${DOMAIN:-parcel.internal}" \
+  PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://parcel.internal}" \
+  AGENT_BASE_URL="${AGENT_BASE_URL:-https://agent.parcel.internal}" \
+  PROJECT_NAME="${PROJECT_NAME:-parcel}" \
   LOAD_IMAGES="${LOAD_IMAGES:-1}" \
   GENERATE_CERTS="${GENERATE_CERTS:-1}" \
   ENABLE_TLS="${ENABLE_TLS:-0}" \
@@ -35,5 +35,5 @@ sudo STACK_DIR="$BASE_DIR" \
 
 echo ""
 echo "Stack is up."
-echo "UI: https://hardwareops.internal"
-echo "Health: https://hardwareops.internal/healthz"
+echo "UI: https://parcel.internal"
+echo "Health: https://parcel.internal/healthz"

@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/backup"
-	"github.com/hardwareops/control-plane/internal/metrics"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/backup"
+	"github.com/parcel/control-plane/internal/metrics"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 type BackupItem struct {

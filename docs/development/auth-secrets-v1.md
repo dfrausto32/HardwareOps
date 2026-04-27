@@ -1,6 +1,6 @@
 # V1 Auth + Secrets Spec (Local Users)
 
-This document defines the **v1 authentication and secrets posture** for HardwareOps. It prioritizes **local users** while leaving explicit extension points for **OIDC/SSO** later.
+This document defines the **v1 authentication and secrets posture** for Parcel. It prioritizes **local users** while leaving explicit extension points for **OIDC/SSO** later.
 
 ## Goals
 - Provide a secure, minimal auth layer for v1 (local users + JWT).
@@ -133,12 +133,12 @@ OIDC authorization code flow is now supported alongside local auth. Both modes c
 | `AUTH_OIDC_REDIRECT_URL` | string | _(required when OIDC enabled)_ | Callback URL registered with the IdP (e.g. `https://hwops.example.com/api/v1/auth/oidc/callback`). |
 | `AUTH_OIDC_SCOPES` | string | `openid email profile groups` | Space or comma separated OIDC scopes to request. |
 | `AUTH_OIDC_GROUP_CLAIM` | string | `groups` | Name of the claim in the ID token that contains the user's groups. |
-| `AUTH_OIDC_ROLE_MAP` | string (JSON) | _(unset)_ | JSON object mapping IdP group names to HardwareOps roles. Example: `{"hwops-admins":"admin","hwops-ops":"operator"}`. Required when `HARDENED_PROFILE=1`. |
+| `AUTH_OIDC_ROLE_MAP` | string (JSON) | _(unset)_ | JSON object mapping IdP group names to Parcel roles. Example: `{"hwops-admins":"admin","hwops-ops":"operator"}`. Required when `HARDENED_PROFILE=1`. |
 | `AUTH_OIDC_DEFAULT_ROLE` | string | `viewer` | Role assigned to users whose groups do not match any entry in `AUTH_OIDC_ROLE_MAP`. Cannot be `admin` when `HARDENED_PROFILE=1`. |
 
 ### Role Map JSON Format
 
-`AUTH_OIDC_ROLE_MAP` is a flat JSON object where keys are IdP group names and values are HardwareOps role names (`admin`, `operator`, `viewer`).
+`AUTH_OIDC_ROLE_MAP` is a flat JSON object where keys are IdP group names and values are Parcel role names (`admin`, `operator`, `viewer`).
 
 ```json
 {

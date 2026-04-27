@@ -64,7 +64,7 @@ variable "app_host" {
 }
 
 variable "app_public_url" {
-  description = "Public base URL of the HardwareOps UI (e.g. https://hardwareops.example.com). Used in password-reset and invite email links. Leave empty to omit."
+  description = "Public base URL of the Parcel UI (e.g. https://parcel.example.com). Used in password-reset and invite email links. Leave empty to omit."
   type        = string
   default     = ""
 }
@@ -102,6 +102,12 @@ variable "enable_waf" {
   default     = true
 }
 
+variable "waf_blocked_country_codes" {
+  description = "ISO 3166-1 alpha-2 country codes to block at the WAF layer. Defaults to the current OFAC-sanctioned country list."
+  type        = list(string)
+  default     = ["CU", "IR", "KP", "RU", "SY"]
+}
+
 variable "waf_rate_limit" {
   description = "Optional per-5-minute rate limit for app ingress, aggregated by source IP."
   type        = number
@@ -135,19 +141,19 @@ variable "artifact_store_create_kms_key" {
 variable "db_name" {
   description = "Database name."
   type        = string
-  default     = "hardwareops"
+  default     = "parcel"
 }
 
 variable "db_username" {
   description = "Database master username."
   type        = string
-  default     = "hardwareops"
+  default     = "parcel"
 }
 
 variable "db_master_password" {
   description = "Database master password for non-managed mode."
   type        = string
-  default     = "hardwareops-dev-change-me"
+  default     = "parcel-dev-change-me"
   sensitive   = true
 }
 
@@ -260,7 +266,7 @@ variable "smtp_user" {
 variable "smtp_from" {
   description = "Sender address for outbound email."
   type        = string
-  default     = "HardwareOps <noreply@example.com>"
+  default     = "Parcel <noreply@example.com>"
 }
 
 variable "smtp_tls_mode" {

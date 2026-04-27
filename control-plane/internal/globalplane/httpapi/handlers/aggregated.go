@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/hardwareops/control-plane/internal/globalplane"
+	"github.com/parcel/control-plane/internal/globalplane"
 )
 
 // ListDevices handles GET /api/v1/devices

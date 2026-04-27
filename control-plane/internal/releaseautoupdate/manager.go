@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/artifacttrust"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/artifacttrust"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 const (

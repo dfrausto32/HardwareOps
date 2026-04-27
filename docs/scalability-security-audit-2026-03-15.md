@@ -1,4 +1,4 @@
-# HardwareOps — Scalability & Security Analysis
+# Parcel — Scalability & Security Analysis
 **Date:** 2026-03-15
 **Scope:** Full codebase audit across control-plane, agent, and UI
 **Ceiling target:** 1,000–10,000 concurrent devices

@@ -20,8 +20,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/certs"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/certs"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 type CertRotationStatus struct {
@@ -473,7 +473,7 @@ func generateRotationCA(prev *x509.Certificate) ([]byte, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	subject := pkix.Name{CommonName: "HardwareOps Dev CA"}
+	subject := pkix.Name{CommonName: "Parcel Dev CA"}
 	if prev != nil {
 		subject = prev.Subject
 	}

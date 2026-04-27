@@ -11,7 +11,7 @@ hwops_artifact_pull:
     ARTIFACT_TYPE: app_bundle
     SOURCE_KIND: http
     METADATA_JSON: "{}"
-    HWOPS_WORKLOAD_IDENTITY_AUDIENCE: "hardwareops-ci"
+    HWOPS_WORKLOAD_IDENTITY_AUDIENCE: "parcel-ci"
   before_script:
     - apt-get update && apt-get install -y --no-install-recommends bash ca-certificates curl && rm -rf /var/lib/apt/lists/*
     - test -n "$HWOPS_BASE_URL"

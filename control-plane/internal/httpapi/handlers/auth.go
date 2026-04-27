@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/hardwareops/control-plane/internal/auth"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/auth"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 type LoginRequest struct {
@@ -20,9 +20,11 @@ type LoginRequest struct {
 }
 
 type LoginResponse struct {
-	Token     string    `json:"token"`
-	ExpiresAt time.Time `json:"expiresAt"`
-	User      UserView  `json:"user"`
+	Token        string    `json:"token,omitempty"`
+	ExpiresAt    time.Time `json:"expiresAt"`
+	User         UserView  `json:"user,omitempty"`
+	TOTPRequired bool      `json:"totpRequired,omitempty"`
+	PendingToken string    `json:"pendingToken,omitempty"`
 }
 
 type UserView struct {
@@ -35,6 +37,7 @@ type UserView struct {
 	LastLoginAt              time.Time       `json:"lastLoginAt,omitempty"`
 	RecoveryCodesConfigured  bool            `json:"recoveryCodesConfigured,omitempty"`
 	RecoveryCodesGeneratedAt time.Time       `json:"recoveryCodesGeneratedAt,omitempty"`
+	TOTPEnabled              bool            `json:"totpEnabled,omitempty"`
 }
 
 type AuthStatusResponse struct {
@@ -90,7 +93,7 @@ func Login(logger *log.Logger, manager *auth.Manager, st store.Store, trustProxy
 			}
 		}
 
-		user, token, exp, err := manager.Authenticate(req.Email, req.Password)
+		user, token, exp, result, err := manager.Authenticate(req.Email, req.Password)
 		if err != nil {
 			if backoff != nil {
 				retry := backoff.RegisterFailure(req.Email, now)
@@ -110,6 +113,28 @@ func Login(logger *log.Logger, manager *auth.Manager, st store.Store, trustProxy
 		if backoff != nil {
 			backoff.RegisterSuccess(req.Email)
 		}
+
+		if result == auth.AuthResultTOTPPending {
+			// Password verified but TOTP step is required. Return 202 so the
+			// client knows to prompt for the TOTP code and call /auth/totp/verify.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(LoginResponse{
+				TOTPRequired: true,
+				PendingToken: token,
+				ExpiresAt:    exp,
+			})
+			event := buildAuditEvent(r, trustProxy, AuditActor{
+				Type:       "user",
+				ID:         user.UserID,
+				Email:      user.Email,
+				Roles:      rolesFromJSON(user.RolesJSON),
+				AuthMethod: manager.Mode(),
+			}, "auth.login.totp_pending", "user", user.UserID)
+			writeAudit(logger, st, event, nil)
+			return
+		}
+
 		resp := LoginResponse{
 			Token:     token,
 			ExpiresAt: exp,
@@ -279,6 +304,7 @@ func userView(user store.User) UserView {
 		LastLoginAt:              user.LastLoginAt,
 		RecoveryCodesConfigured:  len(user.RecoveryCodesJSON) > 0 && string(user.RecoveryCodesJSON) != "[]",
 		RecoveryCodesGeneratedAt: user.RecoveryCodesGeneratedAt,
+		TOTPEnabled:              user.TOTPEnabled,
 	}
 }
 

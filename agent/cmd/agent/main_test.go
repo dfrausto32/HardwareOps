@@ -16,10 +16,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hardwareops/agent/internal/client"
-	"github.com/hardwareops/agent/internal/config"
-	"github.com/hardwareops/agent/internal/logging"
-	"github.com/hardwareops/agent/internal/state"
+	"github.com/parcel/agent/internal/client"
+	"github.com/parcel/agent/internal/config"
+	"github.com/parcel/agent/internal/logging"
+	"github.com/parcel/agent/internal/state"
 )
 
 func TestReenrollDeviceWritesReturnedCACert(t *testing.T) {

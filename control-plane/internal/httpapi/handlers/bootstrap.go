@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/hardwareops/control-plane/internal/auth"
-	"github.com/hardwareops/control-plane/internal/certs"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/auth"
+	"github.com/parcel/control-plane/internal/certs"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 type BootstrapStatusResponse struct {
@@ -73,7 +73,7 @@ func DownloadBootstrapCA(logger *log.Logger, st store.Store, mgr *certs.Manager,
 		writeAudit(logger, st, event, nil)
 
 		w.Header().Set("Content-Type", "application/x-pem-file")
-		w.Header().Set("Content-Disposition", "attachment; filename=\"hardwareops-ca.crt\"")
+		w.Header().Set("Content-Disposition", "attachment; filename=\"parcel-ca.crt\"")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(caPEM)
 	}

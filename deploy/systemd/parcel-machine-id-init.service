@@ -1,0 +1,16 @@
+[Unit]
+Description=Parcel Machine ID Initializer
+# Run before the agent so the hardware fingerprint is stable at enrollment time.
+Before=parcel-agent.service
+# Only run if the sentinel file does not yet exist (first boot after install).
+ConditionPathExists=!/var/lib/parcel/agent/.machine-id-initialized
+DefaultDependencies=no
+After=systemd-remount-fs.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/parcel-machine-id-init.sh
+
+[Install]
+WantedBy=multi-user.target

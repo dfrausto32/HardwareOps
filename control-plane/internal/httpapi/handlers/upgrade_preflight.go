@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/upgrade"
+	"github.com/parcel/control-plane/internal/upgrade"
 )
 
 type PreflightCheck struct {
@@ -159,7 +159,7 @@ func BuildUpgradePreflight(runner *upgrade.Runner, updatesDir string) PreflightR
 		if stat, err := os.Stat(updatesDir); err != nil || !stat.IsDir() {
 			addCheck("Updates dir", "error", "Missing updates dir")
 		} else {
-			pattern := filepath.Join(updatesDir, "hardwareops-upgrade-*.tar.gz")
+			pattern := filepath.Join(updatesDir, "parcel-upgrade-*.tar.gz")
 			matches, _ := filepath.Glob(pattern)
 			if len(matches) == 0 {
 				addCheck("Upgrade bundle", "warn", "No upgrade bundles found")

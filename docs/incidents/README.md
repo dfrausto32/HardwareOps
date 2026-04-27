@@ -1,13 +1,11 @@
 # Incident Notes
 
-Operational incident notes and live validation findings that need follow-up.
+This folder contains the standing incident response runbook and individual incident/postmortem notes.
 
-Use this folder for:
-- live environment test failures
-- deployment regressions
-- production-like validation gaps
-- postmortem-style notes tied to specific dates or rollouts
+- **[ir-runbook.md](ir-runbook.md)** — Severity classification, response playbooks, breach notification obligations, escalation contacts, and communication templates. Start here for any P0/P1.
 
-Suggested naming:
-- `YYYY-MM-DD-short-title.md`
-
+Individual incident notes use the `YYYY-MM-DD-short-title.md` naming convention. Use them for:
+- Live environment test failures
+- Deployment regressions
+- Production-like validation gaps
+- Postmortem-style notes tied to specific dates or rollouts

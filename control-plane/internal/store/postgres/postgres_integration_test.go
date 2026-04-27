@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/hardwareops/control-plane/internal/migrate"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/migrate"
+	"github.com/parcel/control-plane/internal/store"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

@@ -1,6 +1,6 @@
-# HardwareOps — AWS End-to-End Test Plan
+# Parcel — AWS End-to-End Test Plan
 
-This document is a complete, sequential runbook for validating the HardwareOps platform on a real AWS deployment. It covers infrastructure bring-up, agent enrollment, artifact ingest, desired-state apply, and visual confirmation — from zero to a working managed device.
+This document is a complete, sequential runbook for validating the Parcel platform on a real AWS deployment. It covers infrastructure bring-up, agent enrollment, artifact ingest, desired-state apply, and visual confirmation — from zero to a working managed device.
 
 **Estimated time:** 2–3 hours for a first run (30 min if infrastructure already exists).
 
@@ -28,14 +28,14 @@ ssh -V
 
 ### AWS requirements
 - AWS account with the ability to create: VPC, ECS, RDS, ALB, ACM, S3, Secrets Manager, CloudWatch, WAFv2, Route53 records, IAM roles.
-- A Route53 hosted zone you control (e.g. `test.hardwareops.internal`).
+- A Route53 hosted zone you control (e.g. `test.parcel.internal`).
 - An ACM certificate for the zone (or wildcard) in the same region.
 - A key pair for EC2 SSH access.
 
 ### Repository checkout
 ```bash
-git clone git@github.com:dfrausto32/HardwareOps.git
-cd HardwareOps
+git clone git@github.com:dfrausto32/Parcel.git
+cd Parcel
 ```
 
 ### Shell variables used throughout this guide
@@ -45,7 +45,7 @@ export AWS_REGION=us-east-1
 export AWS_PROFILE=hwops-admin        # AWS CLI profile with admin-level access
 export CUSTOMER=e2e-test              # Customer slug — used in resource names
 export ENV=dev                        # dev | staging | prod
-export DOMAIN=test.hardwareops.internal
+export DOMAIN=test.parcel.internal
 export APP_HOST="app.${DOMAIN}"
 export DEVICES_HOST="agent.${DOMAIN}"
 export ROUTE53_ZONE_ID=Z0123456789ABCDEF    # Your Route53 zone ID
@@ -55,8 +55,8 @@ export EC2_KEY_PATH=~/.ssh/my-key-pair.pem
 export STATE_BUCKET=hwops-tf-state-${CUSTOMER}
 export STATE_LOCK_TABLE=hwops-tf-locks-${CUSTOMER}
 export MTLS_BUCKET=${CUSTOMER}-security-assets
-export CONTROL_PLANE_IMAGE="111122223333.dkr.ecr.${AWS_REGION}.amazonaws.com/hardwareops-control-plane:latest"
-export GATEWAY_IMAGE="111122223333.dkr.ecr.${AWS_REGION}.amazonaws.com/hardwareops-gateway:latest"
+export CONTROL_PLANE_IMAGE="111122223333.dkr.ecr.${AWS_REGION}.amazonaws.com/parcel-control-plane:latest"
+export GATEWAY_IMAGE="111122223333.dkr.ecr.${AWS_REGION}.amazonaws.com/parcel-gateway:latest"
 ```
 
 ---
@@ -72,10 +72,10 @@ Writes `/etc/hwops-banner.txt` on the agent.
 ```bash
 mkdir -p /tmp/hwops-artifacts/banner-v1/files
 cat > /tmp/hwops-artifacts/banner-v1/files/banner.txt <<'EOF'
-== HardwareOps Managed Device ==
+== Parcel Managed Device ==
 Artifact  : hwops-banner
 Version   : 1.0.0
-Managed by: HardwareOps Control Plane
+Managed by: Parcel Control Plane
 EOF
 
 cat > /tmp/hwops-artifacts/banner-v1/plan.yaml <<'EOF'
@@ -92,7 +92,7 @@ EOF
 
 ### 1.2 — Artifact B: `hwops-config` v1.0.0
 
-Writes `/opt/hardwareops/app-config.json` on the agent.
+Writes `/opt/parcel/app-config.json` on the agent.
 
 ```bash
 mkdir -p /tmp/hwops-artifacts/config-v1/files
@@ -102,7 +102,7 @@ cat > /tmp/hwops-artifacts/config-v1/files/app-config.json <<'EOF'
   "version": "1.0.0",
   "telemetry": {
     "enabled": true,
-    "endpoint": "https://metrics.hardwareops.internal"
+    "endpoint": "https://metrics.parcel.internal"
   },
   "logLevel": "info"
 }
@@ -116,7 +116,7 @@ steps:
     timeoutSec: 10
     params:
       src: files/app-config.json
-      dest: /opt/hardwareops/app-config.json
+      dest: /opt/parcel/app-config.json
 EOF
 ```
 
@@ -127,10 +127,10 @@ Same artifact, new version with different content. Build now; upload later.
 ```bash
 mkdir -p /tmp/hwops-artifacts/banner-v2/files
 cat > /tmp/hwops-artifacts/banner-v2/files/banner.txt <<'EOF'
-== HardwareOps Managed Device ==
+== Parcel Managed Device ==
 Artifact  : hwops-banner
 Version   : 2.0.0  *** UPGRADED ***
-Managed by: HardwareOps Control Plane
+Managed by: Parcel Control Plane
 EOF
 
 cp /tmp/hwops-artifacts/banner-v1/plan.yaml /tmp/hwops-artifacts/banner-v2/plan.yaml
@@ -161,7 +161,7 @@ aws s3 mb "s3://${MTLS_BUCKET}" \
 ```bash
 ./scripts/bootstrap-ca.sh \
   --out-dir /tmp/hwops-ca \
-  --cn "HardwareOps Device CA (e2e-test)"
+  --cn "Parcel Device CA (e2e-test)"
 
 # Upload trust bundle to S3
 aws s3 cp /tmp/hwops-ca/ca-bundle.pem \
@@ -186,33 +186,33 @@ BOOTSTRAP_PASSWORD=$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | head -c 20)
 
 # Create secrets
 aws secretsmanager create-secret \
-  --name "hardwareops/${CUSTOMER}/${ENV}/auth-jwt-secret" \
+  --name "parcel/${CUSTOMER}/${ENV}/auth-jwt-secret" \
   --secret-string "$JWT_SECRET" \
   --region "$AWS_REGION" --profile "$AWS_PROFILE"
 
 aws secretsmanager create-secret \
-  --name "hardwareops/${CUSTOMER}/${ENV}/auth-bootstrap-password" \
+  --name "parcel/${CUSTOMER}/${ENV}/auth-bootstrap-password" \
   --secret-string "$BOOTSTRAP_PASSWORD" \
   --region "$AWS_REGION" --profile "$AWS_PROFILE"
 
 # Database URL — set after Terraform creates RDS (update this ARN after Step 6)
 # We create the secret now with a placeholder; update after apply.
 aws secretsmanager create-secret \
-  --name "hardwareops/${CUSTOMER}/${ENV}/database-url" \
+  --name "parcel/${CUSTOMER}/${ENV}/database-url" \
   --secret-string "postgres://PLACEHOLDER" \
   --region "$AWS_REGION" --profile "$AWS_PROFILE"
 
 # Save ARNs
 export JWT_SECRET_ARN=$(aws secretsmanager describe-secret \
-  --secret-id "hardwareops/${CUSTOMER}/${ENV}/auth-jwt-secret" \
+  --secret-id "parcel/${CUSTOMER}/${ENV}/auth-jwt-secret" \
   --query ARN --output text --region "$AWS_REGION" --profile "$AWS_PROFILE")
 
 export BOOTSTRAP_PASSWORD_ARN=$(aws secretsmanager describe-secret \
-  --secret-id "hardwareops/${CUSTOMER}/${ENV}/auth-bootstrap-password" \
+  --secret-id "parcel/${CUSTOMER}/${ENV}/auth-bootstrap-password" \
   --query ARN --output text --region "$AWS_REGION" --profile "$AWS_PROFILE")
 
 export DATABASE_URL_ARN=$(aws secretsmanager describe-secret \
-  --secret-id "hardwareops/${CUSTOMER}/${ENV}/database-url" \
+  --secret-id "parcel/${CUSTOMER}/${ENV}/database-url" \
   --query ARN --output text --region "$AWS_REGION" --profile "$AWS_PROFILE")
 
 echo "JWT secret ARN:         $JWT_SECRET_ARN"
@@ -353,7 +353,7 @@ Apply takes 10–15 minutes (RDS provisioning dominates).
 RDS_ENDPOINT=$(terraform -chdir="deploy/aws/terraform/envs/${ENV}" output -raw rds_endpoint)
 DB_PASSWORD="$BOOTSTRAP_PASSWORD"   # reuse for simplicity in test; use distinct password in real prod
 
-DATABASE_URL="postgres://hardwareops:${DB_PASSWORD}@${RDS_ENDPOINT}:5432/hardwareops?sslmode=require"
+DATABASE_URL="postgres://parcel:${DB_PASSWORD}@${RDS_ENDPOINT}:5432/parcel?sslmode=require"
 
 # Update the DATABASE_URL secret with the real connection string
 aws secretsmanager put-secret-value \
@@ -455,7 +455,7 @@ PUBLIC_SUBNET=$(terraform -chdir="deploy/aws/terraform/envs/${ENV}" \
 # Create a security group for the agent EC2
 SG_ID=$(aws ec2 create-security-group \
   --group-name "hwops-agent-test-${CUSTOMER}" \
-  --description "HardwareOps test agent - outbound only" \
+  --description "Parcel test agent - outbound only" \
   --vpc-id "$VPC_ID" \
   --query GroupId --output text \
   --region "$AWS_REGION" --profile "$AWS_PROFILE")
@@ -545,7 +545,7 @@ echo "Profile token: $PROFILE_TOKEN"
 
 ```bash
 # Replace with your actual agent binary path
-AGENT_BINARY=./dist/hardwareops-agent-linux-amd64
+AGENT_BINARY=./dist/parcel-agent-linux-amd64
 
 scp -i "$EC2_KEY_PATH" \
   "$AGENT_BINARY" \
@@ -562,7 +562,7 @@ The `DEVICES_HOST` is the agent-facing endpoint (`agent.${DOMAIN}`).
 ```bash
 ssh -i "$EC2_KEY_PATH" "ec2-user@${AGENT_HOST}" "
   sudo ./scripts/agent-install.sh \
-    AGENT_SRC=/tmp/hardwareops-agent-linux-amd64 \
+    AGENT_SRC=/tmp/parcel-agent-linux-amd64 \
     CONTROL_PLANE_URL=https://${DEVICES_HOST} \
     CONTROL_PLANE_CA_CERT_SRC=/tmp/ca.crt \
     AGENT_ENROLL_MODE=approval \
@@ -573,10 +573,10 @@ ssh -i "$EC2_KEY_PATH" "ec2-user@${AGENT_HOST}" "
 
 Expected output:
 ```
-[agent-install] Created user: hardwareops
-[agent-install] Agent binary installed: /usr/local/bin/hardwareops-agent
+[agent-install] Created user: parcel
+[agent-install] Agent binary installed: /usr/local/bin/parcel-agent
 [agent-install] Enrollment mode: approval
-[agent-install] Service started: hardwareops-agent
+[agent-install] Service started: parcel-agent
 [agent-install] Next step: approve pending enrollment request in the control plane UI.
 ```
 
@@ -585,11 +585,11 @@ Expected output:
 ```bash
 # Check service is running
 ssh -i "$EC2_KEY_PATH" "ec2-user@${AGENT_HOST}" \
-  "sudo systemctl status hardwareops-agent --no-pager"
+  "sudo systemctl status parcel-agent --no-pager"
 
 # Check logs
 ssh -i "$EC2_KEY_PATH" "ec2-user@${AGENT_HOST}" \
-  "sudo journalctl -u hardwareops-agent -n 30 --no-pager"
+  "sudo journalctl -u parcel-agent -n 30 --no-pager"
 ```
 
 Expected in logs:
@@ -781,25 +781,25 @@ echo "--- /etc/hwops-banner.txt ---"
 ssh -i "$EC2_KEY_PATH" "ec2-user@${AGENT_HOST}" "cat /etc/hwops-banner.txt"
 
 echo ""
-echo "--- /opt/hardwareops/app-config.json ---"
-ssh -i "$EC2_KEY_PATH" "ec2-user@${AGENT_HOST}" "cat /opt/hardwareops/app-config.json"
+echo "--- /opt/parcel/app-config.json ---"
+ssh -i "$EC2_KEY_PATH" "ec2-user@${AGENT_HOST}" "cat /opt/parcel/app-config.json"
 ```
 
 **Expected output:**
 ```
 --- /etc/hwops-banner.txt ---
-== HardwareOps Managed Device ==
+== Parcel Managed Device ==
 Artifact  : hwops-banner
 Version   : 1.0.0
-Managed by: HardwareOps Control Plane
+Managed by: Parcel Control Plane
 
---- /opt/hardwareops/app-config.json ---
+--- /opt/parcel/app-config.json ---
 {
   "artifact": "hwops-config",
   "version": "1.0.0",
   "telemetry": {
     "enabled": true,
-    "endpoint": "https://metrics.hardwareops.internal"
+    "endpoint": "https://metrics.parcel.internal"
   },
   "logLevel": "info"
 }
@@ -867,10 +867,10 @@ ssh -i "$EC2_KEY_PATH" "ec2-user@${AGENT_HOST}" "cat /etc/hwops-banner.txt"
 
 **Expected:**
 ```
-== HardwareOps Managed Device ==
+== Parcel Managed Device ==
 Artifact  : hwops-banner
 Version   : 2.0.0  *** UPGRADED ***
-Managed by: HardwareOps Control Plane
+Managed by: Parcel Control Plane
 ```
 
 **UI:** Device state shows `banner v2.0.0` as both desired and current.
@@ -970,7 +970,7 @@ aws ec2 terminate-instances \
 # Delete Secrets Manager secrets
 for SECRET in auth-jwt-secret auth-bootstrap-password database-url; do
   aws secretsmanager delete-secret \
-    --secret-id "hardwareops/${CUSTOMER}/${ENV}/${SECRET}" \
+    --secret-id "parcel/${CUSTOMER}/${ENV}/${SECRET}" \
     --force-delete-without-recovery \
     --region "$AWS_REGION" --profile "$AWS_PROFILE"
 done
@@ -989,7 +989,7 @@ echo "Teardown complete."
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Control plane health check fails after apply | DATABASE_URL secret has wrong connection string | Update secret in Secrets Manager → force ECS redeploy |
-| Agent never submits enrollment request | `CONTROL_PLANE_URL` wrong or TLS error | Check agent logs: `journalctl -u hardwareops-agent -n 50`; verify CA cert path |
+| Agent never submits enrollment request | `CONTROL_PLANE_URL` wrong or TLS error | Check agent logs: `journalctl -u parcel-agent -n 50`; verify CA cert path |
 | Enrollment approved but no device.crt | Control plane CA key not configured | Verify `CA_CERT_PATH` and `CA_KEY_PATH` env vars in ECS task definition |
 | Artifact apply status stuck at `pending` | Agent not checking in, or desired state not set correctly | Check device last-seen timestamp; re-check desired state API response |
 | `cat /etc/hwops-banner.txt` — file not found | `plan.yaml` step failed | Check agent logs for apply error; verify file.copy paths in plan.yaml |

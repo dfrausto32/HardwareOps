@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 // Sigstore / Fulcio custom OID extensions embedded in short-lived signing certs.

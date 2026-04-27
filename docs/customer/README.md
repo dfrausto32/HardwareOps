@@ -1,4 +1,4 @@
-# HardwareOps Customer Documentation Bundle Source
+# Parcel Customer Documentation Bundle Source
 
 This folder is the source for the customer-facing documentation bundle.
 

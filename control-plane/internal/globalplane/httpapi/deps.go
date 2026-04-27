@@ -5,9 +5,9 @@ import (
 	"io"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/auth"
-	"github.com/hardwareops/control-plane/internal/globalplane"
-	"github.com/hardwareops/control-plane/internal/globalplane/sync"
+	"github.com/parcel/control-plane/internal/auth"
+	"github.com/parcel/control-plane/internal/globalplane"
+	"github.com/parcel/control-plane/internal/globalplane/sync"
 )
 
 // ObjectStore is the subset of MinIO operations used by the global-plane.

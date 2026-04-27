@@ -98,7 +98,7 @@ else
   TLS_KEY="$TLS_KEY_INPUT"
 fi
 
-CSR_DIR=${CSR_DIR:-/tmp/hardwareops}
+CSR_DIR=${CSR_DIR:-/tmp/parcel}
 mkdir -p "$CSR_DIR"
 
 SKIP_CERTS_GEN=0
@@ -141,7 +141,7 @@ x509_extensions = v3_ca
 prompt = no
 
 [dn]
-CN = HardwareOps Dev CA
+CN = Parcel Dev CA
 
 [v3_ca]
 subjectKeyIdentifier = hash
@@ -172,7 +172,7 @@ fi
 if [ ! -f "$CSR_DIR/device.csr" ] || [ ! -f "$CSR_DIR/device.key" ]; then
   openssl req -newkey rsa:2048 -nodes \
     -keyout "$CSR_DIR/device.key" -out "$CSR_DIR/device.csr" \
-    -subj "/CN=hardwareops-device"
+    -subj "/CN=parcel-device"
 fi
 
 if [ "$ENABLE_TLS" = "1" ]; then
@@ -213,7 +213,7 @@ EOF
   fi
 fi
 
-export DATABASE_URL=${DATABASE_URL:-postgres://hardwareops:hardwareops@localhost:5432/hardwareops?sslmode=disable}
+export DATABASE_URL=${DATABASE_URL:-postgres://parcel:parcel@localhost:5432/parcel?sslmode=disable}
 export CA_CERT_PATH="$CA_CERT"
 export CA_KEY_PATH="$CA_KEY"
 if [ "$ENABLE_TLS" = "1" ]; then
@@ -294,8 +294,8 @@ export BACKUP_LOG_DIR=${BACKUP_LOG_DIR:-$LOG_DIR}
 export BACKUP_WORK_DIR=${BACKUP_WORK_DIR:-$BASE_DIR}
 export BACKUP_POSTGRES_CONTAINER=${BACKUP_POSTGRES_CONTAINER:-compose-postgres-1}
 export BACKUP_MINIO_CONTAINER=${BACKUP_MINIO_CONTAINER:-compose-minio-1}
-export BACKUP_POSTGRES_USER=${BACKUP_POSTGRES_USER:-hardwareops}
-export BACKUP_POSTGRES_DB=${BACKUP_POSTGRES_DB:-hardwareops}
+export BACKUP_POSTGRES_USER=${BACKUP_POSTGRES_USER:-parcel}
+export BACKUP_POSTGRES_DB=${BACKUP_POSTGRES_DB:-parcel}
 
 # Rotation defaults: keep active CA + bundle paths stable for local dev.
 ROTATION_DEFAULTS=${ROTATION_DEFAULTS:-1}
@@ -334,7 +334,7 @@ if [ -n "${LICENSE_EMBED_PUBKEY_B64:-}" ] || [ -n "${LICENSE_EMBED_PUBKEY_PATH:-
     LICENSE_EMBED_PUBKEY_B64=$(openssl pkey -pubin -in "$LICENSE_EMBED_PUBKEY_PATH" -pubout -outform DER | tail -c 32 | base64 -w 0)
   fi
   if [ -n "${LICENSE_EMBED_PUBKEY_B64:-}" ]; then
-    GO_LDFLAGS=(-ldflags "-X github.com/hardwareops/control-plane/internal/license.EmbeddedPublicKey=${LICENSE_EMBED_PUBKEY_B64}")
+    GO_LDFLAGS=(-ldflags "-X github.com/parcel/control-plane/internal/license.EmbeddedPublicKey=${LICENSE_EMBED_PUBKEY_B64}")
   fi
 fi
 

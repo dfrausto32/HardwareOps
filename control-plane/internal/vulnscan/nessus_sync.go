@@ -10,11 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/events"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/events"
+	"github.com/parcel/control-plane/internal/store"
 )
 
-// NessusSyncJob periodically syncs Nessus scan results to HardwareOps devices.
+// NessusSyncJob periodically syncs Nessus scan results to Parcel devices.
 type NessusSyncJob struct {
 	client   *NessusClient
 	store    store.Store
@@ -216,7 +216,7 @@ func (j *NessusSyncJob) setStatus(matchCount int, err error) {
 	j.matchCount = matchCount
 }
 
-// matchDevice tries to find a HardwareOps device for a Nessus host.
+// matchDevice tries to find a Parcel device for a Nessus host.
 func matchDevice(host NessusHost, byHostname, byIP map[string]store.Device) (store.Device, bool) {
 	if host.Hostname != "" {
 		if d, ok := byHostname[strings.ToLower(host.Hostname)]; ok {

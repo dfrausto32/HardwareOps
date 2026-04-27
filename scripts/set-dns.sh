@@ -2,7 +2,7 @@
 set -euo pipefail
 
 DNS_SERVER=${DNS_SERVER:-}
-DOMAIN=${DOMAIN:-hardwareops.internal}
+DOMAIN=${DOMAIN:-parcel.internal}
 IFACE=${IFACE:-}
 MODE=${MODE:-auto}
 

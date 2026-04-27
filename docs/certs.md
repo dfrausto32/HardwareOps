@@ -3,8 +3,8 @@
 Canonical operations guide: `operations.md`  
 Use this file for CA/TLS and rotation detail.
 
-This uses a local internal CA to issue the server certificate for `hardwareops.internal`
-and the agent endpoint host `agent.hardwareops.internal` (SAN).
+This uses a local internal CA to issue the server certificate for `parcel.internal`
+and the agent endpoint host `agent.parcel.internal` (SAN).
 
 ## Formal split: Server TLS vs Device CA
 
@@ -16,7 +16,7 @@ There are two different trust chains:
   - Used by the gateway HTTPS endpoint for human users.
 
 Recommended production posture:
-- Keep device CA private to HardwareOps agent trust.
+- Keep device CA private to Parcel agent trust.
 - Use an enterprise/publicly trusted server cert for `server.crt`/`server.key`.
 - In on-prem scripts, set `SERVER_CERT_MODE=external`.
 
@@ -42,27 +42,27 @@ Re‑enroll updates the existing device record; it does **not** consume a new li
 
 ## 1) Generate CA
 ```
-sudo OUT_DIR=/opt/hardwareops/certs ./scripts/bootstrap-ca.sh
+sudo OUT_DIR=/opt/parcel/certs ./scripts/bootstrap-ca.sh
 ```
 
 Outputs:
-- `/opt/hardwareops/certs/ca.crt`
-- `/opt/hardwareops/certs/ca.key`
+- `/opt/parcel/certs/ca.crt`
+- `/opt/parcel/certs/ca.key`
 
 ## 2) Issue server cert
 ```
-sudo OUT_DIR=/opt/hardwareops/certs DOMAIN=hardwareops.internal AGENT_DOMAIN=agent.hardwareops.internal ./scripts/issue-server-cert.sh
+sudo OUT_DIR=/opt/parcel/certs DOMAIN=parcel.internal AGENT_DOMAIN=agent.parcel.internal ./scripts/issue-server-cert.sh
 ```
 
 ### Fast path (CA + server cert + env)
 ```
-sudo OUT_DIR=/opt/hardwareops/certs DOMAIN=hardwareops.internal AGENT_DOMAIN=agent.hardwareops.internal ./scripts/setup-control-plane.sh
+sudo OUT_DIR=/opt/parcel/certs DOMAIN=parcel.internal AGENT_DOMAIN=agent.parcel.internal ./scripts/setup-control-plane.sh
 ```
 
 ### External server cert path (recommended for UI without local CA install)
 Use this when you have a trusted cert/key from enterprise PKI or a public CA:
 ```
-sudo OUT_DIR=/opt/hardwareops/certs \
+sudo OUT_DIR=/opt/parcel/certs \
   SERVER_CERT_MODE=external \
   SERVER_CERT_INPUT=/path/to/trusted-server.crt \
   SERVER_KEY_INPUT=/path/to/trusted-server.key \
@@ -72,17 +72,17 @@ This still creates/uses `ca.crt` + `ca.key` for device mTLS, but leaves browser 
 
 If you change domains or see TLS errors (AKI/SKI mismatch), reissue with:
 ```
-sudo FORCE=1 OUT_DIR=/opt/hardwareops/certs DOMAIN=hardwareops.internal AGENT_DOMAIN=agent.hardwareops.internal ./scripts/setup-control-plane.sh
+sudo FORCE=1 OUT_DIR=/opt/parcel/certs DOMAIN=parcel.internal AGENT_DOMAIN=agent.parcel.internal ./scripts/setup-control-plane.sh
 ```
 
 Outputs:
-- `/opt/hardwareops/certs/server.crt`
-- `/opt/hardwareops/certs/server.key`
+- `/opt/parcel/certs/server.crt`
+- `/opt/parcel/certs/server.key`
 
 ## 3) Trust the CA on clients
 ### Linux (system trust)
 ```
-sudo cp /opt/hardwareops/certs/ca.crt /usr/local/share/ca-certificates/hardwareops-ca.crt
+sudo cp /opt/parcel/certs/ca.crt /usr/local/share/ca-certificates/parcel-ca.crt
 sudo update-ca-certificates
 ```
 
@@ -98,14 +98,14 @@ sudo update-ca-certificates
 If on-prem auth is enabled and you want a pre-login path to fetch CA cert:
 ```
 curl -k -H "X-Bootstrap-Token: <BOOTSTRAP_TOKEN>" \
-  https://hardwareops.internal/api/v1/bootstrap/ca -o hardwareops-ca.crt
+  https://parcel.internal/api/v1/bootstrap/ca -o parcel-ca.crt
 ```
-Then install `hardwareops-ca.crt` in system/browser trust and use the UI normally.
+Then install `parcel-ca.crt` in system/browser trust and use the UI normally.
 
 ## 4) Agent trust (no system trust required)
 Agents can point directly to the CA:
 ```
-CONTROL_PLANE_CA_CERT_PATH=/etc/hardwareops/agent/certs/ca.crt
+CONTROL_PLANE_CA_CERT_PATH=/etc/parcel/agent/certs/ca.crt
 ```
 
 ---
@@ -116,46 +116,46 @@ CONTROL_PLANE_CA_CERT_PATH=/etc/hardwareops/agent/certs/ca.crt
 
 ### 1) Prepare the new CA
 ```
-sudo OUT_DIR=/opt/hardwareops/certs ./scripts/bootstrap-ca.sh
+sudo OUT_DIR=/opt/parcel/certs ./scripts/bootstrap-ca.sh
 ```
 Save the new CA as:
-- `/opt/hardwareops/certs/ca-active.crt`
-- `/opt/hardwareops/certs/ca-active.key`
+- `/opt/parcel/certs/ca-active.crt`
+- `/opt/parcel/certs/ca-active.key`
 
 ### 2) Build a trust bundle (old + new)
 ```
-cat /opt/hardwareops/certs/ca.crt /opt/hardwareops/certs/ca-active.crt > /opt/hardwareops/certs/ca-bundle.crt
+cat /opt/parcel/certs/ca.crt /opt/parcel/certs/ca-active.crt > /opt/parcel/certs/ca-bundle.crt
 ```
 
 ### 3) Switch the control‑plane to “dual‑trust + active‑sign”
 Set in the control‑plane environment:
 ```
-CA_BUNDLE_PATH=/opt/hardwareops/certs/ca-bundle.crt
-ACTIVE_CA_CERT_PATH=/opt/hardwareops/certs/ca-active.crt
-ACTIVE_CA_KEY_PATH=/opt/hardwareops/certs/ca-active.key
+CA_BUNDLE_PATH=/opt/parcel/certs/ca-bundle.crt
+ACTIVE_CA_CERT_PATH=/opt/parcel/certs/ca-active.crt
+ACTIVE_CA_KEY_PATH=/opt/parcel/certs/ca-active.key
 ```
 Restart the control‑plane.
 
 ### Optional: reload without restart (operator/admin)
 If you want to rotate without restarting, use the reload endpoint or the UI button:
 ```
-curl --cacert /opt/hardwareops/certs/ca.crt \
+curl --cacert /opt/parcel/certs/ca.crt \
   -H "Authorization: Bearer <operator-or-admin-jwt>" \
   -H "Content-Type: application/json" \
   -X POST \
   -d '{"reason":"reload CA bundle after emergency file update"}' \
-  https://hardwareops.internal/api/v1/cert-rotation/reload
+  https://parcel.internal/api/v1/cert-rotation/reload
 ```
 This reloads the active CA + client bundle in‑process.
 
 ### Rotate (operator/admin, generates new CA + bundle + reload)
 ```
-curl --cacert /opt/hardwareops/certs/ca.crt \
+curl --cacert /opt/parcel/certs/ca.crt \
   -H "Authorization: Bearer <operator-or-admin-jwt>" \
   -H "Content-Type: application/json" \
   -X POST \
   -d '{"reason":"break-glass CA rotation after suspected compromise"}' \
-  https://hardwareops.internal/api/v1/cert-rotation/rotate
+  https://parcel.internal/api/v1/cert-rotation/rotate
 ```
 This generates a new active CA, rebuilds the bundle, and reloads without restart.
 
@@ -165,17 +165,17 @@ scripts/rotate--ca.sh
 ```
 Environment overrides:
 ```
-CERTS_DIR=/opt/hardwareops/certs
-BASE_URL=https://hardwareops.internal
+CERTS_DIR=/opt/parcel/certs
+BASE_URL=https://parcel.internal
 AUTH_TOKEN=<admin-jwt>
-CA_BUNDLE_PATH=/opt/hardwareops/certs/ca-bundle.crt
-ACTIVE_CA_CERT_PATH=/opt/hardwareops/certs/ca-active.crt
-ACTIVE_CA_KEY_PATH=/opt/hardwareops/certs/ca-active.key
+CA_BUNDLE_PATH=/opt/parcel/certs/ca-bundle.crt
+ACTIVE_CA_CERT_PATH=/opt/parcel/certs/ca-active.crt
+ACTIVE_CA_KEY_PATH=/opt/parcel/certs/ca-active.key
 ```
 
 ### 4) Verify rotation status (UI + API)
 ```
-curl --cacert /opt/hardwareops/certs/ca.crt https://hardwareops.internal/api/v1/cert-rotation
+curl --cacert /opt/parcel/certs/ca.crt https://parcel.internal/api/v1/cert-rotation
 ```
 Expect:
 - Active CA fingerprint present
@@ -188,14 +188,14 @@ Agents that present certs from the old CA receive `device.reenroll` and automati
 ### 6) License safety check
 Re‑enroll does **not** consume device slots. Verify:
 ```
-curl --cacert /opt/hardwareops/certs/ca.crt https://hardwareops.internal/api/v1/license
+curl --cacert /opt/parcel/certs/ca.crt https://parcel.internal/api/v1/license
 ```
 Device count should be unchanged before/after rotation.
 
 ### 7) Optional: rotate the server TLS cert
 Once **all devices** are re‑enrolled:
 ```
-sudo OUT_DIR=/opt/hardwareops/certs DOMAIN=hardwareops.internal ./scripts/issue-server-cert.sh
+sudo OUT_DIR=/opt/parcel/certs DOMAIN=parcel.internal ./scripts/issue-server-cert.sh
 ```
 Point the gateway to the new server cert/key, and update client trust stores as needed.
 
@@ -204,17 +204,17 @@ After all devices are active on the new CA (or after the grace window), prune th
 
 **UI / API (hybrid cleanup)**
 ```
-curl --cacert /opt/hardwareops/certs/ca.crt \
+curl --cacert /opt/parcel/certs/ca.crt \
   -H "Authorization: Bearer <operator-or-admin-jwt>" \
   -H "Content-Type: application/json" \
   -X POST \
   -d '{"reason":"cleanup previous CA after rotation coverage verified"}' \
-  https://hardwareops.internal/api/v1/cert-rotation/cleanup
+  https://parcel.internal/api/v1/cert-rotation/cleanup
 ```
 
 **Manual fallback**
 ```
-cat /opt/hardwareops/certs/ca-active.crt > /opt/hardwareops/certs/ca-bundle.crt
+cat /opt/parcel/certs/ca-active.crt > /opt/parcel/certs/ca-bundle.crt
 ```
 
 Grace window (default 7 days):

@@ -85,5 +85,5 @@ output "demo_agent_efs_file_system_id" {
 
 output "alerts_sns_topic_arn" {
   description = "SNS topic ARN for CloudWatch alarm notifications."
-  value       = aws_sns_topic.hardwareops_alerts.arn
+  value       = aws_sns_topic.parcel_alerts.arn
 }

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hardwareops/agent/internal/state"
+	"github.com/parcel/agent/internal/state"
 )
 
 func TestCheckIn(t *testing.T) {

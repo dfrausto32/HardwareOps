@@ -2,7 +2,7 @@
 set -euo pipefail
 
 BASE_URL=${BASE_URL:-http://localhost:8080}
-TMP_DIR=${TMP_DIR:-/tmp/hardwareops}
+TMP_DIR=${TMP_DIR:-/tmp/parcel}
 CA_CERT=${CA_CERT_PATH:-}
 INSECURE=${INSECURE:-0}
 CLEANUP=${CLEANUP:-0}
@@ -49,7 +49,7 @@ except Exception as e:
 # 2) Generate CSR
 openssl req -newkey rsa:2048 -nodes \
   -keyout "$TMP_DIR/device.key" -out "$TMP_DIR/device.csr" \
-  -subj "/CN=hardwareops-device"
+  -subj "/CN=parcel-device"
 
 if [ ! -s "$TMP_DIR/device.csr" ]; then
   echo "CSR file missing or empty: $TMP_DIR/device.csr" >&2

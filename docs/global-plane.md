@@ -1,6 +1,6 @@
 # Global Aggregation Plane (E1)
 
-The global-plane is a read-only aggregation service that sits above one or more regional HardwareOps control planes. It polls each regional plane on a configurable interval, caches device, artifact, and health data, and serves a unified API for cross-region visibility.
+The global-plane is a read-only aggregation service that sits above one or more regional Parcel control planes. It polls each regional plane on a configurable interval, caches device, artifact, and health data, and serves a unified API for cross-region visibility.
 
 Agents are unaffected — they continue talking to their regional control plane only.
 
@@ -59,7 +59,7 @@ openssl rand -base64 32
 ### Run
 
 ```bash
-export GLOBAL_DATABASE_URL=postgres://hardwareops:hardwareops@localhost:5432/hardwareops_global?sslmode=disable
+export GLOBAL_DATABASE_URL=postgres://parcel:parcel@localhost:5432/parcel_global?sslmode=disable
 export AUTH_JWT_SECRET=<your-secret>
 export GLOBAL_TOKEN_ENCRYPTION_KEY=$(openssl rand -base64 32)
 ./global-plane

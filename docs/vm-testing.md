@@ -19,7 +19,7 @@ dist/installers/<version>/
 ```
 You should see:
 - `control-plane-<version>-linux-amd64.tar.gz`
-- `hardwareops-agent-<version>-linux-amd64.tar.gz`
+- `parcel-agent-<version>-linux-amd64.tar.gz`
 
 If the bundle doesn’t contain a top‑level folder when extracted, rebuild with the latest script.
 
@@ -38,7 +38,7 @@ ip a
 ### 3) Copy bundles to each VM (from WSL)
 ```
 scp dist/installers/<version>/control-plane-<version>-linux-amd64.tar.gz <user>@<cp_vm_ip>:~/
-scp dist/installers/<version>/hardwareops-agent-<version>-linux-amd64.tar.gz <user>@<agent_vm_ip>:~/
+scp dist/installers/<version>/parcel-agent-<version>-linux-amd64.tar.gz <user>@<agent_vm_ip>:~/
 ```
 
 ### 4) Control‑plane VM setup
@@ -60,28 +60,28 @@ newgrp docker
 
 Clone the repo (needed for compose + scripts):
 ```
-git clone <YOUR_REPO_URL> hardwareops
-cd hardwareops
+git clone <YOUR_REPO_URL> parcel
+cd parcel
 ```
 
 Create CA + server cert:
 ```
-sudo OUT_DIR=/opt/hardwareops/certs DOMAIN=hardwareops.internal ./scripts/setup-control-plane.sh
+sudo OUT_DIR=/opt/parcel/certs DOMAIN=parcel.internal ./scripts/setup-control-plane.sh
 ```
 
 Start the stack:
 ```
 cp deploy/compose/.env.onprem.example deploy/compose/.env.onprem
-sed -i 's|CERTS_DIR=.*|CERTS_DIR=/opt/hardwareops/certs|g' deploy/compose/.env.onprem
-sed -i 's|PUBLIC_BASE_URL=.*|PUBLIC_BASE_URL=https://hardwareops.internal|g' deploy/compose/.env.onprem
+sed -i 's|CERTS_DIR=.*|CERTS_DIR=/opt/parcel/certs|g' deploy/compose/.env.onprem
+sed -i 's|PUBLIC_BASE_URL=.*|PUBLIC_BASE_URL=https://parcel.internal|g' deploy/compose/.env.onprem
 
 docker compose -f deploy/compose/docker-compose.onprem.yml --env-file deploy/compose/.env.onprem up -d
 ```
 
 ### 5) Agent VM setup
-Add DNS entry to resolve `hardwareops.internal`:
+Add DNS entry to resolve `parcel.internal`:
 ```
-echo "<CONTROL_PLANE_IP> hardwareops.internal" | sudo tee -a /etc/hosts
+echo "<CONTROL_PLANE_IP> parcel.internal" | sudo tee -a /etc/hosts
 ```
 If you want a real DNS server instead of `/etc/hosts`, run CoreDNS on the control‑plane VM:
 ```
@@ -94,7 +94,7 @@ DNS_SERVER=<CONTROL_PLANE_IP> ./scripts/set-dns.sh
 ```
 On the control‑plane VM itself, either use `/etc/hosts` for local checks:
 ```
-echo "127.0.0.1 hardwareops.internal" | sudo tee -a /etc/hosts
+echo "127.0.0.1 parcel.internal" | sudo tee -a /etc/hosts
 ```
 …or point the resolver at localhost to use CoreDNS:
 ```
@@ -107,33 +107,33 @@ DNS_IP=<CONTROL_PLANE_IP> HOST_NET=1 ./scripts/run-coredns.sh
 
 Create cert directory and copy CA cert from control‑plane VM:
 ```
-sudo mkdir -p /opt/hardwareops/certs
+sudo mkdir -p /opt/parcel/certs
 ```
 From WSL or the control‑plane VM:
 ```
-scp /opt/hardwareops/certs/ca.crt <user>@<agent_vm_ip>:/opt/hardwareops/certs/ca.crt
+scp /opt/parcel/certs/ca.crt <user>@<agent_vm_ip>:/opt/parcel/certs/ca.crt
 ```
 
 Create an enrollment profile in the UI and copy the bootstrap token, then install + start the agent:
 ```
-tar -xf hardwareops-agent-<version>-linux-amd64.tar.gz
-cd hardwareops-agent-<version>-linux-amd64
+tar -xf parcel-agent-<version>-linux-amd64.tar.gz
+cd parcel-agent-<version>-linux-amd64
 
 sudo ./scripts/agent-install.sh \
-  AGENT_SRC=./hardwareops-agent \
-  CONTROL_PLANE_URL=https://agent.hardwareops.internal \
-  CONTROL_PLANE_CA_CERT_SRC=/opt/hardwareops/certs/ca.crt \
+  AGENT_SRC=./parcel-agent \
+  CONTROL_PLANE_URL=https://agent.parcel.internal \
+  CONTROL_PLANE_CA_CERT_SRC=/opt/parcel/certs/ca.crt \
   AGENT_ENROLL_MODE=approval \
   ENROLLMENT_PROFILE_TOKEN=<bootstrap-token> \
   START_SERVICE=1
 ```
 
 Approve the pending request in `Security -> Pending enrollments`, then confirm the same service writes
-`/etc/hardwareops/agent/certs/device.crt` and starts normal mTLS check-ins.
+`/etc/parcel/agent/certs/device.crt` and starts normal mTLS check-ins.
 
 Verify from the control‑plane VM:
 ```
-curl --cacert /opt/hardwareops/certs/ca.crt https://hardwareops.internal/api/v1/devices
+curl --cacert /opt/parcel/certs/ca.crt https://parcel.internal/api/v1/devices
 ```
 
 ### 1) Install Multipass (Windows PowerShell)
@@ -179,9 +179,9 @@ If you want a minimal test, see the earlier version of this doc in git history o
 
 ## Troubleshooting
 ### UI loads but API calls fail
-- Ensure you browse **https://hardwareops.internal/**, not the IP.
-- Ensure host DNS resolves `hardwareops.internal` to the CP VM IP.
-- Import `/opt/hardwareops/certs/ca.crt` into the host trust store.
+- Ensure you browse **https://parcel.internal/**, not the IP.
+- Ensure host DNS resolves `parcel.internal` to the CP VM IP.
+- Import `/opt/parcel/certs/ca.crt` into the host trust store.
 
 ### `Could not resolve host` on curl
 - On CP VM, set resolver to localhost:
@@ -196,5 +196,5 @@ If you want a minimal test, see the earlier version of this doc in git history o
 ### TLS mismatch (`authority and subject key identifier mismatch`)
 Re‑issue certs on CP VM and re‑copy CA to agents:
 ```
-sudo FORCE=1 OUT_DIR=/opt/hardwareops/certs DOMAIN=hardwareops.internal ./scripts/setup-control-plane.sh
+sudo FORCE=1 OUT_DIR=/opt/parcel/certs DOMAIN=parcel.internal ./scripts/setup-control-plane.sh
 ```

@@ -10,7 +10,7 @@ APP_NAMES=${APP_NAMES:-customer,integrations}
 VERSIONS=${VERSIONS:-0.1.0,0.2.0}
 ARTIFACT_TYPE=${ARTIFACT_TYPE:-app_bundle}
 COMPONENT_PREFIX=${COMPONENT_PREFIX:-app:}
-OUT_DIR=${OUT_DIR:-/tmp/hardwareops-multi-apps}
+OUT_DIR=${OUT_DIR:-/tmp/parcel-multi-apps}
 SIGN_ARTIFACTS=${SIGN_ARTIFACTS:-1}
 AUTH_TOKEN=${AUTH_TOKEN:-}
 AUTH_EMAIL=${AUTH_EMAIL:-}
@@ -78,7 +78,7 @@ for app in "${app_list[@]}"; do
     mkdir -p "$input_dir"
 
     cat > "$input_dir/readme.txt" <<EOF
-HardwareOps multi-app demo
+Parcel multi-app demo
 app=${app}
 version=${version}
 type=${ARTIFACT_TYPE}
@@ -136,7 +136,7 @@ EOF
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>HardwareOps ${app}</title>
+    <title>Parcel ${app}</title>
     <style>
       :root { color-scheme: light; }
       body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: #0a0a0a; color: #f5f5f5; }
@@ -158,7 +158,7 @@ EOF
   <body>
     <div class="wrap">
       <div class="card">
-        <div class="tag">HardwareOps Demo</div>
+        <div class="tag">Parcel Demo</div>
         <h1>${app} App</h1>
         <div class="kv"><strong>Type</strong> ${ARTIFACT_TYPE}</div>
         <div class="kv"><strong>Version</strong> ${version}</div>

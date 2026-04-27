@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/auth"
-	"github.com/hardwareops/control-plane/internal/store"
-	"github.com/hardwareops/control-plane/internal/store/memory"
+	"github.com/parcel/control-plane/internal/auth"
+	"github.com/parcel/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/store/memory"
 )
 
 func TestLoginBackoffBlocksAndRecovers(t *testing.T) {
@@ -32,7 +32,7 @@ func TestLoginBackoffBlocksAndRecovers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	manager, err := auth.NewManager("local", "0123456789abcdef0123456789abcdef", 12*time.Hour, "hardwareops", mem)
+	manager, err := auth.NewManager("local", "0123456789abcdef0123456789abcdef", 12*time.Hour, "parcel", mem)
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}

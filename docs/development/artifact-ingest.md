@@ -78,7 +78,7 @@ Cons:
 
 Create scoped service tokens via `POST /api/v1/auth/service-tokens` (admin).
 - Scope for v1: `artifact.publish`
-- Alternative for CI: `POST /api/v1/auth/workload-identity/exchange` exchanges an external OIDC job token for a short-lived HardwareOps bearer token carrying `artifact.publish`
+- Alternative for CI: `POST /api/v1/auth/workload-identity/exchange` exchanges an external OIDC job token for a short-lived Parcel bearer token carrying `artifact.publish`
 - Tokens support break-glass revoke/rotate (`POST /api/v1/auth/service-tokens/{tokenId}/revoke|rotate`) with operator reason capture.
 
 ### Helper script
@@ -229,11 +229,11 @@ The control-plane seeds the trusted key registry on startup from one or more boo
 
 - `TRUSTED_SIGNING_KEYS_FILE=/path/to/trusted-signing-keys.json`
 - `TRUSTED_SIGNING_KEYS_JSON='{"keys":[...]}'`
-- `TRUSTED_SIGNING_KEYS_AWS_SECRET_ID=hardwareops/customer/prod/trusted-signing-keys`
+- `TRUSTED_SIGNING_KEYS_AWS_SECRET_ID=parcel/customer/prod/trusted-signing-keys`
 - `TRUSTED_SIGNING_KEYS_AWS_REGION=us-east-1`
 - `CI_WORKLOAD_IDENTITY_PROVIDERS_FILE=/path/to/workload-identity-providers.json`
-- `CI_WORKLOAD_IDENTITY_PROVIDERS_JSON='[{"name":"github-actions","issuer":"https://token.actions.githubusercontent.com","audience":"hardwareops-ci","claimMatches":{"repository":["my-org/my-repo"]}}]'`
-- `CI_WORKLOAD_IDENTITY_PROVIDERS_AWS_SECRET_ID=hardwareops/customer-a/prod/workload-identity-providers`
+- `CI_WORKLOAD_IDENTITY_PROVIDERS_JSON='[{"name":"github-actions","issuer":"https://token.actions.githubusercontent.com","audience":"parcel-ci","claimMatches":{"repository":["my-org/my-repo"]}}]'`
+- `CI_WORKLOAD_IDENTITY_PROVIDERS_AWS_SECRET_ID=parcel/customer-a/prod/workload-identity-providers`
 - `CI_WORKLOAD_IDENTITY_PROVIDERS_AWS_REGION=us-east-1`
 
 Operational verification:

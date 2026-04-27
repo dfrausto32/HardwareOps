@@ -20,8 +20,8 @@ This prevents enrollments, check‑ins, and upgrades during backup.
 UI: **Settings → Maintenance**  
 API:
 ```
-curl --cacert /opt/hardwareops/certs/ca.crt -X POST \
-  https://hardwareops.internal/api/v1/maintenance \
+curl --cacert /opt/parcel/certs/ca.crt -X POST \
+  https://parcel.internal/api/v1/maintenance \
   -H "Content-Type: application/json" \
   -d '{"enabled":true,"message":"Backup in progress"}'
 ```
@@ -32,13 +32,13 @@ curl --cacert /opt/hardwareops/certs/ca.crt -X POST \
 **Local dev (compose):**
 ```
 docker exec -t compose-postgres-1 \
-  pg_dump -U hardwareops -d hardwareops -Fc > hwops-postgres.dump
+  pg_dump -U parcel -d parcel -Fc > hwops-postgres.dump
 ```
 
 **On‑prem stack:**
 ```
-docker exec -t hardwareops-postgres-1 \
-  pg_dump -U hardwareops -d hardwareops -Fc > hwops-postgres.dump
+docker exec -t parcel-postgres-1 \
+  pg_dump -U parcel -d parcel -Fc > hwops-postgres.dump
 ```
 
 ## 2) Object store backup (MinIO volume)
@@ -61,8 +61,8 @@ docker run --rm -v ${MINIO_VOL}:/data -v "$PWD:/backup" alpine \
 ## 3) Restore Postgres
 **Local dev / On‑prem:**
 ```
-cat hwops-postgres.dump | docker exec -i hardwareops-postgres-1 \
-  pg_restore -U hardwareops -d hardwareops -c
+cat hwops-postgres.dump | docker exec -i parcel-postgres-1 \
+  pg_restore -U parcel -d parcel -c
 ```
 
 ## 4) Restore MinIO volume
@@ -74,8 +74,8 @@ docker run --rm -v ${MINIO_VOL}:/data -v "$PWD:/backup" alpine \
 
 ## 5) Exit maintenance mode
 ```
-curl --cacert /opt/hardwareops/certs/ca.crt -X POST \
-  https://hardwareops.internal/api/v1/maintenance \
+curl --cacert /opt/parcel/certs/ca.crt -X POST \
+  https://parcel.internal/api/v1/maintenance \
   -H "Content-Type: application/json" \
   -d '{"enabled":false,"message":""}'
 ```

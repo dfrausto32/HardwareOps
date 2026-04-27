@@ -5,7 +5,7 @@ BASE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 AWS_REGION=${AWS_REGION:-$(aws configure get region 2>/dev/null || true)}
 AWS_PROFILE=${AWS_PROFILE:-}
-ECR_REPOSITORY=${ECR_REPOSITORY:-hardwareops-demo-agent}
+ECR_REPOSITORY=${ECR_REPOSITORY:-parcel-demo-agent}
 IMAGE_TAG=${IMAGE_TAG:-latest}
 PUSH_IMAGE=${PUSH_IMAGE:-1}
 CREATE_REPO=${CREATE_REPO:-1}

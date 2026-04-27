@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hardwareops/agent/internal/plan"
+	"github.com/parcel/agent/internal/plan"
 )
 
 func TestHealthSuccessWithinTimeout(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/globalplane"
+	"github.com/parcel/control-plane/internal/globalplane"
 )
 
 // replicationReconciler polls pending/replicating blob statuses and marks

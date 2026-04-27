@@ -3,8 +3,8 @@ package handlers
 import (
 	"log"
 
-	"github.com/hardwareops/control-plane/internal/artifacttrust"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/artifacttrust"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 func currentSigningTrust(logger *log.Logger, st store.Store) *artifacttrust.SigningTrustBundle {

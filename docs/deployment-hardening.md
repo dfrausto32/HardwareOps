@@ -90,7 +90,7 @@ ARTIFACT_PULL_ALLOW_INSECURE_HTTP=0
 ARTIFACT_TRUST_VERIFICATION_MODE=require_verified
 ARTIFACT_TRUST_ALLOWED_SIGNING_KEY_IDS=<comma-separated key ids>
 ARTIFACT_TRUST_ALLOWED_SIGNATURE_TYPES=ed25519,cosign
-TRUSTED_SIGNING_KEYS_FILE=/opt/hardwareops/signing/trusted-signing-keys.json
+TRUSTED_SIGNING_KEYS_FILE=/opt/parcel/signing/trusted-signing-keys.json
 ARTIFACT_SIGNATURE_REQUIRE_DEFAULT=1
 ARTIFACT_SIGNATURE_ENFORCE_INGEST=1
 ARTIFACT_SIGNATURE_KEY_ID=<pinned signing key id>
@@ -100,9 +100,20 @@ UPGRADE_RUNNER_TOKEN=<16+ char random token>
 BACKUP_RUNNER_MODE=remote
 BACKUP_RUNNER_URL=http://maintenance-runner:8090
 BACKUP_RUNNER_TOKEN=<16+ char random token>
+TOTP_ENCRYPTION_KEY=<base64-encoded 32-byte AES-256 key>
+WEBHOOK_ENCRYPTION_KEY=<base64-encoded 32-byte AES-256 key>
 ```
 
 With `HARDENED_PROFILE=1`, `TRUST_PROXY=1` now requires `TRUST_PROXY_CIDRS` to be explicitly set, and artifact trust bootstrap must include a strict verification mode plus a trusted signing key source. Do not rely on broad private-network fallbacks.
+
+Generate the AES-256 encryption keys with:
+
+```bash
+openssl rand -base64 32   # TOTP_ENCRYPTION_KEY
+openssl rand -base64 32   # WEBHOOK_ENCRYPTION_KEY
+```
+
+Both keys must decode to exactly 32 bytes. Omitting `TOTP_ENCRYPTION_KEY` disables TOTP enrollment (all `/auth/totp/*` endpoints return 503); existing sessions are unaffected.
 
 Do **not** use:
 - `TRUST_PROXY_CIDRS=0.0.0.0/0`
@@ -128,19 +139,19 @@ Keep Docker socket privilege out of the control-plane container:
 ### Verify running container values
 
 ```bash
-docker exec -it hardwareops-control-plane-1 env | egrep 'TRUST_PROXY|TRUST_PROXY_CIDRS|CLIENT_CERT_HEADER'
+docker exec -it parcel-control-plane-1 env | egrep 'TRUST_PROXY|TRUST_PROXY_CIDRS|CLIENT_CERT_HEADER'
 ```
 
 And verify hardening profile variables:
 
 ```bash
-docker exec -it hardwareops-control-plane-1 env | egrep 'HARDENED_PROFILE|AUTH_MODE|LICENSE_ENFORCE|DEVICE_IDENTITY_MODE|DEVICE_IDENTITY_REQUIRE_ON_ENROLL|DEVICE_IDENTITY_REQUIRE_ON_CHECKIN'
+docker exec -it parcel-control-plane-1 env | egrep 'HARDENED_PROFILE|AUTH_MODE|LICENSE_ENFORCE|DEVICE_IDENTITY_MODE|DEVICE_IDENTITY_REQUIRE_ON_ENROLL|DEVICE_IDENTITY_REQUIRE_ON_CHECKIN'
 ```
 
 And verify remote runner wiring:
 
 ```bash
-docker exec -it hardwareops-control-plane-1 env | egrep 'UPGRADE_RUNNER_MODE|UPGRADE_RUNNER_URL|BACKUP_RUNNER_MODE|BACKUP_RUNNER_URL'
+docker exec -it parcel-control-plane-1 env | egrep 'UPGRADE_RUNNER_MODE|UPGRADE_RUNNER_URL|BACKUP_RUNNER_MODE|BACKUP_RUNNER_URL'
 docker compose -f docker-compose.onprem.bundle.yml ps maintenance-runner
 ```
 
@@ -170,7 +181,7 @@ sudo chattr +i .env.onprem docker-compose.onprem.bundle.yml
 - Remove non-admin users from `docker` group.
 - Use sudo-only operational access.
 
-4) Keep deployment path root-owned (`/opt/hardwareops/stack`) and writable by admins only.
+4) Keep deployment path root-owned (`/opt/parcel/stack`) and writable by admins only.
 
 ### Operational controls (recommended)
 
@@ -261,3 +272,86 @@ DEVICE_IDENTITY_MODE=enforce ./scripts/run-control-plane.sh
 - Helps against accidental cloning and simple copy/replay.
 - Not tamper-proof on fully hostile hardware; a privileged attacker can forge software-reported identity.
 - Stronger guarantees require hardware attestation (TPM/secure element), deferred to a later phase.
+
+---
+
+## 7) Encryption at Rest — AWS Deployment
+
+This section documents the encryption-at-rest posture of all persistent storage layers in the AWS deployment. It is intended as auditable evidence for SOC 2 (CC6.1, C1.1) and NIST 800-171 (3.13.10, 3.13.16).
+
+### RDS PostgreSQL
+
+**Status: Always encrypted — not configurable off.**
+
+Both `aws_db_instance` variants in `deploy/aws/terraform/modules/database/main.tf` have `storage_encrypted = true` as a literal constant (lines 40 and 80). It is not exposed as a Terraform variable and cannot be disabled by operators configuring a customer stack.
+
+Encryption key: AWS-managed RDS key (default) unless a customer-managed KMS key ARN is passed via the `kms_key_id` parameter. AWS rotates the default RDS key automatically. For stricter key management, operators can supply a CMK via `kms_key_id` in the database module.
+
+Additional data-at-rest protections active on all RDS instances:
+- `publicly_accessible = false` — no public endpoint
+- `performance_insights_enabled = true` — Performance Insights data is encrypted at rest by AWS
+- Automated backups retained 14 days (prod default), encrypted with the same key
+- Final snapshot taken on deletion unless `skip_final_snapshot = true` (not the prod default)
+
+**To verify on a live instance:**
+```bash
+aws rds describe-db-instances \
+  --db-instance-identifier <name-prefix>-postgres \
+  --query 'DBInstances[0].{StorageEncrypted:StorageEncrypted,KmsKeyId:KmsKeyId}'
+```
+Expected: `StorageEncrypted: true`.
+
+---
+
+### S3 Artifact Store (MinIO replacement in AWS)
+
+**Status: Always encrypted — algorithm depends on `artifact_store_create_kms_key`.**
+
+`deploy/aws/terraform/modules/artifact_store/main.tf` applies `aws_s3_bucket_server_side_encryption_configuration` unconditionally. The algorithm depends on the `create_kms_key` variable (default: `true` in `customer_stack`):
+
+| `artifact_store_create_kms_key` | Algorithm | Key |
+|--------------------------------|-----------|-----|
+| `true` (default) | `aws:kms` | Customer-managed KMS key with automatic annual rotation enabled |
+| `false` | `AES256` | AWS-managed S3 key (SSE-S3) |
+
+Both modes encrypt all objects at rest. The CMK path (`aws:kms`) additionally provides:
+- Customer control over key policy and access
+- Independent key rotation audit trail in CloudTrail
+- Ability to revoke access by disabling the key
+
+Public access is blocked on all four S3 block-public-access settings regardless of encryption mode.
+
+**To verify on a live bucket:**
+```bash
+aws s3api get-bucket-encryption --bucket <name-prefix>-artifacts
+```
+Expected: `ServerSideEncryptionConfiguration` with `SSEAlgorithm` of either `aws:kms` or `AES256`.
+
+---
+
+### Transit Encryption
+
+All data in transit between services is encrypted:
+
+| Path | Mechanism |
+|------|-----------|
+| Browser → ALB | TLS 1.2/1.3 (ELBSecurityPolicy-TLS13-1-2-2021-06) |
+| ALB → ECS gateway | TLS (internal listener) |
+| ECS → RDS | TLS enforced by RDS parameter group (`rds.force_ssl`) |
+| ECS → S3 | HTTPS (AWS SDK default) |
+| Agent → Control plane | mTLS |
+| Control plane → Control plane (federation) | TLS with CA pinning |
+
+---
+
+### Summary for Auditors
+
+| Storage layer | Encryption at rest | Key management |
+|--------------|-------------------|---------------|
+| RDS PostgreSQL (primary) | ✅ AES-256 (always on) | AWS-managed RDS key or CMK |
+| RDS automated backups | ✅ Same key as primary | Inherited |
+| S3 artifacts | ✅ AES-256 or AWS-KMS (always on) | CMK with rotation by default |
+| ECS task ephemeral storage | ✅ Encrypted by Fargate | AWS-managed |
+| Secrets Manager secrets | ✅ AES-256 | AWS-managed or CMK via `secret_kms_key_arns` |
+
+No unencrypted persistent storage exists in the AWS deployment path.

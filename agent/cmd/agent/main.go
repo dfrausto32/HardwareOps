@@ -22,11 +22,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hardwareops/agent/internal/artifacts"
-	"github.com/hardwareops/agent/internal/client"
-	"github.com/hardwareops/agent/internal/config"
-	"github.com/hardwareops/agent/internal/logging"
-	"github.com/hardwareops/agent/internal/state"
+	"github.com/parcel/agent/internal/artifacts"
+	"github.com/parcel/agent/internal/client"
+	"github.com/parcel/agent/internal/config"
+	"github.com/parcel/agent/internal/logging"
+	"github.com/parcel/agent/internal/state"
 )
 
 // stateHMACKey is the HMAC key derived from the device private key. It is

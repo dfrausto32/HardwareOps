@@ -8,7 +8,7 @@ UPDATE_TARBALL=${UPDATE_TARBALL:-}
 
 COMPOSE_FILE=${COMPOSE_FILE:-}
 ENV_FILE=${ENV_FILE:-}
-PROJECT_NAME=${PROJECT_NAME:-hardwareops}
+PROJECT_NAME=${PROJECT_NAME:-parcel}
 MIN_DOCKER_API=${MIN_DOCKER_API:-1.44}
 ROLLBACK_ON_FAILURE=${ROLLBACK_ON_FAILURE:-1}
 UPGRADE_HEALTH_TIMEOUT=${UPGRADE_HEALTH_TIMEOUT:-120}
@@ -95,7 +95,7 @@ on_error() {
 trap on_error ERR
 
 if [ -z "$UPDATE_TARBALL" ] && [ -d "$UPGRADE_UPDATES_DIR" ]; then
-  UPDATE_TARBALL=$(ls -t "$UPGRADE_UPDATES_DIR"/hardwareops-upgrade-*.tar.gz 2>/dev/null | head -n 1 || true)
+  UPDATE_TARBALL=$(ls -t "$UPGRADE_UPDATES_DIR"/parcel-upgrade-*.tar.gz 2>/dev/null | head -n 1 || true)
 fi
 
 if [ -n "$UPDATE_TARBALL" ] && [ -f "$UPDATE_TARBALL" ]; then
@@ -104,7 +104,7 @@ if [ -n "$UPDATE_TARBALL" ] && [ -f "$UPDATE_TARBALL" ]; then
   rm -rf "$STAGED_DIR"
   mkdir -p "$STAGED_DIR"
   tar -xzf "$UPDATE_TARBALL" -C "$STAGED_DIR"
-  bundle_dir=$(find "$STAGED_DIR" -maxdepth 1 -type d -name "hardwareops-upgrade-*" | head -n 1 || true)
+  bundle_dir=$(find "$STAGED_DIR" -maxdepth 1 -type d -name "parcel-upgrade-*" | head -n 1 || true)
   if [ -n "$bundle_dir" ]; then
     STACK_DIR="$bundle_dir"
     COMPOSE_FILE=""
@@ -198,7 +198,7 @@ if [ -n "$ENV_FILE" ] && [ -f "$ENV_FILE" ]; then
 fi
 
 PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://localhost}
-CERTS_DIR=${CERTS_DIR:-/opt/hardwareops/certs}
+CERTS_DIR=${CERTS_DIR:-/opt/parcel/certs}
 CA_CERT=${CA_CERT_PATH:-$CERTS_DIR/ca.crt}
 MAINTENANCE_TOKEN=${MAINTENANCE_TOKEN:-}
 

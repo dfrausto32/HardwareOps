@@ -19,7 +19,7 @@ type SMTPConfig struct {
 	Port       int           // default: 587
 	User       string
 	Password   string
-	From       string        // e.g. "HardwareOps <noreply@corp.example.com>"
+	From       string        // e.g. "Parcel <noreply@corp.example.com>"
 	TLSMode    string        // "none" | "starttls" | "tls"
 	Timeout    time.Duration // default: 10s
 	SkipVerify bool          // dev only; blocked by hardened profile
@@ -42,13 +42,13 @@ func NewSMTPMailer(cfg SMTPConfig) *SMTPMailer {
 		cfg.Timeout = 10 * time.Second
 	}
 	if cfg.From == "" {
-		cfg.From = "HardwareOps <noreply@example.com>"
+		cfg.From = "Parcel <noreply@example.com>"
 	}
 	return &SMTPMailer{cfg: cfg}
 }
 
 var resetTmpl = template.Must(template.New("reset").Parse(
-	`You (or an admin) requested a password reset for your HardwareOps account.
+	`You (or an admin) requested a password reset for your Parcel account.
 
 Click the link below to set a new password. This link expires at {{.ExpiresAt}}.
 
@@ -59,7 +59,7 @@ Your password will not change until you use the link above.
 `))
 
 var inviteTmpl = template.Must(template.New("invite").Parse(
-	`You've been invited to HardwareOps.
+	`You've been invited to Parcel.
 
 Click the link below to set your password and activate your account.
 This link expires at {{.ExpiresAt}}.
@@ -76,7 +76,7 @@ func (m *SMTPMailer) SendPasswordReset(to, tokenValue string, expiresAt time.Tim
 	}); err != nil {
 		return fmt.Errorf("render password reset template: %w", err)
 	}
-	return m.send(to, "HardwareOps: Reset your password", body.String())
+	return m.send(to, "Parcel: Reset your password", body.String())
 }
 
 func (m *SMTPMailer) SendInvite(to, tokenValue string, expiresAt time.Time, appPublicURL string) error {
@@ -88,7 +88,7 @@ func (m *SMTPMailer) SendInvite(to, tokenValue string, expiresAt time.Time, appP
 	}); err != nil {
 		return fmt.Errorf("render invite template: %w", err)
 	}
-	return m.send(to, "You've been invited to HardwareOps", body.String())
+	return m.send(to, "You've been invited to Parcel", body.String())
 }
 
 func buildResetLink(appPublicURL, email, token string) string {

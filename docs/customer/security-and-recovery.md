@@ -4,7 +4,7 @@ This guide covers the minimum security controls customers should understand and 
 
 ## 1. Artifact trust
 
-HardwareOps supports:
+Parcel supports:
 - unsigned artifact acceptance where appropriate
 - warning-only trust modes
 - strict verified-only artifact modes

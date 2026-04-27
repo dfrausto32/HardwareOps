@@ -15,9 +15,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/hardwareops/control-plane/internal/auth"
-	"github.com/hardwareops/control-plane/internal/store"
-	"github.com/hardwareops/control-plane/internal/webhooks"
+	"github.com/parcel/control-plane/internal/auth"
+	"github.com/parcel/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/webhooks"
 )
 
 type CreateWebhookRequest struct {
@@ -317,8 +317,8 @@ func TestWebhook(logger *log.Logger, st store.Store, encryptionKey []byte) http.
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-HardwareOps-Signature", "sha256="+sig)
-		req.Header.Set("User-Agent", "HardwareOps-Webhook/1.0")
+		req.Header.Set("X-Parcel-Signature", "sha256="+sig)
+		req.Header.Set("User-Agent", "Parcel-Webhook/1.0")
 		resp, err := client.Do(req)
 		if err != nil {
 			_ = st.UpdateWebhookDelivery(store.WebhookDelivery{
@@ -427,8 +427,8 @@ func RedeliverWebhookDelivery(logger *log.Logger, st store.Store, encryptionKey 
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-HardwareOps-Signature", "sha256="+sig)
-		req.Header.Set("User-Agent", "HardwareOps-Webhook/1.0")
+		req.Header.Set("X-Parcel-Signature", "sha256="+sig)
+		req.Header.Set("User-Agent", "Parcel-Webhook/1.0")
 
 		client := &http.Client{Timeout: 10 * time.Second}
 		now := time.Now().UTC()

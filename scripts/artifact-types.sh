@@ -10,7 +10,7 @@ ARTIFACT_NAME=${ARTIFACT_NAME:-type-demo}
 VERSIONS=${VERSIONS:-0.1.0,0.2.0}
 VERSION_BASE=${VERSION_BASE:-0.1.0}
 TYPES=${TYPES:-app_bundle,config_bundle,data_bundle,firmware,container_image,agent_bundle}
-OUT_DIR=${OUT_DIR:-/tmp/hardwareops-types}
+OUT_DIR=${OUT_DIR:-/tmp/parcel-types}
 SIGN_ARTIFACTS=${SIGN_ARTIFACTS:-1}
 
 if [ "$SIGN_ARTIFACTS" = "1" ]; then
@@ -47,7 +47,7 @@ for atype in "${type_list[@]}"; do
     input_dir="$OUT_DIR/input/$atype/$base_ver"
     mkdir -p "$input_dir"
     cat > "$input_dir/readme.txt" <<EOF
-HardwareOps artifact demo
+Parcel artifact demo
 type=${atype}
 baseVersion=${base_ver}
 artifactVersion=${version}
@@ -82,7 +82,7 @@ EOF
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>HardwareOps Artifact Demo</title>
+    <title>Parcel Artifact Demo</title>
     <style>
       :root { color-scheme: light; }
       body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: #0a0a0a; color: #f5f5f5; }
@@ -98,7 +98,7 @@ EOF
   <body>
     <div class="wrap">
       <div class="card">
-        <div class="tag">HardwareOps Demo</div>
+        <div class="tag">Parcel Demo</div>
         <h1>Artifact Applied</h1>
         <div class="kv"><strong>Type</strong> ${atype}</div>
         <div class="kv"><strong>Base Version</strong> ${base_ver}</div>

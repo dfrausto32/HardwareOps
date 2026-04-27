@@ -1,4 +1,4 @@
-resource "aws_sns_topic" "hardwareops_alerts" {
+resource "aws_sns_topic" "parcel_alerts" {
   name = "${var.name_prefix}-alerts"
   tags = var.tags
 }
@@ -6,7 +6,7 @@ resource "aws_sns_topic" "hardwareops_alerts" {
 resource "aws_sns_topic_subscription" "email" {
   count = var.alarm_sns_email != "" ? 1 : 0
 
-  topic_arn = aws_sns_topic.hardwareops_alerts.arn
+  topic_arn = aws_sns_topic.parcel_alerts.arn
   protocol  = "email"
   endpoint  = var.alarm_sns_email
 }
@@ -27,8 +27,8 @@ resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
     LoadBalancer = regex("(app/.+)", module.alb.alb_arn)[0]
   }
 
-  alarm_actions = [aws_sns_topic.hardwareops_alerts.arn]
-  ok_actions    = [aws_sns_topic.hardwareops_alerts.arn]
+  alarm_actions = [aws_sns_topic.parcel_alerts.arn]
+  ok_actions    = [aws_sns_topic.parcel_alerts.arn]
 
   tags = var.tags
 }
@@ -50,8 +50,8 @@ resource "aws_cloudwatch_metric_alarm" "alb_unhealthy_hosts" {
     TargetGroup  = regex("(targetgroup/.+)", module.alb.app_target_group_arn)[0]
   }
 
-  alarm_actions = [aws_sns_topic.hardwareops_alerts.arn]
-  ok_actions    = [aws_sns_topic.hardwareops_alerts.arn]
+  alarm_actions = [aws_sns_topic.parcel_alerts.arn]
+  ok_actions    = [aws_sns_topic.parcel_alerts.arn]
 
   tags = var.tags
 }
@@ -73,8 +73,8 @@ resource "aws_cloudwatch_metric_alarm" "ecs_control_plane_cpu" {
     ServiceName = module.ecs.control_plane_service_name
   }
 
-  alarm_actions = [aws_sns_topic.hardwareops_alerts.arn]
-  ok_actions    = [aws_sns_topic.hardwareops_alerts.arn]
+  alarm_actions = [aws_sns_topic.parcel_alerts.arn]
+  ok_actions    = [aws_sns_topic.parcel_alerts.arn]
 
   tags = var.tags
 }
@@ -96,8 +96,8 @@ resource "aws_cloudwatch_metric_alarm" "ecs_control_plane_memory" {
     ServiceName = module.ecs.control_plane_service_name
   }
 
-  alarm_actions = [aws_sns_topic.hardwareops_alerts.arn]
-  ok_actions    = [aws_sns_topic.hardwareops_alerts.arn]
+  alarm_actions = [aws_sns_topic.parcel_alerts.arn]
+  ok_actions    = [aws_sns_topic.parcel_alerts.arn]
 
   tags = var.tags
 }
@@ -119,8 +119,8 @@ resource "aws_cloudwatch_metric_alarm" "ecs_control_plane_tasks" {
     ServiceName = module.ecs.control_plane_service_name
   }
 
-  alarm_actions = [aws_sns_topic.hardwareops_alerts.arn]
-  ok_actions    = [aws_sns_topic.hardwareops_alerts.arn]
+  alarm_actions = [aws_sns_topic.parcel_alerts.arn]
+  ok_actions    = [aws_sns_topic.parcel_alerts.arn]
 
   tags = var.tags
 }
@@ -141,8 +141,8 @@ resource "aws_cloudwatch_metric_alarm" "rds_cpu" {
     DBInstanceIdentifier = "${var.name_prefix}-postgres"
   }
 
-  alarm_actions = [aws_sns_topic.hardwareops_alerts.arn]
-  ok_actions    = [aws_sns_topic.hardwareops_alerts.arn]
+  alarm_actions = [aws_sns_topic.parcel_alerts.arn]
+  ok_actions    = [aws_sns_topic.parcel_alerts.arn]
 
   tags = var.tags
 }
@@ -163,8 +163,8 @@ resource "aws_cloudwatch_metric_alarm" "rds_free_storage" {
     DBInstanceIdentifier = "${var.name_prefix}-postgres"
   }
 
-  alarm_actions = [aws_sns_topic.hardwareops_alerts.arn]
-  ok_actions    = [aws_sns_topic.hardwareops_alerts.arn]
+  alarm_actions = [aws_sns_topic.parcel_alerts.arn]
+  ok_actions    = [aws_sns_topic.parcel_alerts.arn]
 
   tags = var.tags
 }
@@ -185,8 +185,8 @@ resource "aws_cloudwatch_metric_alarm" "rds_connections" {
     DBInstanceIdentifier = "${var.name_prefix}-postgres"
   }
 
-  alarm_actions = [aws_sns_topic.hardwareops_alerts.arn]
-  ok_actions    = [aws_sns_topic.hardwareops_alerts.arn]
+  alarm_actions = [aws_sns_topic.parcel_alerts.arn]
+  ok_actions    = [aws_sns_topic.parcel_alerts.arn]
 
   tags = var.tags
 }

@@ -136,14 +136,14 @@ Examples:
   scripts/aws-customer.sh init --customer acme --env prod --region us-east-1 --state-bucket hwops-tf-state \
     --state-lock-table hwops-tf-locks --customer-domain acme.example.com --route53-zone-id Z12345 \
     --acm-cert-arn arn:aws:acm:... --device-mtls-bucket acme-security-assets \
-    --control-plane-image 111122223333.dkr.ecr.us-east-1.amazonaws.com/hardwareops-control-plane:20260213 \
-    --gateway-image 111122223333.dkr.ecr.us-east-1.amazonaws.com/hardwareops-gateway:20260213 \
-    --artifact-pull-credentials-secret-id arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/acme/prod/artifact-pull-credentials-AbCdEf
+    --control-plane-image 111122223333.dkr.ecr.us-east-1.amazonaws.com/parcel-control-plane:20260213 \
+    --gateway-image 111122223333.dkr.ecr.us-east-1.amazonaws.com/parcel-gateway:20260213 \
+    --artifact-pull-credentials-secret-id arn:aws:secretsmanager:us-east-1:111122223333:secret:parcel/acme/prod/artifact-pull-credentials-AbCdEf
   scripts/aws-demo-image.sh
   scripts/aws-customer.sh init --customer acme --env dev --region us-east-1 --state-bucket hwops-tf-state \
     --state-lock-table hwops-tf-locks --customer-domain acme.example.com --route53-zone-id Z12345 \
     --acm-cert-arn arn:aws:acm:... --control-plane-image ... --gateway-image ... \
-    --enable-demo-fleet --demo-agent-image 111122223333.dkr.ecr.us-east-1.amazonaws.com/hardwareops-demo-agent:latest
+    --enable-demo-fleet --demo-agent-image 111122223333.dkr.ecr.us-east-1.amazonaws.com/parcel-demo-agent:latest
   scripts/aws-customer.sh plan --customer acme --env prod --region us-east-1
   scripts/aws-customer.sh apply --customer acme --env prod --region us-east-1 --auto-approve
 EOF
@@ -389,7 +389,7 @@ write_tfvars_file() {
   auth_jwt_secret=$(openssl rand -hex 32)
   auth_bootstrap_email="$AUTH_BOOTSTRAP_EMAIL"
   if [ -z "$auth_bootstrap_email" ]; then
-    auth_bootstrap_email="admin+${CUSTOMER}-${ENVIRONMENT}@hardwareops.local"
+    auth_bootstrap_email="admin+${CUSTOMER}-${ENVIRONMENT}@parcel.local"
   fi
   auth_bootstrap_password="$AUTH_BOOTSTRAP_PASSWORD"
   if [ -z "$auth_bootstrap_password" ]; then
@@ -517,7 +517,7 @@ init_customer() {
   fi
 
   if [ -z "$DEVICE_MTLS_BUCKET" ]; then
-    DEVICE_MTLS_BUCKET="hardwareops-$CUSTOMER-$ENVIRONMENT-security-assets"
+    DEVICE_MTLS_BUCKET="parcel-$CUSTOMER-$ENVIRONMENT-security-assets"
   fi
 
   if ! [[ "$VPC_OCTET" =~ ^[0-9]+$ ]] || [ "$VPC_OCTET" -lt 0 ] || [ "$VPC_OCTET" -gt 255 ]; then
@@ -573,7 +573,7 @@ Terraform files:
   $tfile
 
 Bootstrap login:
-  email: ${AUTH_BOOTSTRAP_EMAIL:-admin+${CUSTOMER}-${ENVIRONMENT}@hardwareops.local}
+  email: ${AUTH_BOOTSTRAP_EMAIL:-admin+${CUSTOMER}-${ENVIRONMENT}@parcel.local}
   password: ${AUTH_BOOTSTRAP_PASSWORD:-generated in terraform.tfvars}
 
 Demo fleet:

@@ -1,5 +1,5 @@
-bucket         = "hardwareops-terraform-state"
+bucket         = "parcel-terraform-state"
 key            = "customers/example/dev/terraform.tfstate"
 region         = "us-east-1"
-dynamodb_table = "hardwareops-terraform-locks"
+dynamodb_table = "parcel-terraform-locks"
 encrypt        = true

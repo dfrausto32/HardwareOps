@@ -5,8 +5,8 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/hardwareops/control-plane/internal/auth"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/auth"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 // OIDCLogin generates a state token, sets the state cookie, and redirects to the IdP.

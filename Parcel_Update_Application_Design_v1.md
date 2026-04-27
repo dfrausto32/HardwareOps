@@ -4,7 +4,7 @@
 
 This document defines how software updates, configuration changes, and
 secrets are applied, validated, rolled back, and audited on managed
-machines using the HardwareOps control-plane and agent.
+machines using the Parcel control-plane and agent.
 
 Goals: - Safely update platform services, customer applications, and
 OS-level dependencies - Guarantee machine survivability via automatic

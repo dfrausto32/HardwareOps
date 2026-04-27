@@ -1,12 +1,12 @@
 # Artifact Supply-Chain Provenance
 
-HardwareOps supports **keyless cosign signatures** and **in-toto / SLSA attestations** as an optional layer on top of the existing Ed25519 trusted-key verification. Provenance lets you enforce that artifacts were built by a specific CI pipeline identity before they can be deployed to devices.
+Parcel supports **keyless cosign signatures** and **in-toto / SLSA attestations** as an optional layer on top of the existing Ed25519 trusted-key verification. Provenance lets you enforce that artifacts were built by a specific CI pipeline identity before they can be deployed to devices.
 
 ---
 
 ## 1) Overview
 
-| Concept | What it means in HardwareOps |
+| Concept | What it means in Parcel |
 |---|---|
 | **Keyless signature** | An ECDSA signature produced by `cosign sign --keyless`, backed by a short-lived Fulcio-issued certificate that embeds the signer's OIDC identity (e.g. a GitHub Actions job URL). No long-lived signing key required. |
 | **Attestation** | An in-toto statement (SLSA provenance, SBOM, custom predicate) stored alongside an artifact. Attestations can be keyless-verified at upload time so the builder identity is recorded. |
@@ -47,7 +47,7 @@ SIGNATURE=$(jq -r '.base64Signature' firmware-v2.tar.gz.bundle)
 BUNDLE=$(cat firmware-v2.tar.gz.bundle)
 
 # Pull + register in one step
-curl -X POST https://hardwareops.internal/api/v1/artifacts/pull \
+curl -X POST https://parcel.internal/api/v1/artifacts/pull \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -96,7 +96,7 @@ Attestations are in-toto statements stored alongside an artifact. They are separ
 ### 4.1 Upload an attestation
 
 ```bash
-curl -X POST https://hardwareops.internal/api/v1/artifacts/$ARTIFACT_ID/attestations \
+curl -X POST https://parcel.internal/api/v1/artifacts/$ARTIFACT_ID/attestations \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -141,7 +141,7 @@ When `signatureType` is omitted or empty, the attestation is stored as-is for au
 ### 4.2 List attestations for an artifact
 
 ```bash
-curl https://hardwareops.internal/api/v1/artifacts/$ARTIFACT_ID/attestations \
+curl https://parcel.internal/api/v1/artifacts/$ARTIFACT_ID/attestations \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -158,7 +158,7 @@ Provenance policy controls which attestations must be present before an artifact
 Set alongside the global signature policy:
 
 ```bash
-curl -X PUT https://hardwareops.internal/api/v1/artifact-trust/policy \
+curl -X PUT https://parcel.internal/api/v1/artifact-trust/policy \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -215,7 +215,7 @@ PUT /api/v1/desired-state/groups/production
 ## 6) Viewing the trust policy
 
 ```bash
-curl https://hardwareops.internal/api/v1/artifact-trust/policy \
+curl https://parcel.internal/api/v1/artifact-trust/policy \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -259,11 +259,11 @@ jobs:
       - name: Exchange workload identity token
         run: ./scripts/ci-exchange-workload-identity.sh
 
-      - name: Upload to HardwareOps
+      - name: Upload to Parcel
         run: |
           SHA256=$(sha256sum firmware.tar.gz | awk '{print $1}')
           BUNDLE=$(cat firmware.bundle | jq -c .)
-          curl -X POST $HARDWAREOPS_URL/api/v1/artifacts/upload \
+          curl -X POST $PARCEL_URL/api/v1/artifacts/upload \
             -H "Authorization: Bearer $HWOPS_TOKEN" \
             -F "name=firmware" \
             -F "version=${{ github.ref_name }}" \

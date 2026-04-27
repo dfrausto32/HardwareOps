@@ -12,7 +12,7 @@ pipeline {
   environment {
     HWOPS_BASE_URL = credentials('hwops-base-url')
     // Optional workload identity settings. JENKINS_OIDC_TOKEN may be injected by an OIDC-capable plugin or wrapper.
-    CI_WORKLOAD_IDENTITY_AUDIENCE = 'hardwareops-ci'
+    CI_WORKLOAD_IDENTITY_AUDIENCE = 'parcel-ci'
   }
 
   stages {

@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/hardwareops/control-plane/internal/globalplane"
-	gpsync "github.com/hardwareops/control-plane/internal/globalplane/sync"
+	"github.com/parcel/control-plane/internal/globalplane"
+	gpsync "github.com/parcel/control-plane/internal/globalplane/sync"
 )
 
 type groupStore interface {

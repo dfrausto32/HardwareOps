@@ -233,7 +233,7 @@ func (r *Runner) start(extra map[string]string) (Status, error) {
 	r.status.Command = r.applyCmd
 	r.status.WorkingDir = r.workDir
 	if strings.EqualFold(r.mode, "docker") {
-		r.status.RunnerContainer = fmt.Sprintf("hardwareops-%s-runner", r.name)
+		r.status.RunnerContainer = fmt.Sprintf("parcel-%s-runner", r.name)
 	} else {
 		r.status.RunnerContainer = ""
 	}
@@ -462,7 +462,7 @@ func buildDockerCmd(applyCmd, image, certsDir, runnerContainer string, env map[s
 
 	name := strings.TrimSpace(runnerContainer)
 	if name == "" {
-		name = "hardwareops-backup-runner"
+		name = "parcel-backup-runner"
 	}
 	args := []string{
 		"run",

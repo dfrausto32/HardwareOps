@@ -64,10 +64,10 @@ Example:
   "requestId": "pe_01J...",
   "claimToken": "pec_...",
   "hardwareId": "sha256:...",
-  "csrPath": "/var/lib/hardwareops/agent/device.csr",
-  "keyPath": "/var/lib/hardwareops/agent/device.key",
-  "certPath": "/etc/hardwareops/agent/device.crt",
-  "deviceIdPath": "/etc/hardwareops/agent/device-id",
+  "csrPath": "/var/lib/parcel/agent/device.csr",
+  "keyPath": "/var/lib/parcel/agent/device.key",
+  "certPath": "/etc/parcel/agent/device.crt",
+  "deviceIdPath": "/etc/parcel/agent/device-id",
   "expiresAt": "2026-03-03T20:00:00Z",
   "lastError": "",
   "updatedAt": "2026-03-03T19:55:00Z"
@@ -225,9 +225,9 @@ This avoids shipping a client cert with the installer and avoids requiring a sec
 Current packaged command:
 ```bash
 sudo ./scripts/agent-install.sh \
-  AGENT_SRC=./hardwareops-agent \
-  CONTROL_PLANE_URL=https://agent.hardwareops.internal \
-  CONTROL_PLANE_CA_CERT_SRC=/opt/hardwareops/certs/ca.crt \
+  AGENT_SRC=./parcel-agent \
+  CONTROL_PLANE_URL=https://agent.parcel.internal \
+  CONTROL_PLANE_CA_CERT_SRC=/opt/parcel/certs/ca.crt \
   AGENT_ENROLL_MODE=approval \
   ENROLLMENT_PROFILE_TOKEN=<bootstrap-token> \
   START_SERVICE=1
@@ -560,7 +560,7 @@ What the script does:
 
 Artifacts are written under a temp directory such as:
 ```text
-/tmp/hardwareops-pending-enroll.xxxxxx
+/tmp/parcel-pending-enroll.xxxxxx
 ```
 
 That directory contains:

@@ -5,7 +5,7 @@ provider "aws" {
 locals {
   name_prefix = "${var.customer_slug}-${var.environment}"
   common_tags = {
-    project     = "hardwareops"
+    project     = "parcel"
     environment = var.environment
     customer    = var.customer_slug
     owner       = var.owner

@@ -7,7 +7,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/store"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -1855,10 +1855,11 @@ func (s *Store) GetArtifact(artifactID string) (store.Artifact, bool, error) {
 		       COALESCE(signature_type, ''), COALESCE(signature_key_id, ''), COALESCE(verification_status, 'legacy'), COALESCE(verification_error, ''),
 		       COALESCE(verified_at, '0001-01-01T00:00:00Z'::timestamptz),
 		       size_bytes, COALESCE(metadata, '{}'::jsonb), created_at,
-		       COALESCE(deprecated_at, '0001-01-01T00:00:00Z'::timestamptz), COALESCE(delete_after, '0001-01-01T00:00:00Z'::timestamptz)
+		       COALESCE(deprecated_at, '0001-01-01T00:00:00Z'::timestamptz), COALESCE(delete_after, '0001-01-01T00:00:00Z'::timestamptz),
+		       COALESCE(sbom_object_key, '')
 		FROM artifacts
 		WHERE artifact_id = $1
-	`, artifactID).Scan(&a.ArtifactID, &a.Name, &a.Version, &a.Type, &a.Status, &a.ObjectKey, &a.SHA256, &a.Signature, &a.SignatureType, &a.SignatureKeyID, &a.VerificationStatus, &a.VerificationError, &a.VerifiedAt, &a.SizeBytes, &a.MetadataJSON, &a.CreatedAt, &a.DeprecatedAt, &a.DeleteAfter)
+	`, artifactID).Scan(&a.ArtifactID, &a.Name, &a.Version, &a.Type, &a.Status, &a.ObjectKey, &a.SHA256, &a.Signature, &a.SignatureType, &a.SignatureKeyID, &a.VerificationStatus, &a.VerificationError, &a.VerifiedAt, &a.SizeBytes, &a.MetadataJSON, &a.CreatedAt, &a.DeprecatedAt, &a.DeleteAfter, &a.SBOMObjectKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.Artifact{}, false, nil
 	}
@@ -1878,12 +1879,13 @@ func (s *Store) FindArtifactByNameTypeVersion(name, artifactType, version string
 		       COALESCE(signature_type, ''), COALESCE(signature_key_id, ''), COALESCE(verification_status, 'legacy'), COALESCE(verification_error, ''),
 		       COALESCE(verified_at, '0001-01-01T00:00:00Z'::timestamptz),
 		       size_bytes, COALESCE(metadata, '{}'::jsonb), created_at,
-		       COALESCE(deprecated_at, '0001-01-01T00:00:00Z'::timestamptz), COALESCE(delete_after, '0001-01-01T00:00:00Z'::timestamptz)
+		       COALESCE(deprecated_at, '0001-01-01T00:00:00Z'::timestamptz), COALESCE(delete_after, '0001-01-01T00:00:00Z'::timestamptz),
+		       COALESCE(sbom_object_key, '')
 		FROM artifacts
 		WHERE name = $1 AND type = $2 AND version = $3 AND status = 'active'
 		ORDER BY created_at DESC, artifact_id DESC
 		LIMIT 1
-	`, name, artifactType, version).Scan(&a.ArtifactID, &a.Name, &a.Version, &a.Type, &a.Status, &a.ObjectKey, &a.SHA256, &a.Signature, &a.SignatureType, &a.SignatureKeyID, &a.VerificationStatus, &a.VerificationError, &a.VerifiedAt, &a.SizeBytes, &a.MetadataJSON, &a.CreatedAt, &a.DeprecatedAt, &a.DeleteAfter)
+	`, name, artifactType, version).Scan(&a.ArtifactID, &a.Name, &a.Version, &a.Type, &a.Status, &a.ObjectKey, &a.SHA256, &a.Signature, &a.SignatureType, &a.SignatureKeyID, &a.VerificationStatus, &a.VerificationError, &a.VerifiedAt, &a.SizeBytes, &a.MetadataJSON, &a.CreatedAt, &a.DeprecatedAt, &a.DeleteAfter, &a.SBOMObjectKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.Artifact{}, false, nil
 	}
@@ -1909,7 +1911,8 @@ func (s *Store) ListArtifacts(name, version string, limit, offset int) ([]store.
 		       COALESCE(signature_type, ''), COALESCE(signature_key_id, ''), COALESCE(verification_status, 'legacy'), COALESCE(verification_error, ''),
 		       COALESCE(verified_at, '0001-01-01T00:00:00Z'::timestamptz),
 		       size_bytes, COALESCE(metadata, '{}'::jsonb), created_at,
-		       COALESCE(deprecated_at, '0001-01-01T00:00:00Z'::timestamptz), COALESCE(delete_after, '0001-01-01T00:00:00Z'::timestamptz)
+		       COALESCE(deprecated_at, '0001-01-01T00:00:00Z'::timestamptz), COALESCE(delete_after, '0001-01-01T00:00:00Z'::timestamptz),
+		       COALESCE(sbom_object_key, '')
 		FROM artifacts
 		WHERE ($1 = '' OR name = $1)
 		  AND ($2 = '' OR version = $2)
@@ -1924,7 +1927,7 @@ func (s *Store) ListArtifacts(name, version string, limit, offset int) ([]store.
 	out := []store.Artifact{}
 	for rows.Next() {
 		var a store.Artifact
-		if err := rows.Scan(&a.ArtifactID, &a.Name, &a.Version, &a.Type, &a.Status, &a.ObjectKey, &a.SHA256, &a.Signature, &a.SignatureType, &a.SignatureKeyID, &a.VerificationStatus, &a.VerificationError, &a.VerifiedAt, &a.SizeBytes, &a.MetadataJSON, &a.CreatedAt, &a.DeprecatedAt, &a.DeleteAfter); err != nil {
+		if err := rows.Scan(&a.ArtifactID, &a.Name, &a.Version, &a.Type, &a.Status, &a.ObjectKey, &a.SHA256, &a.Signature, &a.SignatureType, &a.SignatureKeyID, &a.VerificationStatus, &a.VerificationError, &a.VerifiedAt, &a.SizeBytes, &a.MetadataJSON, &a.CreatedAt, &a.DeprecatedAt, &a.DeleteAfter, &a.SBOMObjectKey); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -1948,6 +1951,16 @@ func (s *Store) CountArtifactsByVerificationStatus(status string) (int, error) {
 		return 0, err
 	}
 	return count, nil
+}
+
+func (s *Store) SetArtifactSBOMObjectKey(artifactID, sbomObjectKey string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx,
+		`UPDATE artifacts SET sbom_object_key = $2 WHERE artifact_id = $1`,
+		artifactID, sbomObjectKey,
+	)
+	return err
 }
 
 func (s *Store) DeprecateArtifact(artifactID string, deprecatedAt, deleteAfter time.Time) error {
@@ -2722,11 +2735,13 @@ func (s *Store) GetUser(userID string) (store.User, bool, error) {
 		       COALESCE(recovery_codes, '[]'::jsonb), disabled, COALESCE(auth_provider, 'local'),
 		       COALESCE(external_id, ''), created_at, updated_at,
 		       COALESCE(last_login_at, '0001-01-01'::timestamptz),
-		       COALESCE(recovery_codes_generated_at, '0001-01-01'::timestamptz)
+		       COALESCE(recovery_codes_generated_at, '0001-01-01'::timestamptz),
+		       COALESCE(totp_secret, ''), COALESCE(totp_enabled, false)
 		FROM users
 		WHERE user_id = $1
 	`, userID).Scan(&u.UserID, &u.Email, &u.DisplayName, &u.PasswordHash, &u.RolesJSON, &u.RecoveryCodesJSON, &u.Disabled,
-		&u.AuthProvider, &u.ExternalID, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt, &u.RecoveryCodesGeneratedAt)
+		&u.AuthProvider, &u.ExternalID, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt, &u.RecoveryCodesGeneratedAt,
+		&u.TOTPSecret, &u.TOTPEnabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.User{}, false, nil
 	}
@@ -2745,11 +2760,13 @@ func (s *Store) GetUserByEmail(email string) (store.User, bool, error) {
 		       COALESCE(recovery_codes, '[]'::jsonb), disabled, COALESCE(auth_provider, 'local'),
 		       COALESCE(external_id, ''), created_at, updated_at,
 		       COALESCE(last_login_at, '0001-01-01'::timestamptz),
-		       COALESCE(recovery_codes_generated_at, '0001-01-01'::timestamptz)
+		       COALESCE(recovery_codes_generated_at, '0001-01-01'::timestamptz),
+		       COALESCE(totp_secret, ''), COALESCE(totp_enabled, false)
 		FROM users
 		WHERE email = $1
 	`, email).Scan(&u.UserID, &u.Email, &u.DisplayName, &u.PasswordHash, &u.RolesJSON, &u.RecoveryCodesJSON, &u.Disabled,
-		&u.AuthProvider, &u.ExternalID, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt, &u.RecoveryCodesGeneratedAt)
+		&u.AuthProvider, &u.ExternalID, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt, &u.RecoveryCodesGeneratedAt,
+		&u.TOTPSecret, &u.TOTPEnabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.User{}, false, nil
 	}
@@ -2768,12 +2785,14 @@ func (s *Store) GetUserByExternalID(provider, externalID string) (store.User, bo
 		       COALESCE(recovery_codes, '[]'::jsonb), disabled, COALESCE(auth_provider, 'local'),
 		       COALESCE(external_id, ''), created_at, updated_at,
 		       COALESCE(last_login_at, '0001-01-01'::timestamptz),
-		       COALESCE(recovery_codes_generated_at, '0001-01-01'::timestamptz)
+		       COALESCE(recovery_codes_generated_at, '0001-01-01'::timestamptz),
+		       COALESCE(totp_secret, ''), COALESCE(totp_enabled, false)
 		FROM users
 		WHERE auth_provider = $1 AND external_id = $2 AND NOT disabled
 		LIMIT 1
 	`, provider, externalID).Scan(&u.UserID, &u.Email, &u.DisplayName, &u.PasswordHash, &u.RolesJSON, &u.RecoveryCodesJSON, &u.Disabled,
-		&u.AuthProvider, &u.ExternalID, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt, &u.RecoveryCodesGeneratedAt)
+		&u.AuthProvider, &u.ExternalID, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt, &u.RecoveryCodesGeneratedAt,
+		&u.TOTPSecret, &u.TOTPEnabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.User{}, false, nil
 	}
@@ -2797,7 +2816,8 @@ func (s *Store) ListUsers(limit, offset int) ([]store.User, error) {
 		       COALESCE(recovery_codes, '[]'::jsonb), disabled, COALESCE(auth_provider, 'local'),
 		       COALESCE(external_id, ''), created_at, updated_at,
 		       COALESCE(last_login_at, '0001-01-01'::timestamptz),
-		       COALESCE(recovery_codes_generated_at, '0001-01-01'::timestamptz)
+		       COALESCE(recovery_codes_generated_at, '0001-01-01'::timestamptz),
+		       COALESCE(totp_secret, ''), COALESCE(totp_enabled, false)
 		FROM users
 		ORDER BY created_at DESC
 		LIMIT $1 OFFSET $2
@@ -2810,7 +2830,8 @@ func (s *Store) ListUsers(limit, offset int) ([]store.User, error) {
 	for rows.Next() {
 		var u store.User
 		if err := rows.Scan(&u.UserID, &u.Email, &u.DisplayName, &u.PasswordHash, &u.RolesJSON, &u.RecoveryCodesJSON, &u.Disabled,
-			&u.AuthProvider, &u.ExternalID, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt, &u.RecoveryCodesGeneratedAt); err != nil {
+			&u.AuthProvider, &u.ExternalID, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt, &u.RecoveryCodesGeneratedAt,
+			&u.TOTPSecret, &u.TOTPEnabled); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
@@ -2875,6 +2896,19 @@ func (s *Store) SetUserRecoveryCodes(userID string, recoveryCodesJSON []byte, ge
 	return err
 }
 
+func (s *Store) SetUserTOTP(userID, encryptedSecret string, enabled bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx, `
+		UPDATE users
+		SET totp_secret = $2,
+		    totp_enabled = $3,
+		    updated_at = now()
+		WHERE user_id = $1
+	`, userID, nullIfEmpty(encryptedSecret), enabled)
+	return err
+}
+
 func (s *Store) ConsumeUserRecoveryCode(email, recoveryCodeHash, passwordHash string, at time.Time) (store.User, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -2893,12 +2927,14 @@ func (s *Store) ConsumeUserRecoveryCode(email, recoveryCodeHash, passwordHash st
 		       COALESCE(recovery_codes, '[]'::jsonb), disabled, COALESCE(auth_provider, 'local'),
 		       COALESCE(external_id, ''), created_at, updated_at,
 		       COALESCE(last_login_at, '0001-01-01'::timestamptz),
-		       COALESCE(recovery_codes_generated_at, '0001-01-01'::timestamptz)
+		       COALESCE(recovery_codes_generated_at, '0001-01-01'::timestamptz),
+		       COALESCE(totp_secret, ''), COALESCE(totp_enabled, false)
 		FROM users
 		WHERE email = $1
 		FOR UPDATE
 	`, email).Scan(&user.UserID, &user.Email, &user.DisplayName, &user.PasswordHash, &user.RolesJSON, &user.RecoveryCodesJSON,
-		&user.Disabled, &user.AuthProvider, &user.ExternalID, &user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt, &user.RecoveryCodesGeneratedAt)
+		&user.Disabled, &user.AuthProvider, &user.ExternalID, &user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt, &user.RecoveryCodesGeneratedAt,
+		&user.TOTPSecret, &user.TOTPEnabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.User{}, false, nil
 	}
@@ -2978,7 +3014,8 @@ func (s *Store) ConsumePasswordResetToken(email, tokenHash, passwordHash string,
 		SELECT prt.token_id::text, u.user_id, u.email, COALESCE(u.display_name, ''), u.password_hash,
 		       COALESCE(u.roles, '[]'::jsonb), COALESCE(u.recovery_codes, '[]'::jsonb), u.disabled,
 		       COALESCE(u.auth_provider, 'local'), COALESCE(u.external_id, ''), u.created_at, u.updated_at,
-		       COALESCE(u.last_login_at, '0001-01-01'::timestamptz), COALESCE(u.recovery_codes_generated_at, '0001-01-01'::timestamptz)
+		       COALESCE(u.last_login_at, '0001-01-01'::timestamptz), COALESCE(u.recovery_codes_generated_at, '0001-01-01'::timestamptz),
+		       COALESCE(u.totp_secret, ''), COALESCE(u.totp_enabled, false)
 		FROM password_reset_tokens prt
 		JOIN users u ON u.user_id = prt.user_id
 		WHERE prt.token_hash = $1
@@ -2988,7 +3025,7 @@ func (s *Store) ConsumePasswordResetToken(email, tokenHash, passwordHash string,
 		FOR UPDATE OF prt, u
 	`, tokenHash, at, email).Scan(&tokenID, &user.UserID, &user.Email, &user.DisplayName, &user.PasswordHash, &user.RolesJSON,
 		&user.RecoveryCodesJSON, &user.Disabled, &user.AuthProvider, &user.ExternalID, &user.CreatedAt, &user.UpdatedAt,
-		&user.LastLoginAt, &user.RecoveryCodesGeneratedAt)
+		&user.LastLoginAt, &user.RecoveryCodesGeneratedAt, &user.TOTPSecret, &user.TOTPEnabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.User{}, false, nil
 	}

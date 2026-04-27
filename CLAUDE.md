@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Project Is
 
-HardwareOps is a control-plane platform for deploying software and configuration to autonomous devices in unreliable, bandwidth-constrained, or offline environments. It has three main components:
+Parcel is a control-plane platform for deploying software and configuration to autonomous devices in unreliable, bandwidth-constrained, or offline environments. It has three main components:
 
 - **control-plane** — Go 1.25 API server backed by PostgreSQL + MinIO
 - **agent** — Go 1.22 device agent (minimal deps, systemd-friendly)
@@ -22,12 +22,12 @@ make dev-up
 ```bash
 openssl req -x509 -newkey rsa:2048 -nodes \
   -keyout ./dev-ca.key -out ./dev-ca.crt \
-  -days 365 -subj "/CN=HardwareOps Dev CA"
+  -days 365 -subj "/CN=Parcel Dev CA"
 ```
 
 ### 3. Run the control-plane
 ```bash
-export DATABASE_URL=postgres://hardwareops:hardwareops@localhost:5432/hardwareops?sslmode=disable
+export DATABASE_URL=postgres://parcel:parcel@localhost:5432/parcel?sslmode=disable
 export CA_CERT_PATH=./dev-ca.crt
 export CA_KEY_PATH=./dev-ca.key
 export AUTO_MIGRATE=1
@@ -118,7 +118,7 @@ python3 scripts/artifact-pack.py
 
 ### Control Plane (`control-plane/`)
 
-Go module `github.com/hardwareops/control-plane`. Key packages:
+Go module `github.com/parcel/control-plane`. Key packages:
 
 - `cmd/control-plane/` — entry point
 - `httpapi/` — chi v5 router, all HTTP handlers and middleware (JWT auth, rate limiting, mTLS)

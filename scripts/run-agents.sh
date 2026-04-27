@@ -7,7 +7,7 @@ COUNT="${AGENT_COUNT:-1}"
 BASE_FILE="deploy/compose/docker-compose.agents.yml"
 MTLS_FILE="deploy/compose/docker-compose.agents.mtls.yml"
 
-CERT_DIR=${CERT_DIR:-/tmp/hardwareops}
+CERT_DIR=${CERT_DIR:-/tmp/parcel}
 CA_CERT_DEFAULT="$BASE_DIR/dev-ca.crt"
 DEVICE_KEY_DEFAULT="$CERT_DIR/device.key"
 DEVICE_CSR_DEFAULT="$CERT_DIR/device.csr"
@@ -83,7 +83,7 @@ if [ ! -s "$DEVICE_CERT_PATH" ] || [ ! -s "$DEVICE_KEY_PATH" ]; then
   if [ ! -s "$DEVICE_CSR_PATH" ] || [ ! -s "$DEVICE_KEY_PATH" ]; then
     openssl req -newkey rsa:2048 -nodes \
       -keyout "$DEVICE_KEY_PATH" -out "$DEVICE_CSR_PATH" \
-      -subj "/CN=hardwareops-device"
+      -subj "/CN=parcel-device"
   fi
 
   TOKEN_JSON=$(curl -s "${curl_opts[@]}" -X POST "$HOST_URL/api/v1/enrollments" \

@@ -13,8 +13,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/hardwareops/control-plane/internal/globalplane"
-	gpsync "github.com/hardwareops/control-plane/internal/globalplane/sync"
+	"github.com/parcel/control-plane/internal/globalplane"
+	gpsync "github.com/parcel/control-plane/internal/globalplane/sync"
 )
 
 type federationStore interface {

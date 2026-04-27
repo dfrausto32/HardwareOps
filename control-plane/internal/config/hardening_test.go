@@ -20,7 +20,7 @@ func TestValidateHardening(t *testing.T) {
 		AuthLoginBackoffWindow:          15 * time.Minute,
 		AuthBootstrapPassword:           "bootstrap-secret-123",
 		LicenseEnforce:                  true,
-		LicensePath:                     "/opt/hardwareops/license.json",
+		LicensePath:                     "/opt/parcel/license.json",
 		DeviceIdentityMode:              "enforce",
 		DeviceIdentityRequireOnEnroll:   true,
 		DeviceIdentityRequireOnCheckin:  true,
@@ -29,7 +29,7 @@ func TestValidateHardening(t *testing.T) {
 		ArtifactSignatureRequireDefault: true,
 		ArtifactSignatureEnforceIngest:  true,
 		ArtifactSignatureKeyID:          "sha256:test-signing-key",
-		TrustedSigningKeysFile:          "/opt/hardwareops/signing/trusted-signing-keys.json",
+		TrustedSigningKeysFile:          "/opt/parcel/signing/trusted-signing-keys.json",
 	}
 
 	tests := []struct {

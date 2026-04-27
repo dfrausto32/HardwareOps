@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/globalplane"
+	"github.com/parcel/control-plane/internal/globalplane"
 )
 
 // Manager starts and stops per-plane poll workers.

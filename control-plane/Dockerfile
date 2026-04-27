@@ -8,7 +8,7 @@ COPY control-plane/ ./
 ARG LICENSE_EMBED_PUBKEY_B64=""
 RUN set -eux; \
   if [ -n "$LICENSE_EMBED_PUBKEY_B64" ]; then \
-    LDFLAGS="-ldflags=-X=github.com/hardwareops/control-plane/internal/license.EmbeddedPublicKey=$LICENSE_EMBED_PUBKEY_B64"; \
+    LDFLAGS="-ldflags=-X=github.com/parcel/control-plane/internal/license.EmbeddedPublicKey=$LICENSE_EMBED_PUBKEY_B64"; \
   else \
     LDFLAGS=""; \
   fi; \
@@ -21,7 +21,7 @@ WORKDIR /app
 RUN apk add --no-cache bash curl openssl && \
     mkdir -p /app/demo-certs && \
     openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
-      -subj "/CN=HardwareOps Demo Device CA" \
+      -subj "/CN=Parcel Demo Device CA" \
       -keyout /app/demo-certs/ca.key \
       -out /app/demo-certs/ca.crt && \
     chmod 0600 /app/demo-certs/ca.key && \

@@ -164,6 +164,10 @@ type Config struct {
 	VulnArtifactScanner    string        // "grype" | "trivy" | "disabled"
 	VulnArtifactScannerBin string        // path to binary
 	VulnArtifactSkipTypes  []string      // artifact types to skip
+	// SBOM generation (CycloneDX via Trivy).
+	SBOMEnabled      bool
+	SBOMBin          string   // path to trivy binary (defaults to "trivy")
+	SBOMSkipTypes    []string // artifact types to skip
 	// Nessus device scanning.
 	VulnNessusURL          string
 	VulnNessusAccessKey    string
@@ -180,6 +184,10 @@ type Config struct {
 	SMTPTimeout    time.Duration
 	SMTPSkipVerify bool
 	AppPublicURL   string
+	// TOTP MFA.
+	// TOTP_ENCRYPTION_KEY must be a base64-encoded 32-byte AES-256 key.
+	// When unset, TOTP enrollment is disabled.
+	TOTPEncryptionKey string
 	// Webhook outbound delivery.
 	// WEBHOOK_ENCRYPTION_KEY must be a base64-encoded 32-byte AES-256 key.
 	WebhookEncryptionKey    string
@@ -293,8 +301,8 @@ func FromEnv() Config {
 		BackupRunnerToken:                      os.Getenv("BACKUP_RUNNER_TOKEN"),
 		BackupPostgresContainer:                os.Getenv("BACKUP_POSTGRES_CONTAINER"),
 		BackupMinioContainer:                   os.Getenv("BACKUP_MINIO_CONTAINER"),
-		BackupPostgresUser:                     getenvDefault("BACKUP_POSTGRES_USER", "hardwareops"),
-		BackupPostgresDB:                       getenvDefault("BACKUP_POSTGRES_DB", "hardwareops"),
+		BackupPostgresUser:                     getenvDefault("BACKUP_POSTGRES_USER", "parcel"),
+		BackupPostgresDB:                       getenvDefault("BACKUP_POSTGRES_DB", "parcel"),
 		RestoreCmd:                             os.Getenv("RESTORE_CMD"),
 		MetricsEnabled:                         parseBoolEnvDefault("METRICS_ENABLED", true),
 		MetricsPath:                            getenvDefault("METRICS_PATH", "/metrics"),
@@ -320,7 +328,7 @@ func FromEnv() Config {
 		AuthLoginBackoffBase:                   parseDurationDefault(getenvDefault("AUTH_LOGIN_BACKOFF_BASE", "2s"), 2*time.Second),
 		AuthLoginBackoffMax:                    parseDurationDefault(getenvDefault("AUTH_LOGIN_BACKOFF_MAX", "5m"), 5*time.Minute),
 		AuthLoginBackoffWindow:                 parseDurationDefault(getenvDefault("AUTH_LOGIN_BACKOFF_WINDOW", "15m"), 15*time.Minute),
-		AuthIssuer:                             getenvDefault("AUTH_ISSUER", "hardwareops"),
+		AuthIssuer:                             getenvDefault("AUTH_ISSUER", "parcel"),
 		AuthBootstrapEmail:                     os.Getenv("AUTH_BOOTSTRAP_EMAIL"),
 		AuthBootstrapPassword:                  os.Getenv("AUTH_BOOTSTRAP_PASSWORD"),
 		AuthOIDCIssuer:                         os.Getenv("AUTH_OIDC_ISSUER"),
@@ -362,6 +370,9 @@ func FromEnv() Config {
 		VulnArtifactScanner:                    getenvDefault("VULN_ARTIFACT_SCANNER", "disabled"),
 		VulnArtifactScannerBin:                 getenvDefault("VULN_ARTIFACT_SCANNER_BIN", ""),
 		VulnArtifactSkipTypes:                  parseCSV(getenvDefault("VULN_ARTIFACT_SKIP_TYPES", "")),
+		SBOMEnabled:                            parseBoolEnvDefault("SBOM_ENABLED", false),
+		SBOMBin:                                getenvDefault("SBOM_BIN", ""),
+		SBOMSkipTypes:                          parseCSV(getenvDefault("SBOM_SKIP_TYPES", "")),
 		VulnNessusURL:                          strings.TrimSpace(os.Getenv("VULN_NESSUS_URL")),
 		VulnNessusAccessKey:                    os.Getenv("VULN_NESSUS_ACCESS_KEY"),
 		VulnNessusSecretKey:                    os.Getenv("VULN_NESSUS_SECRET_KEY"),
@@ -371,11 +382,12 @@ func FromEnv() Config {
 		SMTPPort:                               getenvInt("SMTP_PORT", 587),
 		SMTPUser:                               os.Getenv("SMTP_USER"),
 		SMTPPassword:                           os.Getenv("SMTP_PASSWORD"),
-		SMTPFrom:                               getenvDefault("SMTP_FROM", "HardwareOps <noreply@example.com>"),
+		SMTPFrom:                               getenvDefault("SMTP_FROM", "Parcel <noreply@example.com>"),
 		SMTPTLSMode:                            getenvDefault("SMTP_TLS_MODE", "starttls"),
 		SMTPTimeout:                            parseDurationDefault(getenvDefault("SMTP_TIMEOUT", "10s"), 10*time.Second),
 		SMTPSkipVerify:                         parseBoolEnvDefault("SMTP_SKIP_VERIFY", false),
 		AppPublicURL:                           strings.TrimSpace(os.Getenv("APP_PUBLIC_URL")),
+		TOTPEncryptionKey:                      strings.TrimSpace(os.Getenv("TOTP_ENCRYPTION_KEY")),
 		WebhookEncryptionKey:                   strings.TrimSpace(os.Getenv("WEBHOOK_ENCRYPTION_KEY")),
 		WebhookDispatchWorkers:                 getenvInt("WEBHOOK_DISPATCH_WORKERS", 4),
 		WebhookDeliveryTimeout:                 parseDurationDefault(getenvDefault("WEBHOOK_DELIVERY_TIMEOUT", "10s"), 10*time.Second),

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/auth"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/auth"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 type WorkloadIdentityExchangeRequest struct {

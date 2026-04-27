@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/hardwareops/agent/internal/logging"
+	"github.com/parcel/agent/internal/logging"
 )
 
 func buildCapabilities(logger *logging.Logger) map[string]any {

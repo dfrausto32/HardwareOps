@@ -14,7 +14,7 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/hardwareops/agent/internal/plan"
+	"github.com/parcel/agent/internal/plan"
 )
 
 type Context struct {

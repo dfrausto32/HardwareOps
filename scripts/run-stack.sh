@@ -6,11 +6,11 @@ BASE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 COMPOSE_FILE=${COMPOSE_FILE:-$BASE_DIR/docker-compose.onprem.bundle.yml}
 ENV_EXAMPLE=${ENV_EXAMPLE:-$BASE_DIR/.env.onprem.example}
 ENV_FILE=${ENV_FILE:-$BASE_DIR/.env.onprem}
-CERTS_DIR=${CERTS_DIR:-/opt/hardwareops/certs}
-DOMAIN=${DOMAIN:-hardwareops.internal}
-PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://hardwareops.internal}
+CERTS_DIR=${CERTS_DIR:-/opt/parcel/certs}
+DOMAIN=${DOMAIN:-parcel.internal}
+PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://parcel.internal}
 AGENT_BASE_URL=${AGENT_BASE_URL:-}
-PROJECT_NAME=${PROJECT_NAME:-hardwareops}
+PROJECT_NAME=${PROJECT_NAME:-parcel}
 LOAD_IMAGES=${LOAD_IMAGES:-1}
 GENERATE_CERTS=${GENERATE_CERTS:-1}
 ENABLE_TLS=${ENABLE_TLS:-0}
@@ -39,7 +39,7 @@ if [ -z "$AGENT_BASE_URL" ]; then
   if [ -n "$derived_agent_host" ]; then
     AGENT_BASE_URL="https://$derived_agent_host"
   else
-    AGENT_BASE_URL="https://agent.hardwareops.internal"
+    AGENT_BASE_URL="https://agent.parcel.internal"
   fi
 fi
 
@@ -115,7 +115,7 @@ lines = set_kv(lines, "CORS_ALLOWED_ORIGINS", base)
 lines = set_kv(lines, "STACK_DIR", stack_dir)
 lines = set_kv(lines, "UPGRADE_APPLY_CMD", "/app/scripts/apply-upgrade.sh")
 lines = set_kv(lines, "UPGRADE_WORK_DIR", "/stack")
-lines = set_kv(lines, "UPGRADE_LOG_DIR", "/var/lib/hardwareops/logs")
+lines = set_kv(lines, "UPGRADE_LOG_DIR", "/var/lib/parcel/logs")
 lines = set_kv(lines, "UPGRADE_UPDATES_DIR", "/stack/updates")
 lines = set_kv(lines, "UPGRADE_RUNNER_MODE", "remote")
 lines = set_kv(lines, "UPGRADE_RUNNER_URL", "http://maintenance-runner:8090")
@@ -128,7 +128,7 @@ lines = set_kv(lines, "BACKUP_CMD", "/app/scripts/backup-stack.sh")
 lines = set_kv(lines, "RESTORE_CMD", "/app/scripts/restore-stack.sh")
 lines = set_kv(lines, "BACKUP_DIR", "/stack/backups")
 lines = set_kv(lines, "BACKUP_WORK_DIR", "/stack")
-lines = set_kv(lines, "BACKUP_LOG_DIR", "/var/lib/hardwareops/logs")
+lines = set_kv(lines, "BACKUP_LOG_DIR", "/var/lib/parcel/logs")
 lines = set_kv(lines, "BACKUP_RUNNER_MODE", "remote")
 lines = set_kv(lines, "BACKUP_RUNNER_URL", "http://maintenance-runner:8090")
 lines = set_kv(lines, "BACKUP_RUNNER_TOKEN", "change-me-maintenance-runner")

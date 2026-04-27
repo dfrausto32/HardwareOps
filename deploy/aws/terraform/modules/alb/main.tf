@@ -26,7 +26,8 @@ locals {
   effective_waf_managed_rule_groups = var.waf_managed_rule_groups != null ? var.waf_managed_rule_groups : tolist(local.default_waf_managed_rule_groups)
   waf_enabled = var.enable_waf && (
     length(local.effective_waf_managed_rule_groups) > 0 ||
-    var.waf_rate_limit != null
+    var.waf_rate_limit != null ||
+    length(var.waf_blocked_country_codes) > 0
   )
   waf_metric_prefix = substr("${var.name_prefix}-app-waf", 0, 128)
   waf_rate_limit_priority = length(local.effective_waf_managed_rule_groups) > 0 ? max([
@@ -112,6 +113,30 @@ resource "aws_wafv2_web_acl" "app" {
 
   default_action {
     allow {}
+  }
+
+  dynamic "rule" {
+    for_each = length(var.waf_blocked_country_codes) > 0 ? [1] : []
+    content {
+      name     = "BlockSanctionedCountries"
+      priority = 1
+
+      action {
+        block {}
+      }
+
+      statement {
+        geo_match_statement {
+          country_codes = var.waf_blocked_country_codes
+        }
+      }
+
+      visibility_config {
+        cloudwatch_metrics_enabled = true
+        metric_name                = substr("${local.waf_metric_prefix}-geo-block", 0, 128)
+        sampled_requests_enabled   = true
+      }
+    }
   }
 
   dynamic "rule" {

@@ -4,8 +4,8 @@ set -euo pipefail
 BASE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 VERSION=${VERSION:-$(date +%Y%m%d%H%M%S)}
 DIST_DIR=${DIST_DIR:-$BASE_DIR/dist/customer-docs}
-STAGE_DIR="$DIST_DIR/hardwareops-customer-docs-$VERSION"
-ARCHIVE_PATH="$DIST_DIR/hardwareops-customer-docs-$VERSION.zip"
+STAGE_DIR="$DIST_DIR/parcel-customer-docs-$VERSION"
+ARCHIVE_PATH="$DIST_DIR/parcel-customer-docs-$VERSION.zip"
 
 mkdir -p "$DIST_DIR"
 "$BASE_DIR/scripts/assemble-customer-docs.sh" "$STAGE_DIR"

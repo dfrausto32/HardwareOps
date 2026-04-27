@@ -1,12 +1,12 @@
 # CI Workflows
 
-HardwareOps supports two CI integration patterns:
+Parcel supports two CI integration patterns:
 
-1. **Push** - CI uploads the artifact to HardwareOps
-2. **Pull** - HardwareOps pulls the artifact from a repository URL
+1. **Push** - CI uploads the artifact to Parcel
+2. **Pull** - Parcel pulls the artifact from a repository URL
 
 For both workflows, CI can authenticate with:
-- a static HardwareOps service token, or
+- a static Parcel service token, or
 - workload identity exchange using an external OIDC job token
 
 ## 1. Push workflow
@@ -16,7 +16,7 @@ Used when CI should publish the built artifact directly.
 Flow:
 1. package the artifact
 2. optionally sign it
-3. request presigned upload from HardwareOps
+3. request presigned upload from Parcel
 4. upload to object storage
 5. complete artifact registration
 
@@ -31,8 +31,8 @@ Helper:
 Used when the built artifact already exists in Artifactory or another repository.
 
 Flow:
-1. CI tells HardwareOps the artifact metadata and source
-2. HardwareOps downloads the artifact
+1. CI tells Parcel the artifact metadata and source
+2. Parcel downloads the artifact
 3. checksum and trust policy are enforced during registration
 
 Helper:
@@ -45,7 +45,7 @@ Helper:
 
 Recommended for connected CI systems.
 
-Instead of storing a long-lived `HWOPS_CI_SERVICE_TOKEN`, the CI job presents its own OIDC token and exchanges it for a short-lived HardwareOps token.
+Instead of storing a long-lived `HWOPS_CI_SERVICE_TOKEN`, the CI job presents its own OIDC token and exchanges it for a short-lived Parcel token.
 
 Exchange endpoint:
 
@@ -133,7 +133,7 @@ If Jenkins cannot provide an OIDC token yet, it can still use a static service t
 
 Recommended production posture:
 - sign artifacts in CI before ingest
-- configure trusted signing keys in HardwareOps
+- configure trusted signing keys in Parcel
 - require verified artifacts for controlled environments
 
 ## 8. When to use push vs pull
@@ -144,4 +144,4 @@ Use **push** when:
 
 Use **pull** when:
 - the artifact already lives in Artifactory or another approved repository
-- you want HardwareOps to ingest from the repository of record
+- you want Parcel to ingest from the repository of record

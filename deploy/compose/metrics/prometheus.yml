@@ -3,7 +3,7 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
-  - job_name: "hardwareops-control-plane"
+  - job_name: "parcel-control-plane"
     metrics_path: /metrics
     scheme: https
     tls_config:

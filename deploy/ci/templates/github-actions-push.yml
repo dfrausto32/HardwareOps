@@ -41,11 +41,11 @@ jobs:
         if: ${{ secrets.HWOPS_CA_CERT_B64 != '' }}
         run: echo "${{ secrets.HWOPS_CA_CERT_B64 }}" | base64 -d > /tmp/hwops-ca.crt
 
-      - name: Upload artifact via HardwareOps API
+      - name: Upload artifact via Parcel API
         env:
           BASE_URL: ${{ secrets.HWOPS_BASE_URL }}
           CI_SERVICE_TOKEN: ${{ secrets.HWOPS_CI_SERVICE_TOKEN }}
-          CI_WORKLOAD_IDENTITY_AUDIENCE: ${{ vars.HWOPS_WORKLOAD_IDENTITY_AUDIENCE || 'hardwareops-ci' }}
+          CI_WORKLOAD_IDENTITY_AUDIENCE: ${{ vars.HWOPS_WORKLOAD_IDENTITY_AUDIENCE || 'parcel-ci' }}
           CA_CERT_PATH: /tmp/hwops-ca.crt
           ARTIFACT_NAME: ${{ inputs.artifact_name }}
           ARTIFACT_VERSION: ${{ inputs.artifact_version }}

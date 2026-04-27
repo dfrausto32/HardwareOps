@@ -6,8 +6,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/events"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/events"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 // ArtifactScanJob wraps a Scanner and persists results to the store.

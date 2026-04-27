@@ -11,12 +11,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/auth"
-	"github.com/hardwareops/control-plane/internal/globalplane"
-	globalhttp "github.com/hardwareops/control-plane/internal/globalplane/httpapi"
-	"github.com/hardwareops/control-plane/internal/globalplane/sync"
-	"github.com/hardwareops/control-plane/internal/migrate"
-	"github.com/hardwareops/control-plane/internal/objectstore"
+	"github.com/parcel/control-plane/internal/auth"
+	"github.com/parcel/control-plane/internal/globalplane"
+	globalhttp "github.com/parcel/control-plane/internal/globalplane/httpapi"
+	"github.com/parcel/control-plane/internal/globalplane/sync"
+	"github.com/parcel/control-plane/internal/migrate"
+	"github.com/parcel/control-plane/internal/objectstore"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -49,7 +49,7 @@ func main() {
 	if cfg.JWTSecret == "" {
 		authMode = "disabled"
 	}
-	authMgr, err := auth.NewManager(authMode, cfg.JWTSecret, 12*time.Hour, "hardwareops-global", store)
+	authMgr, err := auth.NewManager(authMode, cfg.JWTSecret, 12*time.Hour, "parcel-global", store)
 	if err != nil {
 		logger.Fatalf("auth manager: %v", err)
 	}

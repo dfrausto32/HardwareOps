@@ -114,13 +114,13 @@ resource "aws_iam_role_policy_attachment" "task_managed" {
 }
 
 resource "aws_cloudwatch_log_group" "control_plane" {
-  name              = "/hardwareops/${var.name_prefix}/control-plane"
+  name              = "/parcel/${var.name_prefix}/control-plane"
   retention_in_days = 30
   tags              = var.tags
 }
 
 resource "aws_cloudwatch_log_group" "gateway" {
-  name              = "/hardwareops/${var.name_prefix}/gateway"
+  name              = "/parcel/${var.name_prefix}/gateway"
   retention_in_days = 30
   tags              = var.tags
 }
@@ -128,7 +128,7 @@ resource "aws_cloudwatch_log_group" "gateway" {
 resource "aws_cloudwatch_log_group" "demo_agents" {
   count = local.demo_agents_enabled ? 1 : 0
 
-  name              = "/hardwareops/${var.name_prefix}/demo-agents"
+  name              = "/parcel/${var.name_prefix}/demo-agents"
   retention_in_days = 30
   tags              = var.tags
 }

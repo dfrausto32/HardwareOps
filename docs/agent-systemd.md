@@ -12,16 +12,16 @@ when the request is approved, and then continues into the normal mTLS check-in l
 Operator host:
 
 ```bash
-export PUBLIC_BASE_URL=https://hardwareops.internal
-export AGENT_BASE_URL=https://agent.hardwareops.internal
-export CA_CERT=/opt/hardwareops/certs/ca.crt
+export PUBLIC_BASE_URL=https://parcel.internal
+export AGENT_BASE_URL=https://agent.parcel.internal
+export CA_CERT=/opt/parcel/certs/ca.crt
 ```
 
 Agent host:
 
 ```bash
-export CONTROL_PLANE_URL=https://agent.hardwareops.internal
-export CONTROL_PLANE_CA_CERT_SRC=/opt/hardwareops/certs/ca.crt
+export CONTROL_PLANE_URL=https://agent.parcel.internal
+export CONTROL_PLANE_CA_CERT_SRC=/opt/parcel/certs/ca.crt
 ```
 
 Use `AGENT_BASE_URL` for agents. `PUBLIC_BASE_URL` is for the UI/operator API.
@@ -37,8 +37,8 @@ From the repo root:
 Then copy the Linux bundle to the target host and extract it:
 
 ```bash
-tar -xzf hardwareops-agent-<version>-linux-<arch>.tar.gz
-cd hardwareops-agent-<version>-linux-<arch>
+tar -xzf parcel-agent-<version>-linux-<arch>.tar.gz
+cd parcel-agent-<version>-linux-<arch>
 ```
 
 Install Ubuntu package prerequisites on the agent host:
@@ -52,8 +52,8 @@ sudo ./scripts/install-agent-deps-ubuntu.sh
 Copy the control-plane trust anchor to the agent host before starting the service:
 
 ```bash
-sudo mkdir -p /opt/hardwareops/certs
-sudo install -m 0644 /path/to/ca.crt /opt/hardwareops/certs/ca.crt
+sudo mkdir -p /opt/parcel/certs
+sudo install -m 0644 /path/to/ca.crt /opt/parcel/certs/ca.crt
 ```
 
 If your deployment uses a publicly trusted server certificate instead of a private CA,
@@ -100,7 +100,7 @@ so `sudo` does not need environment passthrough configuration.
 
 ```bash
 sudo ./scripts/agent-install.sh \
-  AGENT_SRC=./hardwareops-agent \
+  AGENT_SRC=./parcel-agent \
   CONTROL_PLANE_URL="$CONTROL_PLANE_URL" \
   CONTROL_PLANE_CA_CERT_SRC="$CONTROL_PLANE_CA_CERT_SRC" \
   AGENT_ENROLL_MODE=approval \
@@ -112,7 +112,7 @@ Public-CA variant:
 
 ```bash
 sudo ./scripts/agent-install.sh \
-  AGENT_SRC=./hardwareops-agent \
+  AGENT_SRC=./parcel-agent \
   CONTROL_PLANE_URL="$CONTROL_PLANE_URL" \
   USE_SYSTEM_CA=1 \
   AGENT_ENROLL_MODE=approval \
@@ -121,24 +121,24 @@ sudo ./scripts/agent-install.sh \
 ```
 
 What this does:
-- installs `/usr/local/bin/hardwareops-agent`
-- writes `/etc/hardwareops/agent/agent.env`
-- stages the control-plane CA at `/etc/hardwareops/agent/certs/ca.crt`
-- enables and starts `hardwareops-agent.service`
+- installs `/usr/local/bin/parcel-agent`
+- writes `/etc/parcel/agent/agent.env`
+- stages the control-plane CA at `/etc/parcel/agent/certs/ca.crt`
+- enables and starts `parcel-agent.service`
 
 Approval-mode defaults written into `agent.env`:
-- `DEVICE_CERT_PATH=/etc/hardwareops/agent/certs/device.crt`
-- `DEVICE_KEY_PATH=/etc/hardwareops/agent/certs/device.key`
-- `DEVICE_ID_PATH=/var/lib/hardwareops/agent/device-id`
-- `BOOTSTRAP_STATE_PATH=/var/lib/hardwareops/agent/bootstrap-state.json`
+- `DEVICE_CERT_PATH=/etc/parcel/agent/certs/device.crt`
+- `DEVICE_KEY_PATH=/etc/parcel/agent/certs/device.key`
+- `DEVICE_ID_PATH=/var/lib/parcel/agent/device-id`
+- `BOOTSTRAP_STATE_PATH=/var/lib/parcel/agent/bootstrap-state.json`
 
 ## 5) Confirm the service is waiting for approval
 
 On the agent host:
 
 ```bash
-sudo systemctl status hardwareops-agent --no-pager
-sudo journalctl -u hardwareops-agent -f
+sudo systemctl status parcel-agent --no-pager
+sudo journalctl -u parcel-agent -f
 ```
 
 Expected log sequence before approval:
@@ -177,10 +177,10 @@ curl --silent --show-error --fail --cacert "$CA_CERT" \
 On the agent host:
 
 ```bash
-sudo test -s /etc/hardwareops/agent/certs/device.crt
-sudo test -s /etc/hardwareops/agent/certs/device.key
-sudo cat /var/lib/hardwareops/agent/device-id
-sudo test ! -e /var/lib/hardwareops/agent/bootstrap-state.json
+sudo test -s /etc/parcel/agent/certs/device.crt
+sudo test -s /etc/parcel/agent/certs/device.key
+sudo cat /var/lib/parcel/agent/device-id
+sudo test ! -e /var/lib/parcel/agent/bootstrap-state.json
 ```
 
 Expected journal entries after approval:
@@ -190,7 +190,7 @@ Expected journal entries after approval:
 Operator-side verification:
 
 ```bash
-DEVICE_ID=$(sudo cat /var/lib/hardwareops/agent/device-id)
+DEVICE_ID=$(sudo cat /var/lib/parcel/agent/device-id)
 
 curl --silent --show-error --fail --cacert "$CA_CERT" \
   -H "Authorization: Bearer $AUTH_TOKEN" \
@@ -210,14 +210,14 @@ The direct token path is still available when you intentionally want the older f
 sudo CONTROL_PLANE_URL="$CONTROL_PLANE_URL" \
      CA_CERT_PATH="$CA_CERT" \
      ./scripts/agent-enroll.sh
-sudo systemctl restart hardwareops-agent
+sudo systemctl restart parcel-agent
 ```
 
 ## Troubleshooting
 
 ### Service exits immediately in approval mode
 
-Check `/etc/hardwareops/agent/agent.env` for:
+Check `/etc/parcel/agent/agent.env` for:
 - `CONTROL_PLANE_URL`
 - `AGENT_ENROLL_MODE=approval`
 - `ENROLLMENT_PROFILE_TOKEN`
@@ -231,8 +231,8 @@ In split-host on-prem deployments the `agent.*` host handles runtime enrollment 
 ### `permission denied` on `device.key`
 
 ```bash
-sudo chown -R hardwareops:hardwareops /etc/hardwareops/agent/certs
-sudo systemctl restart hardwareops-agent
+sudo chown -R parcel:parcel /etc/parcel/agent/certs
+sudo systemctl restart parcel-agent
 ```
 
 ### TLS mismatch or untrusted server cert
@@ -241,7 +241,7 @@ Re-copy the latest control-plane CA and rerun the installer to rewrite `agent.en
 
 ```bash
 sudo ./scripts/agent-install.sh \
-  AGENT_SRC=/usr/local/bin/hardwareops-agent \
+  AGENT_SRC=/usr/local/bin/parcel-agent \
   CONTROL_PLANE_URL="$CONTROL_PLANE_URL" \
   CONTROL_PLANE_CA_CERT_SRC="$CONTROL_PLANE_CA_CERT_SRC" \
   AGENT_ENROLL_MODE=approval \

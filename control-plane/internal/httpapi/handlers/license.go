@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/hardwareops/control-plane/internal/license"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/license"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 var errLicenseLimitExceeded = errors.New("device limit exceeded")

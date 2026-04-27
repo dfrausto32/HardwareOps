@@ -18,7 +18,7 @@ EXPECT_SIGNED_RESULT=${EXPECT_SIGNED_RESULT:-accept}
 RUN_WRONG_KEY_TEST=${RUN_WRONG_KEY_TEST:-0}
 EXPECT_WRONG_KEY_RESULT=${EXPECT_WRONG_KEY_RESULT:-reject}
 
-TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/hardwareops-trust-test-XXXXXX")
+TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/parcel-trust-test-XXXXXX")
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
 usage() {

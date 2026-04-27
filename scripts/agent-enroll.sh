@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONTROL_PLANE_URL=${CONTROL_PLANE_URL:-https://hardwareops.internal}
-CERT_DIR=${CERT_DIR:-/etc/hardwareops/agent/certs}
-DEVICE_ID_PATH=${DEVICE_ID_PATH:-/var/lib/hardwareops/agent/device-id}
+CONTROL_PLANE_URL=${CONTROL_PLANE_URL:-https://parcel.internal}
+CERT_DIR=${CERT_DIR:-/etc/parcel/agent/certs}
+DEVICE_ID_PATH=${DEVICE_ID_PATH:-/var/lib/parcel/agent/device-id}
 CA_CERT_PATH=${CA_CERT_PATH:-}
 INSECURE=${INSECURE:-0}
-AGENT_USER=${AGENT_USER:-hardwareops}
-AGENT_GROUP=${AGENT_GROUP:-hardwareops}
+AGENT_USER=${AGENT_USER:-parcel}
+AGENT_GROUP=${AGENT_GROUP:-parcel}
 
 mkdir -p "$CERT_DIR"
 
@@ -30,7 +30,7 @@ CA_CERT_OUT="$CERT_DIR/ca.crt"
 
 openssl req -newkey rsa:2048 -nodes \
   -keyout "$DEVICE_KEY" -out "$DEVICE_CSR" \
-  -subj "/CN=hardwareops-device"
+  -subj "/CN=parcel-device"
 
 TOKEN_JSON=$(curl -s "${curl_opts[@]}" -X POST "$CONTROL_PLANE_URL/api/v1/enrollments" \
   -H "Content-Type: application/json" \

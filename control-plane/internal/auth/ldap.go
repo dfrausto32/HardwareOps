@@ -10,8 +10,8 @@ import (
 
 	ldap "github.com/go-ldap/ldap/v3"
 	"github.com/google/uuid"
-	"github.com/hardwareops/control-plane/internal/config"
-	"github.com/hardwareops/control-plane/internal/store"
+	"github.com/parcel/control-plane/internal/config"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 var (

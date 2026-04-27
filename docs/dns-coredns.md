@@ -3,7 +3,7 @@
 Canonical deployment flow: `deploy.md`  
 Use this file for DNS-specific setup details.
 
-This sets up a simple local DNS server so all clients can resolve `hardwareops.internal`.
+This sets up a simple local DNS server so all clients can resolve `parcel.internal`.
 Avoid `.local` domains because most Linux distros treat them as **mDNS** and browsers/curl won’t query unicast DNS.
 For WSL + VirtualBox testing, **run CoreDNS on the control‑plane VM**, not inside WSL.
 
@@ -22,7 +22,7 @@ This generates a zone file with:
 
 Manual path (edit the sample zone file):
 ```
-deploy/dns/db.hardwareops.internal
+deploy/dns/db.parcel.internal
 ```
 Update these lines:
 ```
@@ -36,7 +36,7 @@ agent IN A <CONTROL_PLANE_IP>
 docker run -d --name coredns \
   -p 53:53/udp -p 53:53/tcp \
   -v $(pwd)/deploy/dns/Corefile:/etc/coredns/Corefile:ro \
-  -v $(pwd)/deploy/dns/db.hardwareops.internal:/etc/coredns/db.hardwareops.internal:ro \
+  -v $(pwd)/deploy/dns/db.parcel.internal:/etc/coredns/db.parcel.internal:ro \
   coredns/coredns:1.11.1 -conf /etc/coredns/Corefile
 ```
 
@@ -81,7 +81,7 @@ macOS:
 
 ## 5) Verify
 ```
-nslookup hardwareops.internal <DNS_SERVER_IP>
+nslookup parcel.internal <DNS_SERVER_IP>
 ```
 
 You should see the control‑plane server IP returned.
@@ -95,7 +95,7 @@ If CoreDNS is running **on the control‑plane VM itself**, you can either:
 
 **A) Use /etc/hosts for local checks (simplest)**  
 ```
-echo "127.0.0.1 hardwareops.internal" | sudo tee -a /etc/hosts
+echo "127.0.0.1 parcel.internal" | sudo tee -a /etc/hosts
 ```
 
 **B) Point the CP VM resolver to localhost (recommended for full DNS flow)**  
@@ -105,5 +105,5 @@ DNS_SERVER=127.0.0.1 MODE=manual ./scripts/set-dns.sh
 
 Verify from the agent VM (not the CP VM):
 ```
-nslookup hardwareops.internal <CONTROL_PLANE_IP>
+nslookup parcel.internal <CONTROL_PLANE_IP>
 ```

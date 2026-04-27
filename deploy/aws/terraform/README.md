@@ -1,4 +1,4 @@
-# HardwareOps AWS Terraform Scaffold
+# Parcel AWS Terraform Scaffold
 
 This directory is a production-oriented Terraform scaffold for **vendor-hosted, per-customer** AWS deployments.
 
@@ -96,7 +96,7 @@ After apply, run:
    BASE_URL=https://app.<customer-domain> \
    INSECURE=1 \
    RUN_SETUP=0 \
-   SETUP_OUTPUT_DIR=/tmp/hardwareops-artifactory-demo \
+   SETUP_OUTPUT_DIR=/tmp/parcel-artifactory-demo \
    ./scripts/test-artifactory-adapter.sh
    ```
 4. Expected: `/api/v1/artifacts/pull` returns `200`, artifact appears in UI, and audit includes `artifact.pull` with `sourceKind=artifactory`.
@@ -110,14 +110,14 @@ Use this when you want `source.credentialRef` to resolve in cloud deployments.
    AWS_REGION=us-east-1
    CUSTOMER=parcel
    ENV=dev
-   SECRET_NAME="hardwareops/${CUSTOMER}/${ENV}/artifact-pull-credentials"
+   SECRET_NAME="parcel/${CUSTOMER}/${ENV}/artifact-pull-credentials"
 
    aws --profile "$AWS_PROFILE" --region "$AWS_REGION" secretsmanager create-secret \
      --name "$SECRET_NAME" \
-     --secret-string file:///tmp/hardwareops-artifactory-demo/pull-credentials.json \
+     --secret-string file:///tmp/parcel-artifactory-demo/pull-credentials.json \
    || aws --profile "$AWS_PROFILE" --region "$AWS_REGION" secretsmanager put-secret-value \
      --secret-id "$SECRET_NAME" \
-     --secret-string file:///tmp/hardwareops-artifactory-demo/pull-credentials.json
+     --secret-string file:///tmp/parcel-artifactory-demo/pull-credentials.json
    ```
 
 2. Get the secret ARN (recommended form for Terraform input):
@@ -147,7 +147,7 @@ Use this when you want `source.credentialRef` to resolve in cloud deployments.
    BASE_URL=https://app.<customer-domain> \
    INSECURE=1 \
    RUN_SETUP=0 \
-   SETUP_OUTPUT_DIR=/tmp/hardwareops-artifactory-demo \
+   SETUP_OUTPUT_DIR=/tmp/parcel-artifactory-demo \
    AUTH_EMAIL=<bootstrap-admin-email> \
    AUTH_PASSWORD=<bootstrap-admin-password> \
    ./scripts/test-artifactory-adapter.sh
@@ -164,7 +164,7 @@ Credential JSON format must be a ref map, for example:
 ```
 
 ## Add AWS Secrets Manager for workload identity providers (step-by-step)
-Use this when CI jobs should exchange GitHub/GitLab/Jenkins OIDC tokens for short-lived HardwareOps publish tokens.
+Use this when CI jobs should exchange GitHub/GitLab/Jenkins OIDC tokens for short-lived Parcel publish tokens.
 
 1. Create a provider config JSON file:
    ```json
@@ -172,7 +172,7 @@ Use this when CI jobs should exchange GitHub/GitLab/Jenkins OIDC tokens for shor
      {
        "name": "github-actions",
        "issuer": "https://token.actions.githubusercontent.com",
-       "audience": "hardwareops-ci",
+       "audience": "parcel-ci",
        "allowedScopes": ["artifact.publish"],
        "defaultScopes": ["artifact.publish"],
        "ttl": "15m",
@@ -191,7 +191,7 @@ Use this when CI jobs should exchange GitHub/GitLab/Jenkins OIDC tokens for shor
    AWS_REGION=us-east-1
    CUSTOMER=parcel
    ENV=dev
-   SECRET_NAME="hardwareops/${CUSTOMER}/${ENV}/workload-identity-providers"
+   SECRET_NAME="parcel/${CUSTOMER}/${ENV}/workload-identity-providers"
 
    aws --profile "$AWS_PROFILE" --region "$AWS_REGION" secretsmanager create-secret \
      --name "$SECRET_NAME" \
@@ -248,20 +248,20 @@ By default `DATABASE_URL` is injected as plaintext in ECS task environment varia
 1. Create a Secrets Manager secret with the full connection string as its value:
    ```bash
    aws secretsmanager create-secret \
-     --name "hardwareops/customer-a/prod/database-url" \
-     --secret-string "postgres://hardwareops:<password>@<rds-endpoint>:5432/hardwareops?sslmode=require"
+     --name "parcel/customer-a/prod/database-url" \
+     --secret-string "postgres://parcel:<password>@<rds-endpoint>:5432/parcel?sslmode=require"
    ```
 
 2. Get the ARN:
    ```bash
    aws secretsmanager describe-secret \
-     --secret-id "hardwareops/customer-a/prod/database-url" \
+     --secret-id "parcel/customer-a/prod/database-url" \
      --query ARN --output text
    ```
 
 3. Set in your environment `terraform.tfvars`:
    ```hcl
-   database_url_secret_arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:hardwareops/customer-a/prod/database-url-AbCdEf"
+   database_url_secret_arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:parcel/customer-a/prod/database-url-AbCdEf"
    ```
 
 4. Apply Terraform — `DATABASE_URL` will now be in the ECS task definition `secrets` block (injected via `valueFrom`) rather than the plaintext `environment` block.

@@ -40,7 +40,7 @@ Use the dedicated test scripts:
 ```
 
 This generates a dedicated lab workspace under `.tmp/prod-docker`:
-This generates a dedicated lab workspace (default: `/tmp/hardwareops-prod-docker`):
+This generates a dedicated lab workspace (default: `/tmp/parcel-prod-docker`):
 
 - `<LAB_ROOT>/.env.onprem`
 - `<LAB_ROOT>/certs/*`
@@ -128,7 +128,7 @@ Then run the dedicated onboarding validation:
 
 What this covers:
 - creates an enrollment profile in the running lab
-- extracts the packaged `hardwareops-agent` Linux bundle
+- extracts the packaged `parcel-agent` Linux bundle
 - runs `scripts/agent-install.sh` inside an ephemeral Ubuntu container
 - starts the real Go agent in `AGENT_ENROLL_MODE=approval`
 - verifies the request waits in the pending queue until operator approval
@@ -148,7 +148,7 @@ API health check:
 
 ```bash
 curl --resolve hwops.localhost:443:127.0.0.1 \
-  --cacert /tmp/hardwareops-prod-docker/certs/ca.crt \
+  --cacert /tmp/parcel-prod-docker/certs/ca.crt \
   https://hwops.localhost/healthz
 ```
 

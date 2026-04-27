@@ -32,7 +32,7 @@ USAGE
 fi
 
 if [ -z "$OUT_PATH" ]; then
-  out_dir="${TMPDIR:-/tmp}/hardwareops-artifacts"
+  out_dir="${TMPDIR:-/tmp}/parcel-artifacts"
   mkdir -p "$out_dir"
   OUT_PATH=$(mktemp "$out_dir/${ARTIFACT_NAME}-${ARTIFACT_VERSION}-XXXXXX.tar.gz")
 fi

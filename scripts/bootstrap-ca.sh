@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OUT_DIR=${OUT_DIR:-/opt/hardwareops/certs}
-CA_CN=${CA_CN:-HardwareOps Root CA}
+OUT_DIR=${OUT_DIR:-/opt/parcel/certs}
+CA_CN=${CA_CN:-Parcel Root CA}
 CA_DAYS=${CA_DAYS:-3650}
 FORCE=${FORCE:-0}
 
