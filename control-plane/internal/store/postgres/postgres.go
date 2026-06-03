@@ -2802,6 +2802,28 @@ func (s *Store) GetUserByExternalID(provider, externalID string) (store.User, bo
 	return u, true, nil
 }
 
+func (s *Store) GetUserByExternalID(provider, externalID string) (store.User, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var u store.User
+	err := s.pool.QueryRow(ctx, `
+		SELECT user_id, email, COALESCE(display_name, ''), password_hash, COALESCE(roles, '[]'::jsonb),
+		       disabled, COALESCE(auth_provider, 'local'), COALESCE(external_id, ''), created_at, updated_at,
+		       COALESCE(last_login_at, '0001-01-01'::timestamptz)
+		FROM users
+		WHERE auth_provider = $1 AND external_id = $2 AND NOT disabled
+		LIMIT 1
+	`, provider, externalID).Scan(&u.UserID, &u.Email, &u.DisplayName, &u.PasswordHash, &u.RolesJSON, &u.Disabled,
+		&u.AuthProvider, &u.ExternalID, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.User{}, false, nil
+	}
+	if err != nil {
+		return store.User{}, false, err
+	}
+	return u, true, nil
+}
+
 func (s *Store) ListUsers(limit, offset int) ([]store.User, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
