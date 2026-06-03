@@ -1,0 +1,138 @@
+name: E2E Integration Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:  # allow manual trigger
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: Full stack E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      # ── Setup ──────────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: control-plane/go.mod
+          cache: true
+          cache-dependency-path: |
+            control-plane/go.sum
+            agent/go.sum
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      # ── Infrastructure ─────────────────────────────────────────────────────
+      - name: Start Postgres + MinIO
+        run: |
+          docker compose -f deploy/compose/docker-compose.e2e.yml up -d
+          echo "Waiting for Postgres health check ..."
+          for i in $(seq 1 30); do
+            docker compose -f deploy/compose/docker-compose.e2e.yml exec -T postgres \
+              pg_isready -U parcel -d parcel_e2e > /dev/null 2>&1 && break
+            sleep 1
+          done
+          echo "Waiting for MinIO health check ..."
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:9010/minio/health/live > /dev/null 2>&1 && break
+            sleep 1
+          done
+          echo "Infrastructure ready"
+
+      # ── Build ──────────────────────────────────────────────────────────────
+      - name: Build control-plane and global-plane
+        working-directory: control-plane
+        run: |
+          go build -o /tmp/e2e-bin/control-plane ./cmd/control-plane
+          go build -o /tmp/e2e-bin/global-plane ./cmd/global-plane
+          echo "Binaries built:"
+          ls -lh /tmp/e2e-bin/
+
+      # ── Go unit tests (fast — run before the heavier E2E suite) ───────────
+      - name: Go unit tests — control-plane
+        working-directory: control-plane
+        run: go test ./...
+
+      - name: Go unit tests — agent
+        working-directory: agent
+        run: go test ./...
+
+      - name: UI RBAC tests
+        working-directory: ui-generic
+        run: npm ci --silent && npm run test:rbac
+
+      # ── E2E suite ──────────────────────────────────────────────────────────
+      - name: Run E2E suite
+        env:
+          E2E_SKIP_BUILD: "1"    # binaries already built above
+          E2E_KEEP_INFRA: "1"   # keep infra for log collection step
+          BIN_DIR: /tmp/e2e-bin
+          LOG_DIR: /tmp/parcel-e2e-logs
+        run: |
+          mkdir -p /tmp/parcel-e2e-logs
+          ./scripts/e2e-suite.sh
+        timeout-minutes: 20
+
+      # ── Artifacts ──────────────────────────────────────────────────────────
+      - name: Upload E2E logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-${{ github.run_number }}
+          path: /tmp/parcel-e2e-logs/
+          retention-days: 7
+
+      # ── Cleanup ────────────────────────────────────────────────────────────
+      - name: Stop infrastructure
+        if: always()
+        run: docker compose -f deploy/compose/docker-compose.e2e.yml down -v --remove-orphans
+
+  # ── Unit-tests-only path (fast, on every PR) ────────────────────────────────
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: control-plane/go.mod
+          cache: true
+          cache-dependency-path: |
+            control-plane/go.sum
+            agent/go.sum
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Control-plane unit tests
+        working-directory: control-plane
+        run: go test ./...
+
+      - name: Agent unit tests
+        working-directory: agent
+        run: go test ./...
+
+      - name: UI RBAC tests
+        working-directory: ui-generic
+        run: npm ci --silent && npm run test:rbac
