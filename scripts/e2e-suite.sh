@@ -272,6 +272,11 @@ run_scenario "multi-agent" '
   TOKEN=$(python3 -c "import json,sys; print(json.loads(sys.stdin.read())[\"token\"])" <<<"$TOKEN_RESP")
 
   log "Enrolling and checking in 3 agents ..."
+  # Each agent gets a unique HARDWARE_IDENTITY so they appear as distinct devices
+  # to the control-plane's device identity conflict detection. Without this, all
+  # three would derive the same hardware ID from /etc/machine-id, which would
+  # trigger conflict warnings in audit mode and hard rejections in enforce mode.
+  # LICENSE_ENFORCE is not set (defaults false) so the device cap is not checked.
   PIDS=()
   for i in 1 2 3; do
     STATE_PATH="'"$LOG_DIR"'/multi-agent-state-${i}.json"
@@ -285,6 +290,7 @@ run_scenario "multi-agent" '
       ARTIFACT_ROOT="$ART_ROOT" \
       CA_CERT_PATH="" \
       SKIP_TLS_VERIFY=1 \
+      HARDWARE_IDENTITY="e2e-agent-${i}-$(hostname)" \
       go run ./cmd/agent -once 2>&1
     ) >> "'"$LOG_DIR"'/multi-agent-${i}.log" 2>&1 &
     PIDS+=($!)
