@@ -23,7 +23,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Operational Hardening (between B and C) | 🟢 Complete | Pull-boundary, token exposure, startup guardrails, break-glass backend, proxy trust policy, and abuse controls are all shipped. |
 | Phase C — Enterprise Readiness | 🟢 Complete | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, artifact tracking policies, the local-auth recovery stack (recovery codes, reset tokens, break-glass CLI), CI workload identity federation, supply-chain provenance policy (Cosign/Sigstore), LDAP/AD auth, and Vault secrets integration are all shipped. |
 | Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Connected email delivery complete. TOTP MFA for local accounts shipped. Remaining Phase D work is live-deployment acceptance gate execution (operational) and full VPC reference diagram (docs). |
-| Phase E — Federated Multi-Region | 🟡 In progress | Hub-and-spoke federation layer: global management plane above regional control planes. Agents unchanged. E1 (global aggregation plane), E2 (artifact federation), E3 (global desired state / policy push), and E4 (sync reconciler) complete. E5–E6 planned. |
+| Phase E — Federated Multi-Region | 🟡 In progress | Hub-and-spoke federation layer: global management plane above regional control planes. Agents unchanged. E1–E5 (aggregation, artifact federation, policy push, sync reconciler, enrollment profiles) complete. E6 (global PKI) planned. |
 
 ### Active work queue (what is still to do)
 
@@ -34,7 +34,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 - **Assign export compliance responsible parties** — `docs/export-compliance.md` Section 6 has TBD owners for BIS filing, restricted-party screening, and ToS maintenance.
 
 ### Prepared next tasks (agent-scoped)
-- `E5-GLOBAL-ENROLLMENT-PROFILES` — enrollment profiles created on the global plane and pushed to regional planes via the federation push mechanism; aggregated pending-enrollment queue visible and approvable from the global UI
+- `E6-GLOBAL-PKI-HIERARCHY` — global root CA with regional intermediate CAs; enables cross-region device identity verification; requires reenrollment of existing devices
 
 ---
 
@@ -86,6 +86,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 - ✅ CI/CD feedback loop (outbound webhooks with HMAC-SHA256, deploy triggers with `immediateRecheckin`, deployment status polling endpoint, scoped service tokens for all CI integration patterns, ICD documentation, and end-to-end smoke test script).
 - ✅ Global desired state / policy push (E3): global groups with label selectors, per-group desired state, fan-out push to all enabled regional planes via `POST /api/v1/federation/policies`, regional policy cache table, lowest-priority fallback during device checkin, and global-plane UI Groups tab with create-group and set-policy modals).
 - ✅ Global policy sync reconciler (E4): `global_policy_sync_status` table tracks per-(group, plane) push state; background `policyReconciler` runs every 90s, detects missed fan-outs and planes not updated within 10 min, re-pushes with 30s/60s/120s/…/30m exponential backoff; fan-out handler writes sync status on success and failure; `GET /api/v1/planes` response enriched with `lastPolicySyncAt` and `lastPolicySyncError`; global UI HealthCards show "policy ok"/"policy warn" chip and last-push timestamp.
+- ✅ Global enrollment profiles and unified pending enrollment queue (E5): `global_enrollment_profiles` table (profile config created on global plane); `global_pending_enrollments_cache` table polled from all regional planes every 60s; `pendingEnrollmentReconciler` in sync Manager; approve/deny proxied to correct regional plane via existing service token; regional pending-enrollment routes now accept `federation.push` scope; global UI Enrollments tab shows profile CRUD and unified queue with per-row Approve/Deny.
 
 ---
 
@@ -737,7 +738,7 @@ Inter-plane authentication uses the existing service token mechanism (`federatio
 - **Notes:** `global_policy_sync_status` table (migration 0008); `policyReconciler` in `sync/` runs on 90s interval; fan-out handler tracks success/failure; `GET /api/v1/planes` exposes `lastPolicySyncAt` + `lastPolicySyncError`; HealthCards in global UI show policy sync chip and timestamp.
 
 #### E5 — Global enrollment profiles
-- **Status:** ⬜ Planned
+- **Status:** 🟢 Complete
 - **Scope:** Enrollment profiles created on the global plane and pushed to regional planes. Enrollment still happens locally (regional CA issues cert; agent connects to regional plane). Global UI shows aggregated pending enrollment queues across all regions; operators can approve/deny from the global UI via proxied API call.
 - **Dependencies:** E1 (global plane); E3 (federation push mechanism); regional planes accept enrollment profile push from global.
 - **Risks:** Profile sync lag if regional plane is offline when profile is created/rotated. Regional planes must fall back to locally cached profiles.
