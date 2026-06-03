@@ -723,12 +723,12 @@ Inter-plane authentication uses the existing service token mechanism (`federatio
 - **Notes:** `global_artifacts` + `artifact_replication_status` tables (global migration 0006); `federation_artifact_ingest` table (regional migration 0033); `store.FederationIngest` type + 3 new Store methods; `UploadFederatedArtifact`, `ListFederatedArtifacts`, `GetFederatedArtifact`, `GetReplicationStatus`, `PresignFederatedArtifact` handlers on global plane; `ReceiveFederatedArtifact` + `GetFederatedBlobStatus` handlers on regional plane under `federation.push` scope; replication reconciler polls every 60 s; Federated tab in GlobalPage.jsx with region confirmed/total chip; Upload artifact modal; `docs/artifact-federation.md` operator runbook; `deploy/global-plane.env.example`.
 
 #### E3 — Global desired state / policy push
-- **Status:** ⬜ Planned
+- **Status:** 🟢 Complete
 - **Scope:** Operators define global group policies from the global plane. Regional planes receive policies, cache them locally, and merge with local overrides (local override always wins). Global plane aggregates execution status across regions. If global plane is unreachable, regional planes continue applying last-cached global policies.
 - **Dependencies:** E1 (global plane); new `global_policy_cache` table and `POST /api/v1/federation/policies` endpoint on regional planes; `global_groups` + `global_desired_state` tables on global DB.
 - **Risks:** Conflict resolution confusion — operators must be able to see whether a device is running under global policy or a local override. Eventual consistency means global execution status view is delayed.
 - **Acceptance:** Operator sets a global desired state for a group; regional planes apply it to matching devices within one check-in cycle; global UI shows per-region execution status (devices updated, pending, overridden). Regional operator can set a local override that takes precedence; global UI surfaces "local override active" for affected devices.
-- **Notes:** Two-tier precedence mirrors the existing device-overrides-group model within a single control plane. Regional `desired_state_device` overrides always win over global policy. Conflict resolution must be visible in both global and regional UIs.
+- **Notes:** Global groups with label selectors, per-group desired state, fan-out push to all enabled regional planes via `POST /api/v1/federation/policies`, regional policy cache table, lowest-priority fallback during device checkin, and global-plane UI Groups tab with create-group and set-policy modals all shipped. Two-tier precedence mirrors the existing device-overrides-group model within a single control plane. Regional `desired_state_device` overrides always win over global policy.
 
 #### E4 — Global enrollment profiles
 - **Status:** ⬜ Planned
