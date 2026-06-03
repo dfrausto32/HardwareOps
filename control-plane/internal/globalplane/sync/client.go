@@ -283,6 +283,93 @@ func (c *regionalClient) DeletePolicy(ctx context.Context, groupID string) error
 	return nil
 }
 
+// PendingEnrollmentRow is the minimal shape returned by GET /api/v1/pending-enrollments.
+type PendingEnrollmentRow struct {
+	RequestID           string          `json:"requestId"`
+	ProfileID           string          `json:"profileId"`
+	Status              string          `json:"status"`
+	SourceIP            string          `json:"sourceIp"`
+	AgentVersion        string          `json:"agentVersion"`
+	HardwareID          string          `json:"hardwareId"`
+	DeniedReason        string          `json:"deniedReason"`
+	MetadataJSON        json.RawMessage `json:"metadata"`
+	CapabilitiesJSON    json.RawMessage `json:"capabilities"`
+	ExpiresAt           *time.Time      `json:"expiresAt"`
+	ApprovalAvailableAt *time.Time      `json:"approvalAvailableAt"`
+	CreatedAt           time.Time       `json:"createdAt"`
+}
+
+// pendingEnrollmentListResponse handles both array and wrapped-items responses.
+type pendingEnrollmentListResponse struct {
+	Items []PendingEnrollmentRow `json:"items"`
+}
+
+// FetchPendingEnrollments retrieves pending enrollments from the regional plane.
+func (c *regionalClient) FetchPendingEnrollments(ctx context.Context) ([]PendingEnrollmentRow, error) {
+	var all []PendingEnrollmentRow
+	offset := 0
+	limit := 500
+	for {
+		url := fmt.Sprintf("%s/api/v1/pending-enrollments?status=pending&limit=%d&offset=%d", c.baseURL, limit, offset)
+		// The regional plane returns {"items": [...]}
+		var page pendingEnrollmentListResponse
+		if err := c.getJSON(ctx, url, &page); err != nil {
+			return nil, fmt.Errorf("fetch pending enrollments: %w", err)
+		}
+		all = append(all, page.Items...)
+		if len(page.Items) < limit {
+			break
+		}
+		offset += limit
+	}
+	return all, nil
+}
+
+// ApprovePendingEnrollment proxies an approve call to the regional plane.
+func (c *regionalClient) ApprovePendingEnrollment(ctx context.Context, requestID string) error {
+	url := fmt.Sprintf("%s/api/v1/pending-enrollments/%s/approve", c.baseURL, requestID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))
+	}
+	return nil
+}
+
+// DenyPendingEnrollment proxies a deny call to the regional plane.
+func (c *regionalClient) DenyPendingEnrollment(ctx context.Context, requestID, reason string) error {
+	body, err := json.Marshal(map[string]string{"reason": reason})
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s/api/v1/pending-enrollments/%s/deny", c.baseURL, requestID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(respBody), 200))
+	}
+	return nil
+}
+
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s

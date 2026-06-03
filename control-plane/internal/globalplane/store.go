@@ -133,6 +133,61 @@ type GlobalDesiredStateWithGroup struct {
 	GlobalDesiredState
 }
 
+// GlobalEnrollmentProfile is an enrollment profile created on the global plane.
+type GlobalEnrollmentProfile struct {
+	ProfileID         string
+	Name              string
+	RequireApproval   bool
+	AllowUntrustedHW  bool
+	ChallengeHint     string
+	ApprovalDelaySec  int
+	MaxUses           int
+	CertValidityDays  int
+	DefaultLabelsJSON []byte
+	Disabled          bool
+	CreatedBy         string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+// GlobalEnrollmentProfileUpdate carries the mutable fields of a global enrollment profile.
+type GlobalEnrollmentProfileUpdate struct {
+	Name              string
+	RequireApproval   bool
+	AllowUntrustedHW  bool
+	ChallengeHint     string
+	ApprovalDelaySec  int
+	MaxUses           int
+	CertValidityDays  int
+	DefaultLabelsJSON []byte
+}
+
+// GlobalPendingEnrollment is a pending enrollment cached from a regional plane.
+type GlobalPendingEnrollment struct {
+	CacheID             string
+	PlaneID             string
+	PlaneName           string // populated on read via join with regional_planes
+	RequestID           string
+	ProfileID           string
+	Status              string
+	SourceIP            string
+	AgentVersion        string
+	HardwareID          string
+	MetadataJSON        []byte
+	CapabilitiesJSON    []byte
+	DeniedReason        string
+	ExpiresAt           *time.Time
+	ApprovalAvailableAt *time.Time
+	CreatedAt           time.Time
+	SyncedAt            time.Time
+}
+
+// GlobalPendingEnrollmentFilter controls list results.
+type GlobalPendingEnrollmentFilter struct {
+	Status  string // empty = all statuses
+	PlaneID string // empty = all planes
+}
+
 // PolicySyncStatus tracks the last policy push result for a (group, plane) pair.
 // The reconciler uses this to detect missed fan-outs and schedule retries.
 type PolicySyncStatus struct {
@@ -199,4 +254,16 @@ type Store interface {
 	UpsertPolicySyncStatus(groupID, planeID string, pushedAt *time.Time, pushErr string, retryCount int) error
 	GetPolicySyncStatus(groupID, planeID string) (PolicySyncStatus, bool, error)
 	ListAllPolicySyncStatus() ([]PolicySyncStatus, error)
+
+	// Global enrollment profiles (E5)
+	CreateGlobalEnrollmentProfile(p GlobalEnrollmentProfile) (GlobalEnrollmentProfile, error)
+	GetGlobalEnrollmentProfile(profileID string) (GlobalEnrollmentProfile, bool, error)
+	ListGlobalEnrollmentProfiles() ([]GlobalEnrollmentProfile, error)
+	UpdateGlobalEnrollmentProfile(profileID string, u GlobalEnrollmentProfileUpdate) (GlobalEnrollmentProfile, error)
+	DeleteGlobalEnrollmentProfile(profileID string) error
+
+	// Pending enrollment cache (E5 reconciler)
+	UpsertGlobalPendingEnrollments(planeID string, items []GlobalPendingEnrollment) error
+	PurgeGlobalPendingEnrollmentsForPlane(planeID string) error
+	ListGlobalPendingEnrollments(filter GlobalPendingEnrollmentFilter) ([]GlobalPendingEnrollment, error)
 }

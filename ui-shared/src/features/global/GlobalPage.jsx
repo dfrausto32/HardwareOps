@@ -163,6 +163,14 @@ export default function GlobalPage({
   const [policyForm, setPolicyForm] = useState({ artifactId: '', desiredVersion: '', desiredConfigRev: '', checkinInterval: '0' })
   const [policyError, setPolicyError] = useState(null)
   const [policySaving, setPolicySaving] = useState(false)
+  // E5 enrollment
+  const [enrollmentProfiles, setEnrollmentProfiles] = useState([])
+  const [pendingEnrollments, setPendingEnrollments] = useState([])
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [profileForm, setProfileForm] = useState({ name: '', requireApproval: true, maxUses: '0', certValidityDays: '365' })
+  const [profileError, setProfileError] = useState(null)
+  const [profileSaving, setProfileSaving] = useState(false)
+  const [enrollFilter, setEnrollFilter] = useState('')
   const pollRef = useRef(null)
 
   const effectiveUrl = globalPlaneUrl || urlInput
@@ -185,7 +193,7 @@ export default function GlobalPage({
     setLoading(true)
     setError(null)
     try {
-      const [planesData, healthData, devicesData, artifactsData, fedData, groupsData, dsData] = await Promise.all([
+      const [planesData, healthData, devicesData, artifactsData, fedData, groupsData, dsData, epData, peData] = await Promise.all([
         apiFetch('/api/v1/planes'),
         apiFetch('/api/v1/health/summary'),
         apiFetch('/api/v1/devices'),
@@ -193,6 +201,8 @@ export default function GlobalPage({
         apiFetch('/api/v1/federation/artifacts').catch(() => []),
         apiFetch('/api/v1/groups').catch(() => []),
         apiFetch('/api/v1/desired-state').catch(() => []),
+        apiFetch('/api/v1/enrollment-profiles').catch(() => []),
+        apiFetch('/api/v1/pending-enrollments').catch(() => []),
       ])
       setPlanes(planesData || [])
       const hm = {}
@@ -205,6 +215,8 @@ export default function GlobalPage({
       setFedArtifacts(fedData || [])
       setGroups(groupsData || [])
       setDesiredStates(dsData || [])
+      setEnrollmentProfiles(epData || [])
+      setPendingEnrollments(peData || [])
     } catch (err) {
       setError(err.message)
     } finally {
@@ -323,7 +335,7 @@ export default function GlobalPage({
         <>
           {/* Tab bar */}
           <div style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid var(--border)', paddingBottom: 0 }}>
-            {[['health', `Planes (${planes.length})`], ['devices', `Devices (${devices.length})`], ['artifacts', `Artifacts (${artifacts.length})`], ['federated', `Federated (${fedArtifacts.length})`], ['groups', `Groups (${groups.length})`]].map(([id, label]) => (
+            {[['health', `Planes (${planes.length})`], ['devices', `Devices (${devices.length})`], ['artifacts', `Artifacts (${artifacts.length})`], ['federated', `Federated (${fedArtifacts.length})`], ['groups', `Groups (${groups.length})`], ['enrollments', `Enrollments (${pendingEnrollments.filter(e => e.status === 'pending').length})`]].map(([id, label]) => (
               <button
                 key={id}
                 className={`chip ${tab === id ? 'active' : ''}`}
@@ -583,7 +595,234 @@ export default function GlobalPage({
               )}
             </>
           )}
+          {/* Enrollments tab */}
+          {tab === 'enrollments' && (
+            <>
+              {/* Enrollment profiles section */}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+                <button className="button" onClick={() => setProfileOpen(true)}>Create profile</button>
+                <span className="muted" style={{ fontSize: 12 }}>
+                  Enrollment profiles define how devices join this deployment.
+                </span>
+              </div>
+              {enrollmentProfiles.length > 0 && (
+                <table className="table" style={{ marginBottom: 24 }}>
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Approval</th>
+                      <th>Max uses</th>
+                      <th>Cert validity</th>
+                      <th>Status</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {enrollmentProfiles.map(p => (
+                      <tr key={p.profileId}>
+                        <td style={{ fontWeight: 500 }}>{p.name}</td>
+                        <td>
+                          <span className={`chip ${p.requireApproval ? 'warning' : 'success'}`} style={{ fontSize: 11 }}>
+                            {p.requireApproval ? 'manual' : 'auto'}
+                          </span>
+                        </td>
+                        <td className="muted" style={{ fontSize: 12 }}>{p.maxUses || '∞'}</td>
+                        <td className="muted" style={{ fontSize: 12 }}>{p.certValidityDays}d</td>
+                        <td>
+                          <span className={`chip ${p.disabled ? 'error' : 'success'}`} style={{ fontSize: 11 }}>
+                            {p.disabled ? 'disabled' : 'active'}
+                          </span>
+                        </td>
+                        <td>
+                          <button
+                            className="button ghost"
+                            style={{ fontSize: 12, padding: '2px 8px' }}
+                            onClick={async () => {
+                              if (!window.confirm(`Delete profile "${p.name}"?`)) return
+                              try {
+                                await apiFetch(`/api/v1/enrollment-profiles/${p.profileId}`, { method: 'DELETE' })
+                                loadAll()
+                              } catch (err) {
+                                alert(err.message)
+                              }
+                            }}
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              {/* Pending enrollments section */}
+              <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>
+                Pending enrollments — unified queue
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                <input
+                  className="input"
+                  placeholder="Filter by request ID, hardware ID or region…"
+                  value={enrollFilter}
+                  onChange={e => setEnrollFilter(e.target.value)}
+                  style={{ maxWidth: 360 }}
+                />
+              </div>
+              {pendingEnrollments.filter(e => {
+                if (!enrollFilter) return true
+                const q = enrollFilter.toLowerCase()
+                return e.requestId?.toLowerCase().includes(q) ||
+                  e.hardwareId?.toLowerCase().includes(q) ||
+                  e.planeName?.toLowerCase().includes(q)
+              }).length === 0 ? (
+                <div className="muted" style={{ textAlign: 'center', padding: '24px 0' }}>
+                  No pending enrollments found.
+                </div>
+              ) : (
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Request ID</th>
+                      <th>Region</th>
+                      <th>Status</th>
+                      <th>Hardware ID</th>
+                      <th>Agent</th>
+                      <th>Source IP</th>
+                      <th>Created</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pendingEnrollments.filter(e => {
+                      if (!enrollFilter) return true
+                      const q = enrollFilter.toLowerCase()
+                      return e.requestId?.toLowerCase().includes(q) ||
+                        e.hardwareId?.toLowerCase().includes(q) ||
+                        e.planeName?.toLowerCase().includes(q)
+                    }).map(e => (
+                      <tr key={`${e.planeId}:${e.requestId}`}>
+                        <td><code style={{ fontSize: 11 }}>{e.requestId?.slice(0, 12)}…</code></td>
+                        <td className="muted" style={{ fontSize: 12 }}>{e.planeName || e.planeId}</td>
+                        <td>
+                          <span className={`chip ${e.status === 'pending' ? 'warning' : e.status === 'approved' ? 'success' : 'error'}`} style={{ fontSize: 11 }}>
+                            {e.status}
+                          </span>
+                        </td>
+                        <td className="muted" style={{ fontSize: 12 }}>{e.hardwareId || '—'}</td>
+                        <td className="muted" style={{ fontSize: 12 }}>{e.agentVersion || '—'}</td>
+                        <td className="muted" style={{ fontSize: 12 }}>{e.sourceIp || '—'}</td>
+                        <td className="muted" style={{ fontSize: 12 }}><RelativeTime iso={e.createdAt} /></td>
+                        <td>
+                          {e.status === 'pending' && (
+                            <div style={{ display: 'flex', gap: 4 }}>
+                              <button
+                                className="button"
+                                style={{ fontSize: 11, padding: '2px 8px' }}
+                                onClick={async () => {
+                                  try {
+                                    await apiFetch(`/api/v1/pending-enrollments/${e.requestId}/approve`, { method: 'POST' })
+                                    loadAll()
+                                  } catch (err) { alert(err.message) }
+                                }}
+                              >
+                                Approve
+                              </button>
+                              <button
+                                className="button ghost"
+                                style={{ fontSize: 11, padding: '2px 8px' }}
+                                onClick={async () => {
+                                  const reason = window.prompt('Deny reason (optional):') ?? ''
+                                  try {
+                                    await apiFetch(`/api/v1/pending-enrollments/${e.requestId}/deny`, {
+                                      method: 'POST',
+                                      body: JSON.stringify({ reason }),
+                                    })
+                                    loadAll()
+                                  } catch (err) { alert(err.message) }
+                                }}
+                              >
+                                Deny
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </>
+          )}
         </>
+      )}
+
+      {/* Create enrollment profile modal */}
+      {profileOpen && (
+        <div className="modal-overlay" onClick={() => setProfileOpen(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 460 }}>
+            <div className="modal-header">
+              <h3>Create enrollment profile</h3>
+              <button className="modal-close" onClick={() => setProfileOpen(false)}>×</button>
+            </div>
+            <form onSubmit={async (e) => {
+              e.preventDefault()
+              setProfileError(null)
+              setProfileSaving(true)
+              try {
+                await apiFetch('/api/v1/enrollment-profiles', {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    name: profileForm.name,
+                    requireApproval: profileForm.requireApproval,
+                    maxUses: parseInt(profileForm.maxUses, 10) || 0,
+                    certValidityDays: parseInt(profileForm.certValidityDays, 10) || 365,
+                  }),
+                })
+                setProfileOpen(false)
+                setProfileForm({ name: '', requireApproval: true, maxUses: '0', certValidityDays: '365' })
+                loadAll()
+              } catch (err) {
+                setProfileError(err.message)
+              } finally {
+                setProfileSaving(false)
+              }
+            }}>
+              <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div>
+                  <label className="label">Name <span style={{ color: '#f27272' }}>*</span></label>
+                  <input className="input" required value={profileForm.name}
+                    onChange={e => setProfileForm(f => ({ ...f, name: e.target.value }))}
+                    placeholder="default-profile" />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <input type="checkbox" id="requireApproval" checked={profileForm.requireApproval}
+                    onChange={e => setProfileForm(f => ({ ...f, requireApproval: e.target.checked }))} />
+                  <label htmlFor="requireApproval" style={{ fontSize: 13 }}>Require manual approval</label>
+                </div>
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <div style={{ flex: 1 }}>
+                    <label className="label">Max uses (0 = unlimited)</label>
+                    <input className="input" type="number" min="0" value={profileForm.maxUses}
+                      onChange={e => setProfileForm(f => ({ ...f, maxUses: e.target.value }))} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label className="label">Cert validity (days)</label>
+                    <input className="input" type="number" min="1" value={profileForm.certValidityDays}
+                      onChange={e => setProfileForm(f => ({ ...f, certValidityDays: e.target.value }))} />
+                  </div>
+                </div>
+                {profileError && <div style={{ color: '#f27272', fontSize: 12 }}>{profileError}</div>}
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="button ghost" onClick={() => setProfileOpen(false)}>Cancel</button>
+                <button type="submit" className="button" disabled={profileSaving}>
+                  {profileSaving ? 'Creating…' : 'Create profile'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
 
       {/* Upload federated artifact modal */}

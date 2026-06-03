@@ -116,6 +116,28 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(requireScopeOrRole(auth.ScopeArtifactRead, "viewer")).
 			Get("/desired-state", handlers.ListGlobalDesiredStates(deps.Store))
 
+		// Global enrollment profiles.
+		r.With(requireScopeOrRole(auth.ScopeDeviceRead, "viewer")).
+			Get("/enrollment-profiles", handlers.ListGlobalEnrollmentProfiles(deps.Store))
+		r.With(requireRole("operator")).
+			Post("/enrollment-profiles", handlers.CreateGlobalEnrollmentProfile(deps.Store, logger))
+		r.Route("/enrollment-profiles/{profileId}", func(r chi.Router) {
+			r.With(requireRole("operator")).
+				Patch("/", handlers.UpdateGlobalEnrollmentProfile(deps.Store, logger))
+			r.With(requireRole("operator")).
+				Delete("/", handlers.DeleteGlobalEnrollmentProfile(deps.Store, logger))
+		})
+
+		// Global pending enrollments (cached from regional planes, approve/deny proxied).
+		r.With(requireScopeOrRole(auth.ScopeDeviceRead, "operator")).
+			Get("/pending-enrollments", handlers.ListGlobalPendingEnrollments(deps.Store))
+		r.Route("/pending-enrollments/{requestId}", func(r chi.Router) {
+			r.With(requireRole("operator")).
+				Post("/approve", handlers.ApproveGlobalPendingEnrollment(deps.Store, deps.TokenEncryptionKey, logger))
+			r.With(requireRole("operator")).
+				Post("/deny", handlers.DenyGlobalPendingEnrollment(deps.Store, deps.TokenEncryptionKey, logger))
+		})
+
 		// Federated artifact management.
 		r.With(requireRole("operator")).
 			Post("/federation/artifacts/upload", handlers.UploadFederatedArtifact(

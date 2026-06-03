@@ -42,6 +42,9 @@ func (m *Manager) Start(ctx context.Context) error {
 	// Policy reconciler: re-pushes global desired-state policies to planes that missed a fan-out.
 	policyRec := newPolicyReconciler(m.store, m.encKey, m.logger, 90*time.Second)
 	go policyRec.run(ctx)
+	// Pending enrollment reconciler: polls regional planes for pending enrollments (unified approval queue).
+	pendingEnrollRec := newPendingEnrollmentReconciler(m.store, m.encKey, m.logger, 60*time.Second)
+	go pendingEnrollRec.run(ctx)
 	<-ctx.Done()
 	m.stopAll()
 	return nil
