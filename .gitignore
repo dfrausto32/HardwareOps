@@ -61,3 +61,5 @@ backend.hcl
 # Generated per-customer AWS deployment inputs
 .aws-customers/
 .claude/
+!.claude/commands/
+!.claude/commands/*.md
