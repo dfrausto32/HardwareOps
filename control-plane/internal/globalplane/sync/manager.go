@@ -31,14 +31,17 @@ func NewManager(store globalplane.Store, encKey []byte, logger *log.Logger) *Man
 }
 
 // Start loads all enabled regional planes and launches their workers.
-// It also starts the replication reconciler. Blocks until ctx is cancelled.
+// It also starts the replication and policy reconcilers. Blocks until ctx is cancelled.
 func (m *Manager) Start(ctx context.Context) error {
 	if err := m.Refresh(ctx); err != nil {
 		return err
 	}
-	// Replication reconciler runs independently on its own interval.
-	reconciler := newReplicationReconciler(m.store, m.encKey, m.logger, 60*time.Second)
-	go reconciler.run(ctx)
+	// Replication reconciler: confirms artifact blobs have arrived in regional planes.
+	replicationRec := newReplicationReconciler(m.store, m.encKey, m.logger, 60*time.Second)
+	go replicationRec.run(ctx)
+	// Policy reconciler: re-pushes global desired-state policies to planes that missed a fan-out.
+	policyRec := newPolicyReconciler(m.store, m.encKey, m.logger, 90*time.Second)
+	go policyRec.run(ctx)
 	<-ctx.Done()
 	m.stopAll()
 	return nil

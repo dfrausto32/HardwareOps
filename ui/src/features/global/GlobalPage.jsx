@@ -39,21 +39,39 @@ function RelativeTime({ iso }) {
 function HealthCard({ plane, health }) {
   const syncError = plane.lastSyncError
   const synced = plane.lastSyncAt
+  const policySyncAt = plane.lastPolicySyncAt
+  const policySyncError = plane.lastPolicySyncError
 
   return (
-    <div className="card" style={{ padding: '16px 20px', minWidth: 220 }}>
+    <div className="card" style={{ padding: '16px 20px', minWidth: 240 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
         <div style={{ fontWeight: 600, fontSize: 14 }}>{plane.name}</div>
-        <span
-          className={`chip ${syncError ? 'error' : 'success'}`}
-          style={{ fontSize: 11 }}
-        >
-          {syncError ? 'sync error' : 'synced'}
-        </span>
+        <div style={{ display: 'flex', gap: 4 }}>
+          <span className={`chip ${syncError ? 'error' : 'success'}`} style={{ fontSize: 11 }}>
+            {syncError ? 'sync error' : 'synced'}
+          </span>
+          {(policySyncAt || policySyncError) && (
+            <span
+              className={`chip ${policySyncError ? 'warning' : 'success'}`}
+              style={{ fontSize: 11 }}
+              title={policySyncError || 'Policies up to date'}
+            >
+              {policySyncError ? 'policy warn' : 'policy ok'}
+            </span>
+          )}
+        </div>
       </div>
-      <div className="muted" style={{ fontSize: 11, marginBottom: 10 }}>
-        {plane.baseUrl} · last sync <RelativeTime iso={synced} />
+      <div className="muted" style={{ fontSize: 11, marginBottom: policySyncAt || policySyncError ? 4 : 10 }}>
+        {plane.baseUrl} · data sync <RelativeTime iso={synced} />
       </div>
+      {(policySyncAt || policySyncError) && (
+        <div className="muted" style={{ fontSize: 11, marginBottom: 10 }}>
+          policy sync{' '}
+          {policySyncError
+            ? <span style={{ color: '#f1c76f' }}>failed · last ok <RelativeTime iso={policySyncAt} /></span>
+            : <RelativeTime iso={policySyncAt} />}
+        </div>
+      )}
       {syncError && (
         <div
           style={{
@@ -67,6 +85,21 @@ function HealthCard({ plane, health }) {
           }}
         >
           {syncError}
+        </div>
+      )}
+      {policySyncError && (
+        <div
+          style={{
+            fontSize: 11,
+            color: '#f1c76f',
+            marginBottom: 10,
+            wordBreak: 'break-all',
+            background: 'rgba(241,199,111,0.08)',
+            borderRadius: 4,
+            padding: '4px 8px',
+          }}
+        >
+          Policy: {policySyncError}
         </div>
       )}
       {health ? (

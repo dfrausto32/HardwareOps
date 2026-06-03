@@ -16,6 +16,7 @@ type planesStore interface {
 	ListRegionalPlanes() ([]globalplane.RegionalPlane, error)
 	UpdateRegionalPlane(planeID, name, baseURL string, encryptedToken []byte, tlsCAPem string, syncIntervalSeconds int) error
 	DeleteRegionalPlane(planeID string) error
+	ListAllPolicySyncStatus() ([]globalplane.PolicySyncStatus, error)
 }
 
 type syncRefresher interface {
@@ -33,7 +34,27 @@ func ListPlanes(st planesStore) http.HandlerFunc {
 		if planes == nil {
 			planes = []globalplane.RegionalPlane{}
 		}
-		// Redact encrypted tokens from the response.
+
+		// Aggregate policy sync summary per plane: most recent success and any error.
+		type syncSummary struct {
+			lastSuccessAt *time.Time
+			lastError     string
+		}
+		syncMap := make(map[string]syncSummary)
+		if statuses, err := st.ListAllPolicySyncStatus(); err == nil {
+			for _, s := range statuses {
+				sum := syncMap[s.PlaneID]
+				if s.PushError == "" && s.PushedAt != nil {
+					if sum.lastSuccessAt == nil || s.PushedAt.After(*sum.lastSuccessAt) {
+						sum.lastSuccessAt = s.PushedAt
+					}
+				} else if s.PushError != "" && sum.lastError == "" {
+					sum.lastError = s.PushError
+				}
+				syncMap[s.PlaneID] = sum
+			}
+		}
+
 		type planeResponse struct {
 			PlaneID             string     `json:"planeId"`
 			Name                string     `json:"name"`
@@ -42,12 +63,15 @@ func ListPlanes(st planesStore) http.HandlerFunc {
 			SyncIntervalSeconds int        `json:"syncIntervalSeconds"`
 			LastSyncAt          *time.Time `json:"lastSyncAt"`
 			LastSyncError       string     `json:"lastSyncError,omitempty"`
+			LastPolicySyncAt    *time.Time `json:"lastPolicySyncAt,omitempty"`
+			LastPolicySyncError string     `json:"lastPolicySyncError,omitempty"`
 			CreatedBy           string     `json:"createdBy"`
 			CreatedAt           time.Time  `json:"createdAt"`
 			UpdatedAt           time.Time  `json:"updatedAt"`
 		}
 		resp := make([]planeResponse, len(planes))
 		for i, p := range planes {
+			sum := syncMap[p.PlaneID]
 			resp[i] = planeResponse{
 				PlaneID:             p.PlaneID,
 				Name:                p.Name,
@@ -56,6 +80,8 @@ func ListPlanes(st planesStore) http.HandlerFunc {
 				SyncIntervalSeconds: p.SyncIntervalSeconds,
 				LastSyncAt:          p.LastSyncAt,
 				LastSyncError:       p.LastSyncError,
+				LastPolicySyncAt:    sum.lastSuccessAt,
+				LastPolicySyncError: sum.lastError,
 				CreatedBy:           p.CreatedBy,
 				CreatedAt:           p.CreatedAt,
 				UpdatedAt:           p.UpdatedAt,

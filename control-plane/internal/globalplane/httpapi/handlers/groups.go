@@ -22,6 +22,7 @@ type groupStore interface {
 	ListGlobalDesiredStatesWithGroups() ([]globalplane.GlobalDesiredStateWithGroup, error)
 	DeleteGlobalDesiredState(groupID string) error
 	ListRegionalPlanes() ([]globalplane.RegionalPlane, error)
+	UpsertPolicySyncStatus(groupID, planeID string, pushedAt *time.Time, pushErr string, retryCount int) error
 }
 
 // ListGlobalGroups handles GET /api/v1/groups.
@@ -221,27 +222,32 @@ func fanOutPushPolicy(st groupStore, encKey []byte, group globalplane.GlobalGrou
 		if !p.Enabled {
 			continue
 		}
-		go pushPolicyToPlane(p, payload, encKey, logger)
+		go pushAndTrackPolicy(p, payload, encKey, st, logger)
 	}
 }
 
-func pushPolicyToPlane(plane globalplane.RegionalPlane, payload gpsync.FederationPolicyPayload, encKey []byte, logger *log.Logger) {
+func pushAndTrackPolicy(plane globalplane.RegionalPlane, payload gpsync.FederationPolicyPayload, encKey []byte, st groupStore, logger *log.Logger) {
 	token, err := globalplane.DecryptToken(plane.EncryptedToken, encKey)
 	if err != nil {
 		logger.Printf("[global-plane] push policy to %s: decrypt token: %v", plane.Name, err)
+		_ = st.UpsertPolicySyncStatus(payload.GroupID, plane.PlaneID, nil, "decrypt token: "+err.Error(), 1)
 		return
 	}
 	client, err := gpsync.NewRegionalClient(plane.BaseURL, token, plane.TLSCAPem)
 	if err != nil {
 		logger.Printf("[global-plane] push policy to %s: build client: %v", plane.Name, err)
+		_ = st.UpsertPolicySyncStatus(payload.GroupID, plane.PlaneID, nil, "build client: "+err.Error(), 1)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := client.PushPolicy(ctx, payload); err != nil {
 		logger.Printf("[global-plane] push policy to %s: %v", plane.Name, err)
+		_ = st.UpsertPolicySyncStatus(payload.GroupID, plane.PlaneID, nil, err.Error(), 1)
 		return
 	}
+	now := time.Now()
+	_ = st.UpsertPolicySyncStatus(payload.GroupID, plane.PlaneID, &now, "", 0)
 	logger.Printf("[global-plane] pushed policy group %s to plane %s", payload.GroupID, plane.Name)
 }
 

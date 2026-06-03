@@ -133,6 +133,20 @@ type GlobalDesiredStateWithGroup struct {
 	GlobalDesiredState
 }
 
+// PolicySyncStatus tracks the last policy push result for a (group, plane) pair.
+// The reconciler uses this to detect missed fan-outs and schedule retries.
+type PolicySyncStatus struct {
+	SyncID        string
+	GroupID       string
+	PlaneID       string
+	PushedAt      *time.Time // last successful push; nil if never succeeded
+	PushError     string     // non-empty if last attempt failed
+	RetryCount    int        // consecutive failure count; reset to 0 on success
+	LastAttemptAt *time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
 // Store is the data access interface for the global aggregation plane.
 type Store interface {
 	// Regional plane registry
@@ -180,4 +194,9 @@ type Store interface {
 	GetGlobalDesiredState(groupID string) (GlobalDesiredState, bool, error)
 	ListGlobalDesiredStatesWithGroups() ([]GlobalDesiredStateWithGroup, error)
 	DeleteGlobalDesiredState(groupID string) error
+
+	// Policy sync status (E4 reconciler)
+	UpsertPolicySyncStatus(groupID, planeID string, pushedAt *time.Time, pushErr string, retryCount int) error
+	GetPolicySyncStatus(groupID, planeID string) (PolicySyncStatus, bool, error)
+	ListAllPolicySyncStatus() ([]PolicySyncStatus, error)
 }
