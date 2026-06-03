@@ -93,7 +93,9 @@ import {
   forgotPassword as apiForgotPassword,
   sendUserInvite as apiSendUserInvite,
 } from './api'
-import { buildPermissionState, firstAllowedKey } from './rbac'
+import { buildPermissionState, firstAllowedKey, hasRole } from './rbac'
+import { variant } from '@variant'
+const { brandName, allowedViews, extraViews, themeOverrides, featureFlags } = variant
 import ArtifactPickerModal from './components/modals/ArtifactPickerModal'
 import ArtifactUploadModal from './components/modals/ArtifactUploadModal'
 import TrustOverrideModal from './components/modals/TrustOverrideModal'
@@ -220,6 +222,12 @@ const navIcons = {
       <line x1="1.5" y1="8" x2="14.5" y2="8"/>
     </svg>
   ),
+  'icon-compliance': (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path d="M8 1L2 3.5V8c0 3.3 2.5 5.8 6 6.9C11.5 13.8 14 11.3 14 8V3.5L8 1z"/>
+      <polyline points="5,8 7,10.5 11,6" fill="none" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  ),
 }
 
 export default function App() {
@@ -326,17 +334,39 @@ export default function App() {
     const hash = window.location.hash.replace('#', '')
     return hash || 'dashboard'
   })
-  const visibleNav = useMemo(
-    () => nav.filter((item) => permissions.views[item.id]),
+  const coreNav = useMemo(
+    () => nav.filter((item) => allowedViews.includes(item.id) && permissions.views[item.id]),
     [permissions],
+  )
+  const extraNavVisible = useMemo(
+    () => extraViews.filter((item) =>
+      !item.requiredRole || hasRole(authUser?.roles || [], item.requiredRole)
+    ),
+    [authUser],
+  )
+  const visibleNav = useMemo(
+    () => [...coreNav, ...extraNavVisible],
+    [coreNav, extraNavVisible],
   )
   const visibleLogsTabs = useMemo(
     () => logsNav.filter((item) => permissions.logsTabs[item.id]),
     [permissions],
   )
+  const extraViewPerms = useMemo(
+    () => Object.fromEntries(
+      extraViews.map(({ id, requiredRole }) => [
+        id, hasRole(authUser?.roles || [], requiredRole || 'viewer'),
+      ])
+    ),
+    [authUser],
+  )
+  const allViewPerms = useMemo(
+    () => ({ ...permissions.views, ...extraViewPerms }),
+    [permissions.views, extraViewPerms],
+  )
   const fallbackView = useMemo(
-    () => firstAllowedKey(permissions.views, 'dashboard'),
-    [permissions],
+    () => firstAllowedKey(allViewPerms, 'dashboard'),
+    [allViewPerms],
   )
   const fallbackLogsTab = useMemo(
     () => firstAllowedKey(permissions.logsTabs, 'events'),
@@ -459,12 +489,12 @@ export default function App() {
   }, [authToken, permissions.canManageUsers])
 
   useEffect(() => {
-    if (!authStatus.loaded || permissions.views[view]) return
+    if (!authStatus.loaded || allViewPerms[view]) return
     setView(fallbackView)
     if (window.location.hash.replace('#', '') !== fallbackView) {
       window.location.hash = fallbackView
     }
-  }, [authStatus.loaded, permissions, view, fallbackView])
+  }, [authStatus.loaded, allViewPerms, view, fallbackView])
 
   useEffect(() => {
     return subscribeAuthExpired(() => {
@@ -1068,6 +1098,16 @@ export default function App() {
     document.documentElement.dataset.theme = theme
     localStorage.setItem('hwops-theme', theme)
   }, [theme])
+
+  useEffect(() => {
+    const root = document.documentElement
+    Object.entries(themeOverrides || {}).forEach(([k, v]) =>
+      root.style.setProperty(
+        `--${k.replace(/([A-Z])/g, '-$1').toLowerCase()}`,
+        v,
+      )
+    )
+  }, [])
 
   useEffect(() => {
     localStorage.setItem('hwops-drawer-width', String(drawerWidth))
@@ -4552,7 +4592,7 @@ export default function App() {
     return (
       <div className="login-screen">
         <div className="login-card">
-          <div className="brand">Parcel</div>
+          <div className="brand">{brandName}</div>
           <div className="status">Checking authentication...</div>
         </div>
       </div>
@@ -4563,7 +4603,7 @@ export default function App() {
     return (
       <div className="login-screen">
         <div className="login-card">
-          <div className="brand">Parcel</div>
+          <div className="brand">{brandName}</div>
           <div className="auth-toggle">
             <button
               className={`tab ${authView === 'login' ? 'active' : ''}`}
@@ -4802,10 +4842,12 @@ export default function App() {
           })}
         </nav>
         <div className="sidebar-footer">
-          <div className="env">
-            API: {apiProxy ? `proxy → ${apiBaseUrl}` : apiBaseUrl}
-            {simulateProd ? ' · prod-sim' : ''}
-          </div>
+          {!featureFlags.embeddedMode && (
+            <div className="env">
+              API: {apiProxy ? `proxy → ${apiBaseUrl}` : apiBaseUrl}
+              {simulateProd ? ' · prod-sim' : ''}
+            </div>
+          )}
           <button
             className="button ghost"
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
@@ -6126,6 +6168,17 @@ export default function App() {
         }}
         formatTime={formatTime}
       />
+
+      {extraViews.map(({ id, component: ExtraPage }) =>
+        view === id && (
+          <ExtraPage
+            key={id}
+            view={view}
+            permissions={permissions}
+            authUser={authUser}
+          />
+        )
+      )}
 
       <TrustedSigningKeyModal
         {...{

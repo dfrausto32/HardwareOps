@@ -1,9 +1,19 @@
 FROM node:18-alpine AS build
 
+ARG UI_VARIANT=generic
+
 WORKDIR /app
-COPY ui/package.json ui/package-lock.json ./
+
+# Copy shared source so the variant's relative ../ui-shared/src alias resolves
+COPY ui-shared/ ./ui-shared/
+
+# Copy the selected variant
+COPY ui-${UI_VARIANT}/ ./ui-${UI_VARIANT}/
+
+WORKDIR /app/ui-${UI_VARIANT}
+
 RUN npm ci
-COPY ui/ ./
+
 ARG VITE_API_BASE_URL
 ARG VITE_WS_BASE_URL
 ARG VITE_SIMULATE_PROD=1
@@ -18,4 +28,4 @@ COPY deploy/compose/nginx/nginx-https.conf.template /etc/nginx/nginx-https.conf.
 COPY deploy/compose/nginx/nginx-http.conf.template /etc/nginx/nginx-http.conf.template
 COPY deploy/compose/nginx/40-render-nginx-conf.sh /docker-entrypoint.d/40-render-nginx-conf.sh
 RUN chmod +x /docker-entrypoint.d/40-render-nginx-conf.sh
-COPY --from=build /app/dist /usr/share/nginx/html
+COPY --from=build /app/ui-${UI_VARIANT}/dist /usr/share/nginx/html

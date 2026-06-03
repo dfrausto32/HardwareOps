@@ -303,6 +303,7 @@ build_stack_bundle() {
 
   docker build -t "$cp_tag" -f "$BASE_DIR/control-plane/Dockerfile" "${build_args[@]}" "$BASE_DIR"
   docker build -t "$gw_tag" -f "$BASE_DIR/deploy/compose/nginx/Dockerfile" \
+    --build-arg UI_VARIANT="${UI_VARIANT:-generic}" \
     --build-arg VITE_API_BASE_URL="https://parcel.internal" \
     --build-arg VITE_SIMULATE_PROD=1 \
     "$BASE_DIR"

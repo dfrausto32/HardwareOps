@@ -44,7 +44,7 @@ Verify: `curl --cacert ./dev-ca.crt https://localhost:8080/healthz`
 
 ### 4. Run the UI
 ```bash
-cd ui && npm install
+cd ui-generic && npm install
 VITE_API_BASE_URL=https://localhost:8080 VITE_SIMULATE_PROD=1 npm run dev
 # Opens at http://localhost:5173
 ```
@@ -59,7 +59,7 @@ VITE_API_BASE_URL=https://localhost:8080 VITE_SIMULATE_PROD=1 npm run dev
 
 ```bash
 # UI RBAC unit tests (only automated tests in the project)
-cd ui && npm run test:rbac
+cd ui-generic && npm run test:rbac
 
 # End-to-end artifact flow (requires running stack)
 ./scripts/artifact-e2e.sh
@@ -147,9 +147,9 @@ Go module at `agent/`. Key packages:
 - `state/` — local device state (JSON file)
 - `artifacts/` — tar.gz extraction and atomic symlink switching
 
-### UI (`ui/`)
+### UI (`ui-generic/`, `ui-healthcare/`, `ui-shared/`)
 
-React 18 SPA (Vite). API calls go through `src/api.ts` (TypeScript). RBAC enforcement via `src/rbac.js`. No CSS framework — custom CSS throughout.
+Multi-variant React 18 SPA (Vite 5). Shared source lives in `ui-shared/src/` (AppShell, api.ts, rbac.js, components, features, CSS). Per-customer apps in `ui-generic/` (full test build) and `ui-healthcare/` (healthcare customer build). Each variant provides `src/variant.js` (nav, branding, feature flags, theme overrides) resolved via `@variant` Vite alias. HC-specific pages live in `ui-healthcare/src/features/healthcare/`. Run `npm run build` from each variant directory. No CSS framework — custom CSS throughout.
 
 ### Database
 
