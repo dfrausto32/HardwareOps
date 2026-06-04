@@ -186,6 +186,7 @@ env \
   DEVICE_IDENTITY_MODE=audit \
   AUTH_MODE=local \
   AUTH_JWT_SECRET="e2e-jwt-secret-change-in-prod!" \
+  WEBHOOK_ENCRYPTION_KEY="$(python3 -c "import base64; print(base64.b64encode(b'e2e-webhook-key-fixed-32-bytes!!').decode())")" \
   "$BIN_DIR/control-plane" \
   > "$LOG_DIR/control-plane.log" 2>&1 &
 CP_PID=$!
@@ -248,7 +249,7 @@ run_scenario "pending-enrollment" \
    INSECURE=0 \
    PROFILE_NAME=e2e-profile \
    PROFILE_REQUIRE_APPROVAL=1 \
-   PENDING_ENROLL_AUTO_APPROVE=1 \
+   AUTO_APPROVE_API=1 \
    CHECKIN_AFTER_CLAIM=0 \
    '$BASE_DIR/scripts/test-pending-enrollment.sh'"
 

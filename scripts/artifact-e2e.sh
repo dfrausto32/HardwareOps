@@ -93,7 +93,7 @@ EOF
     <script>
       fetch('preapply.txt')
         .then(r => r.text())
-        .then(t => { document.getElementById('preapply').textContent = `Pre-apply: ${t.trim() || 'ok'}`; })
+        .then(t => { document.getElementById('preapply').textContent = 'Pre-apply: ' + (t.trim() || 'ok'); })
         .catch(() => { document.getElementById('preapply').textContent = 'Pre-apply: unavailable'; });
     </script>
   </body>
