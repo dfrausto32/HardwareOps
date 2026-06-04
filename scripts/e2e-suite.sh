@@ -184,7 +184,7 @@ env \
   CA_CERT_PATH="$CA_CERT_PATH" \
   CA_KEY_PATH="$CA_KEY_PATH" \
   DEVICE_IDENTITY_MODE=audit \
-  AUTH_ENABLED=1 \
+  AUTH_MODE=local \
   "$BIN_DIR/control-plane" \
   > "$LOG_DIR/control-plane.log" 2>&1 &
 CP_PID=$!
