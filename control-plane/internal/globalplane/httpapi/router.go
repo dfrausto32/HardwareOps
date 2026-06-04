@@ -74,9 +74,6 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 	syncAdapter := &syncAdapter{mgr: deps.SyncManager}
 
 	r.Route("/api/v1", func(r chi.Router) {
-		// Operator login — public; mints a JWT for the bootstrap admin.
-		r.Post("/auth/login", handlers.Login(deps.Auth))
-
 		// Plane management — requires admin role or federation.manage scope.
 		r.With(requireScopeOrRole(auth.ScopeFederationManage, "admin")).
 			Get("/planes", handlers.ListPlanes(deps.Store))

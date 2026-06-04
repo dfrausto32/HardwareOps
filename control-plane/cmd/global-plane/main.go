@@ -54,18 +54,6 @@ func main() {
 		logger.Fatalf("auth manager: %v", err)
 	}
 
-	// Bootstrap an initial admin so operators can log in to the global-plane,
-	// mirroring the regional control-plane. No-op once any user exists.
-	if authMode == "local" {
-		if bootEmail := strings.TrimSpace(os.Getenv("AUTH_BOOTSTRAP_EMAIL")); bootEmail != "" {
-			if created, err := store.EnsureBootstrapAdmin(bootEmail, os.Getenv("AUTH_BOOTSTRAP_PASSWORD")); err != nil {
-				logger.Printf("bootstrap admin error: %v", err)
-			} else if created {
-				logger.Printf("bootstrap admin created: %s", bootEmail)
-			}
-		}
-	}
-
 	// Sync manager.
 	syncMgr := sync.NewManager(store, cfg.TokenEncryptionKey, logger)
 
