@@ -45,6 +45,15 @@ func TestLoginBackoffBlocksAndRecovers(t *testing.T) {
 	})
 	handler := Login(log.New(io.Discard, "", 0), manager, mem, false, backoff)
 
+	// Drive the handler's clock deterministically. The previous version relied
+	// on real wall-clock time, which made the "immediate retry is blocked"
+	// assertion race against password-hashing latency on slow CI runners (the
+	// 50ms backoff could elapse before the next request ran, yielding 200
+	// instead of 429).
+	current := time.Now().UTC()
+	restore := setLoginClock(func() time.Time { return current })
+	defer restore()
+
 	// First invalid login: unauthorized, no backoff header yet.
 	resp1 := doLoginRequest(t, handler, "admin@example.com", "bad-password")
 	if resp1.Code != http.StatusUnauthorized {
@@ -63,15 +72,16 @@ func TestLoginBackoffBlocksAndRecovers(t *testing.T) {
 		t.Fatalf("expected retry header on second failure")
 	}
 
-	// Immediate retry is blocked by backoff.
+	// Retry while the backoff window is still active is blocked.
 	resp3 := doLoginRequest(t, handler, "admin@example.com", "correct-password")
 	if resp3.Code != http.StatusTooManyRequests {
 		t.Fatalf("expected 429 while backoff active, got %d", resp3.Code)
 	}
 
-	time.Sleep(70 * time.Millisecond)
+	// Advance past the backoff delay.
+	current = current.Add(70 * time.Millisecond)
 
-	// After delay, correct credentials succeed.
+	// After the window, correct credentials succeed.
 	resp4 := doLoginRequest(t, handler, "admin@example.com", "correct-password")
 	if resp4.Code != http.StatusOK {
 		t.Fatalf("expected 200 after backoff window, got %d", resp4.Code)
@@ -91,6 +101,14 @@ func TestLoginBackoffBlocksAndRecovers(t *testing.T) {
 	if len(events) == 0 {
 		t.Fatalf("expected auth.login audit events")
 	}
+}
+
+// setLoginClock overrides the package clock used by the Login handler for
+// backoff bookkeeping and returns a function that restores the previous clock.
+func setLoginClock(fn func() time.Time) func() {
+	prev := loginClock
+	loginClock = fn
+	return func() { loginClock = prev }
 }
 
 func doLoginRequest(t *testing.T, handler http.HandlerFunc, email, password string) *httptest.ResponseRecorder {

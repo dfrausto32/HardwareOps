@@ -60,6 +60,11 @@ type RegisterResponse struct {
 	User UserView `json:"user"`
 }
 
+// loginClock supplies the current time used for login backoff bookkeeping. It
+// is a package variable so tests can drive it deterministically instead of
+// racing real wall-clock time against password-hashing latency.
+var loginClock = func() time.Time { return time.Now().UTC() }
+
 func Login(logger *log.Logger, manager *auth.Manager, st store.Store, trustProxy bool, backoff *auth.LoginBackoff) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if manager == nil || !manager.Enabled() {
@@ -76,7 +81,7 @@ func Login(logger *log.Logger, manager *auth.Manager, st store.Store, trustProxy
 			http.Error(w, "email and password required", http.StatusBadRequest)
 			return
 		}
-		now := time.Now().UTC()
+		now := loginClock()
 		if backoff != nil {
 			if blocked, retry := backoff.Check(req.Email, now); blocked {
 				setRetryAfterHeader(w, retry)
