@@ -146,8 +146,23 @@ fi
 # Health check
 curl -s "${curl_opts[@]}" "$BASE_URL/healthz" >/dev/null
 
+# Authenticate. Endpoints like /enrollments, /artifacts/upload, and
+# desired-state require an operator JWT when the control-plane has auth
+# enabled. When AUTH_EMAIL/AUTH_PASSWORD are unset (auth-disabled standalone
+# runs), auth_args stays empty and behavior is unchanged.
+auth_args=()
+if [ -n "${AUTH_EMAIL:-}" ] && [ -n "${AUTH_PASSWORD:-}" ]; then
+  LOGIN_JSON=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/auth/login" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"$AUTH_EMAIL\",\"password\":\"$AUTH_PASSWORD\"}")
+  AUTH_TOKEN=$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("token",""))' <<<"$LOGIN_JSON")
+  if [ -n "$AUTH_TOKEN" ]; then
+    auth_args=(-H "Authorization: Bearer $AUTH_TOKEN")
+  fi
+fi
+
 # Create enrollment token
-TOKEN_JSON=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/enrollments" -H "Content-Type: application/json" -d '{"expiresInSec":3600}')
+TOKEN_JSON=$(curl -s "${curl_opts[@]}" "${auth_args[@]}" -X POST "$BASE_URL/api/v1/enrollments" -H "Content-Type: application/json" -d '{"expiresInSec":3600}')
 TOKEN=$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["token"])' <<<"$TOKEN_JSON")
 
 # Generate CSR + enroll
@@ -186,12 +201,12 @@ form_args=(-F "name=$ARTIFACT_NAME" -F "version=$ARTIFACT_VERSION" -F "type=$ART
 if [ -n "${PACK_SIG:-}" ]; then
   form_args+=(-F "signature=$PACK_SIG" -F "signatureKeyId=$PACK_SIG_KEY_ID")
 fi
-UPLOAD_JSON=$(curl -s "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/artifacts/upload" "${form_args[@]}")
+UPLOAD_JSON=$(curl -s "${curl_opts[@]}" "${auth_args[@]}" -X POST "$BASE_URL/api/v1/artifacts/upload" "${form_args[@]}")
 
 ARTIFACT_ID=$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["artifactId"])' <<<"$UPLOAD_JSON")
 
 # Set desired state for device
-curl -s "${curl_opts[@]}" -X PUT "$BASE_URL/api/v1/desired-state/devices/$DEVICE_ID" \
+curl -s "${curl_opts[@]}" "${auth_args[@]}" -X PUT "$BASE_URL/api/v1/desired-state/devices/$DEVICE_ID" \
   -H "Content-Type: application/json" \
   -d "{\"desiredVersion\":\"$ARTIFACT_VERSION\",\"artifactId\":\"$ARTIFACT_ID\"}" >/dev/null
 
@@ -234,8 +249,8 @@ if [ -n "${LOG_EXPORT_ADDR:-}" ]; then
   echo "Fetch logs: curl -s $BASE_URL/api/v1/logs/$DEVICE_ID -o /tmp/device-logs.csv"
 fi
 if [ "$CLEANUP" = "1" ]; then
-  curl -s "${curl_opts[@]}" -X DELETE "$BASE_URL/api/v1/artifacts/$ARTIFACT_ID" >/dev/null
-  curl -s "${curl_opts[@]}" -X DELETE "$BASE_URL/api/v1/devices/$DEVICE_ID" >/dev/null
+  curl -s "${curl_opts[@]}" "${auth_args[@]}" -X DELETE "$BASE_URL/api/v1/artifacts/$ARTIFACT_ID" >/dev/null
+  curl -s "${curl_opts[@]}" "${auth_args[@]}" -X DELETE "$BASE_URL/api/v1/devices/$DEVICE_ID" >/dev/null
   echo "Cleanup complete."
 else
   echo "Delete artifact: curl -X DELETE $BASE_URL/api/v1/artifacts/$ARTIFACT_ID"
