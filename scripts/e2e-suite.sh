@@ -33,6 +33,12 @@ E2E_KEEP_INFRA=${E2E_KEEP_INFRA:-0}
 E2E_ONLY=${E2E_ONLY:-}
 E2E_TIMEOUT_SECS=${E2E_TIMEOUT_SECS:-300}  # per-scenario timeout
 
+# Control-plane cert manager requires a CA cert + key at boot. Locally these
+# are created by hand (see docs/local-dev-wsl.md); in CI they won't exist, so
+# Step 2.5 below generates an ephemeral CA when these paths are missing.
+CA_CERT_PATH=${CA_CERT_PATH:-$BASE_DIR/dev-ca.crt}
+CA_KEY_PATH=${CA_KEY_PATH:-$BASE_DIR/dev-ca.key}
+
 BASE_URL="http://localhost:${E2E_CP_PORT}"
 GLOBAL_URL="http://localhost:${E2E_GP_PORT}"
 CP_DB="postgres://parcel:parcel@localhost:${E2E_PG_PORT}/parcel_e2e?sslmode=disable"
@@ -145,6 +151,18 @@ if [ "${E2E_SKIP_BUILD:-0}" != "1" ]; then
   ok "binaries built → $BIN_DIR"
 fi
 
+# ── Step 2.5: Dev CA ──────────────────────────────────────────────────────────
+# The control-plane cert manager loads CA_CERT_PATH/CA_KEY_PATH on startup and
+# exits if they are missing. Generate an ephemeral CA when one isn't present so
+# the suite is self-contained (e.g. on CI runners).
+if [ ! -f "$CA_CERT_PATH" ] || [ ! -f "$CA_KEY_PATH" ]; then
+  log "Generating ephemeral dev CA ..."
+  openssl req -x509 -newkey rsa:2048 -nodes \
+    -keyout "$CA_KEY_PATH" -out "$CA_CERT_PATH" \
+    -days 365 -subj "/CN=Parcel E2E CA" > /dev/null 2>&1
+  ok "dev CA generated → $CA_CERT_PATH"
+fi
+
 # ── Step 3: Start control-plane ───────────────────────────────────────────────
 log "Starting control-plane on :${E2E_CP_PORT} ..."
 env \
@@ -163,8 +181,8 @@ env \
   S3_USE_SSL=0 \
   S3_REGION="us-east-1" \
   MIGRATIONS_DIR="$BASE_DIR/control-plane/migrations" \
-  CA_CERT_PATH="$BASE_DIR/dev-ca.crt" \
-  CA_KEY_PATH="$BASE_DIR/dev-ca.key" \
+  CA_CERT_PATH="$CA_CERT_PATH" \
+  CA_KEY_PATH="$CA_KEY_PATH" \
   DEVICE_IDENTITY_MODE=audit \
   AUTH_ENABLED=1 \
   "$BIN_DIR/control-plane" \
