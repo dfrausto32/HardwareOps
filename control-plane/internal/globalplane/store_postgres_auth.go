@@ -53,7 +53,8 @@ func (s *PostgresStore) GetUser(userID string) (store.User, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	row := s.pool.QueryRow(ctx,
-		`SELECT user_id, email, password_hash, roles, disabled, last_login_at, created_at
+		`SELECT user_id, email, password_hash, roles, disabled, last_login_at, created_at,
+		        COALESCE(auth_provider,'local'), COALESCE(external_id,''), COALESCE(display_name,'')
 		 FROM users WHERE user_id = $1`, userID)
 	u, err := scanUser(row)
 	if err == pgx.ErrNoRows {
@@ -66,13 +67,76 @@ func (s *PostgresStore) GetUserByEmail(email string) (store.User, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	row := s.pool.QueryRow(ctx,
-		`SELECT user_id, email, password_hash, roles, disabled, last_login_at, created_at
+		`SELECT user_id, email, password_hash, roles, disabled, last_login_at, created_at,
+		        COALESCE(auth_provider,'local'), COALESCE(external_id,''), COALESCE(display_name,'')
 		 FROM users WHERE email = $1`, email)
 	u, err := scanUser(row)
 	if err == pgx.ErrNoRows {
 		return store.User{}, false, nil
 	}
 	return u, err == nil, err
+}
+
+func (s *PostgresStore) GetUserByExternalID(provider, externalID string) (store.User, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	row := s.pool.QueryRow(ctx,
+		`SELECT user_id, email, password_hash, roles, disabled, last_login_at, created_at,
+		        COALESCE(auth_provider,'local'), COALESCE(external_id,''), COALESCE(display_name,'')
+		 FROM users WHERE auth_provider = $1 AND external_id = $2`, provider, externalID)
+	u, err := scanUser(row)
+	if err == pgx.ErrNoRows {
+		return store.User{}, false, nil
+	}
+	return u, err == nil, err
+}
+
+func (s *PostgresStore) CreateUser(user store.User) error {
+	rolesSlice := rolesFromJSON(user.RolesJSON)
+	rolesStr := strings.Join(rolesSlice, " ")
+	if rolesStr == "" {
+		rolesStr = "viewer"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO users
+		   (user_id, email, password_hash, roles, disabled, auth_provider, external_id, display_name, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())`,
+		user.UserID, user.Email, user.PasswordHash, rolesStr, user.Disabled,
+		coalesceStr(user.AuthProvider, "local"),
+		nullableStr(user.ExternalID),
+		user.DisplayName,
+	)
+	return err
+}
+
+func (s *PostgresStore) UpdateUser(update store.UserUpdate) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if update.DisplayName != nil && len(update.RolesJSON) > 0 {
+		rolesSlice := rolesFromJSON(update.RolesJSON)
+		rolesStr := strings.Join(rolesSlice, " ")
+		_, err := s.pool.Exec(ctx,
+			`UPDATE users SET display_name = $2, roles = $3 WHERE user_id = $1`,
+			update.UserID, *update.DisplayName, rolesStr)
+		return err
+	}
+	if update.DisplayName != nil {
+		_, err := s.pool.Exec(ctx,
+			`UPDATE users SET display_name = $2 WHERE user_id = $1`,
+			update.UserID, *update.DisplayName)
+		return err
+	}
+	if len(update.RolesJSON) > 0 {
+		rolesSlice := rolesFromJSON(update.RolesJSON)
+		rolesStr := strings.Join(rolesSlice, " ")
+		_, err := s.pool.Exec(ctx,
+			`UPDATE users SET roles = $2 WHERE user_id = $1`,
+			update.UserID, rolesStr)
+		return err
+	}
+	return nil
 }
 
 func (s *PostgresStore) SetUserLastLogin(userID string, at time.Time) error {
@@ -124,12 +188,18 @@ func (s *PostgresStore) SetServiceTokenLastUsed(tokenID string, at time.Time) er
 }
 
 // scanUser scans a users row into a store.User.
+// Expects columns: user_id, email, password_hash, roles, disabled, last_login_at, created_at,
+// auth_provider, external_id, display_name.
 func scanUser(row scannable) (store.User, error) {
 	var u store.User
 	var rolesRaw string
 	var lastLogin *time.Time
 	var createdAt time.Time
-	err := row.Scan(&u.UserID, &u.Email, &u.PasswordHash, &rolesRaw, &u.Disabled, &lastLogin, &createdAt)
+	err := row.Scan(
+		&u.UserID, &u.Email, &u.PasswordHash, &rolesRaw, &u.Disabled,
+		&lastLogin, &createdAt,
+		&u.AuthProvider, &u.ExternalID, &u.DisplayName,
+	)
 	if err != nil {
 		return store.User{}, err
 	}
@@ -143,4 +213,31 @@ func scanUser(row scannable) (store.User, error) {
 		u.RolesJSON = b
 	}
 	return u, nil
+}
+
+// rolesFromJSON parses a JSON roles array into a string slice.
+func rolesFromJSON(data []byte) []string {
+	if len(data) == 0 {
+		return nil
+	}
+	var roles []string
+	if err := json.Unmarshal(data, &roles); err != nil {
+		return strings.Fields(string(data))
+	}
+	return roles
+}
+
+func coalesceStr(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
+
+// nullableStr returns nil for an empty string so pgx stores SQL NULL.
+func nullableStr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }

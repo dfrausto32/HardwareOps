@@ -80,11 +80,13 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		// Operator login — public; mints a JWT for the global-plane.
 		r.Post("/auth/login", handlers.Login(logger, deps.Auth, deps.Store, tp, deps.LoginBackoff))
 
-		// Auth status — public; lets the UI know if login is available.
+		// Auth status — public; lets the UI know which login methods are available.
 		r.Get("/auth/status", func(w http.ResponseWriter, r *http.Request) {
 			type statusResp struct {
-				Enabled bool   `json:"enabled"`
-				Mode    string `json:"mode"`
+				Enabled      bool   `json:"enabled"`
+				Mode         string `json:"mode"`
+				OIDCEnabled  bool   `json:"oidcEnabled"`
+				OIDCLoginURL string `json:"oidcLoginUrl,omitempty"`
 			}
 			enabled := deps.Auth != nil && deps.Auth.Enabled()
 			mode := "disabled"
@@ -92,8 +94,21 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 				mode = deps.Auth.Mode()
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(statusResp{Enabled: enabled, Mode: mode})
+			_ = json.NewEncoder(w).Encode(statusResp{
+				Enabled:      enabled,
+				Mode:         mode,
+				OIDCEnabled:  deps.OIDCLoginURL != "",
+				OIDCLoginURL: deps.OIDCLoginURL,
+			})
 		})
+
+		// OIDC SSO — public routes (must come before auth middleware applies).
+		if deps.OIDCProvider != nil {
+			r.Get("/auth/oidc/login", handlers.OIDCLogin(deps.OIDCProvider))
+			r.Get("/auth/oidc/callback", handlers.OIDCCallback(
+				logger, deps.OIDCProvider, deps.Store, tp, deps.PostLoginURL,
+			))
+		}
 
 		// Plane management — requires admin role or federation.manage scope.
 		r.With(requireScopeOrRole(auth.ScopeFederationManage, "admin")).

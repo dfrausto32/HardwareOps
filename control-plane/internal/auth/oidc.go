@@ -20,6 +20,28 @@ import (
 
 const oidcStateCookieName = "hwops_oidc_state"
 
+// OIDCConfig holds the OIDC provider configuration.
+type OIDCConfig struct {
+	Issuer       string
+	ClientID     string
+	ClientSecret string
+	RedirectURL  string
+	Scopes       string // space- or comma-separated; defaults to "openid email profile"
+	GroupClaim   string // JWT claim that carries group membership; defaults to "groups"
+	RoleMap      string // JSON map of IdP group → hwops role
+	DefaultRole  string // Role assigned when no group matches; defaults to "viewer"
+}
+
+// OIDCStore is the minimal store interface required by OIDCProvider.
+// Both the full store.Store and the global-plane's PostgresStore satisfy it.
+type OIDCStore interface {
+	GetUserByEmail(email string) (store.User, bool, error)
+	GetUserByExternalID(provider, externalID string) (store.User, bool, error)
+	CreateUser(user store.User) error
+	UpdateUser(update store.UserUpdate) error
+	SetUserLastLogin(userID string, at time.Time) error
+}
+
 // OIDCProvider handles OIDC authorization code flow.
 type OIDCProvider struct {
 	provider    *gooidc.Provider
@@ -28,53 +50,74 @@ type OIDCProvider struct {
 	groupClaim  string
 	roleMap     map[string]string // IdP group -> hwops role
 	defaultRole string
-	store       store.Store
+	store       OIDCStore
 	manager     *Manager
 }
 
 // NewOIDCProvider discovers the IdP configuration and returns an OIDCProvider.
+// The regional control-plane calls this with *config.Config and store.Store.
 func NewOIDCProvider(ctx context.Context, cfg *config.Config, st store.Store, mgr *Manager) (*OIDCProvider, error) {
-	if cfg.AuthOIDCIssuer == "" {
+	return NewOIDCProviderWithConfig(ctx, OIDCConfig{
+		Issuer:       cfg.AuthOIDCIssuer,
+		ClientID:     cfg.AuthOIDCClientID,
+		ClientSecret: cfg.AuthOIDCClientSecret,
+		RedirectURL:  cfg.AuthOIDCRedirectURL,
+		Scopes:       cfg.AuthOIDCScopes,
+		GroupClaim:   cfg.AuthOIDCGroupClaim,
+		RoleMap:      cfg.AuthOIDCRoleMap,
+		DefaultRole:  cfg.AuthOIDCDefaultRole,
+	}, st, mgr)
+}
+
+// NewOIDCProviderWithConfig is the primary constructor for the global-plane (and
+// any consumer that does not use the regional config.Config type).
+func NewOIDCProviderWithConfig(ctx context.Context, cfg OIDCConfig, st OIDCStore, mgr *Manager) (*OIDCProvider, error) {
+	if cfg.Issuer == "" {
 		return nil, errors.New("AUTH_OIDC_ISSUER is required")
 	}
-	if cfg.AuthOIDCClientID == "" {
+	if cfg.ClientID == "" {
 		return nil, errors.New("AUTH_OIDC_CLIENT_ID is required")
 	}
-	if cfg.AuthOIDCClientSecret == "" {
+	if cfg.ClientSecret == "" {
 		return nil, errors.New("AUTH_OIDC_CLIENT_SECRET is required")
 	}
-	if cfg.AuthOIDCRedirectURL == "" {
+	if cfg.RedirectURL == "" {
 		return nil, errors.New("AUTH_OIDC_REDIRECT_URL is required")
 	}
 
-	provider, err := gooidc.NewProvider(ctx, cfg.AuthOIDCIssuer)
+	provider, err := gooidc.NewProvider(ctx, cfg.Issuer)
 	if err != nil {
 		return nil, fmt.Errorf("oidc provider discovery: %w", err)
 	}
 
-	verifier := provider.Verifier(&gooidc.Config{ClientID: cfg.AuthOIDCClientID})
+	verifier := provider.Verifier(&gooidc.Config{ClientID: cfg.ClientID})
 
-	scopes := parseScopesCSV(cfg.AuthOIDCScopes)
+	scopes := parseScopesCSV(cfg.Scopes)
 	if len(scopes) == 0 {
 		scopes = []string{gooidc.ScopeOpenID, "email", "profile"}
 	}
 
 	oauth2Cfg := oauth2.Config{
-		ClientID:     cfg.AuthOIDCClientID,
-		ClientSecret: cfg.AuthOIDCClientSecret,
-		RedirectURL:  cfg.AuthOIDCRedirectURL,
+		ClientID:     cfg.ClientID,
+		ClientSecret: cfg.ClientSecret,
+		RedirectURL:  cfg.RedirectURL,
 		Endpoint:     provider.Endpoint(),
 		Scopes:       scopes,
 	}
 
 	roleMap := map[string]string{}
-	if cfg.AuthOIDCRoleMap != "" {
-		if err := json.Unmarshal([]byte(cfg.AuthOIDCRoleMap), &roleMap); err != nil {
+	if cfg.RoleMap != "" {
+		if err := json.Unmarshal([]byte(cfg.RoleMap), &roleMap); err != nil {
 			return nil, fmt.Errorf("AUTH_OIDC_ROLE_MAP invalid JSON: %w", err)
 		}
 	}
 
-	defaultRole := cfg.AuthOIDCDefaultRole
+	groupClaim := cfg.GroupClaim
+	if groupClaim == "" {
+		groupClaim = "groups"
+	}
+
+	defaultRole := cfg.DefaultRole
 	if defaultRole == "" {
 		defaultRole = "viewer"
 	}
@@ -83,7 +126,7 @@ func NewOIDCProvider(ctx context.Context, cfg *config.Config, st store.Store, mg
 		provider:    provider,
 		verifier:    verifier,
 		oauth2Cfg:   oauth2Cfg,
-		groupClaim:  cfg.AuthOIDCGroupClaim,
+		groupClaim:  groupClaim,
 		roleMap:     roleMap,
 		defaultRole: defaultRole,
 		store:       st,

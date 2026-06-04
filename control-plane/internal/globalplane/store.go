@@ -275,4 +275,9 @@ type Store interface {
 	CreateAuditEvent(event store.AuditEvent) error
 	ListAuditEvents(filter store.AuditEventFilter) ([]store.AuditEvent, error)
 	DeleteAuditEventsBefore(cutoff time.Time) (int, error)
+
+	// OIDC user management (satisfies auth.OIDCStore)
+	GetUserByExternalID(provider, externalID string) (store.User, bool, error)
+	CreateUser(user store.User) error
+	UpdateUser(update store.UserUpdate) error
 }
