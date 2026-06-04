@@ -185,6 +185,7 @@ env \
   CA_KEY_PATH="$CA_KEY_PATH" \
   DEVICE_IDENTITY_MODE=audit \
   AUTH_MODE=local \
+  AUTH_JWT_SECRET="e2e-jwt-secret-change-in-prod!" \
   "$BIN_DIR/control-plane" \
   > "$LOG_DIR/control-plane.log" 2>&1 &
 CP_PID=$!
