@@ -311,51 +311,19 @@ run_scenario "artifact-trust" \
    '$BASE_DIR/scripts/test-artifact-trust.sh'"
 
 # ── Scenario 5: Multi-agent enrollment ───────────────────────────────────────
-run_scenario "multi-agent" '
-  set -euo pipefail
-  log() { echo "[multi-agent] $*"; }
-
-  # Get auth token
-  AUTH_TOKEN=$(curl -sf --cacert "'"$CA_CERT_PATH"'" "'"$BASE_URL"'/api/v1/auth/login" \
-    -H "Content-Type: application/json" \
-    -d "{\"email\":\"'"$E2E_ADMIN_EMAIL"'\",\"password\":\"'"$E2E_ADMIN_PASSWORD"'\"}" \
-    | python3 -c "import json,sys; print(json.loads(sys.stdin.read())[\"token\"])")
-
-  # Create enrollment token (legacy mode)
-  TOKEN_RESP=$(curl -sf --cacert "'"$CA_CERT_PATH"'" -X POST "'"$BASE_URL"'/api/v1/enrollments" \
-    -H "Authorization: Bearer $AUTH_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{\"expiresInSec\":3600,\"maxUses\":5}")
-  TOKEN=$(python3 -c "import json,sys; print(json.loads(sys.stdin.read())[\"token\"])" <<<"$TOKEN_RESP")
-
-  # Build the agent once. Three concurrent "go run" invocations race on the
-  # shared Go build cache and can fail; a prebuilt binary is safe to run in
-  # parallel.
-  AGENT_BIN="'"$LOG_DIR"'/agent-e2e-bin"
-  ( cd "'"$BASE_DIR"'/agent" && go build -o "$AGENT_BIN" ./cmd/agent )
-
-  log "Enrolling and checking in 3 agents sequentially ..."
-  # Each agent gets a unique HARDWARE_IDENTITY so they register as distinct
-  # devices (the control-plane derives a hardware ID from machine identity;
-  # without an override all three would collide and trip identity-conflict
-  # detection). LICENSE_ENFORCE is unset (defaults false) so the device cap is
-  # not checked. Agents run one at a time under set -e: any failure aborts the
-  # scenario and the agent output is captured in the scenario log.
-  for i in 1 2 3; do
-    STATE_PATH="'"$LOG_DIR"'/multi-agent-state-${i}.json"
-    ART_ROOT="'"$LOG_DIR"'/multi-agent-data-${i}"
-    mkdir -p "$ART_ROOT"
-    log "agent ${i} ..."
-    ENROLLMENT_TOKEN="$TOKEN" \
-    CONTROL_PLANE_URL="'"$BASE_URL"'" \
-    STATE_PATH="$STATE_PATH" \
-    ARTIFACT_ROOT="$ART_ROOT" \
-    CONTROL_PLANE_CA_CERT_PATH="'"$CA_CERT_PATH"'" \
-    HARDWARE_IDENTITY="e2e-agent-${i}-$(hostname)" \
-    "$AGENT_BIN" -once
-  done
-  log "All 3 agents enrolled and checked in"
-'
+# Enrolls three distinct devices (manual CSR + /devices/enroll) and checks each
+# one in over mTLS. Lives in its own script to keep the enrollment/quoting logic
+# out of this inline string.
+run_scenario "multi-agent" \
+  "BASE_URL=$BASE_URL \
+   AUTH_EMAIL=$E2E_ADMIN_EMAIL \
+   AUTH_PASSWORD=$E2E_ADMIN_PASSWORD \
+   INSECURE=0 \
+   CA_CERT_PATH=$CA_CERT_PATH \
+   COUNT=3 \
+   WORK_DIR=$LOG_DIR/multi-agent \
+   AGENT_BIN=$LOG_DIR/agent-e2e-bin \
+   '$BASE_DIR/scripts/test-multi-agent.sh'"
 
 # ── Scenario 6: Global plane sync ────────────────────────────────────────────
 run_scenario "global-plane-sync" '
