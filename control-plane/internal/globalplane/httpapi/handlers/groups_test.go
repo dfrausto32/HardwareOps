@@ -37,7 +37,7 @@ func TestCreateGlobalGroup_MissingName(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/groups", strings.NewReader(`{"selectorJson":{}}`))
 	w := httptest.NewRecorder()
 
-	CreateGlobalGroup(st, silentLogger()).ServeHTTP(w, req)
+	CreateGlobalGroup(st, silentLogger(), false).ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
@@ -49,7 +49,7 @@ func TestCreateGlobalGroup_Valid(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/groups", strings.NewReader(body))
 	w := httptest.NewRecorder()
 
-	CreateGlobalGroup(st, silentLogger()).ServeHTTP(w, req)
+	CreateGlobalGroup(st, silentLogger(), false).ServeHTTP(w, req)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
 	}
@@ -68,7 +68,7 @@ func TestDeleteGlobalGroup_NotFound(t *testing.T) {
 	req = withURLParam(req, "groupId", uuid.NewString())
 	w := httptest.NewRecorder()
 
-	DeleteGlobalGroup(st, testEncKey, silentLogger()).ServeHTTP(w, req)
+	DeleteGlobalGroup(st, testEncKey, silentLogger(), false).ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", w.Code)
 	}
@@ -82,7 +82,7 @@ func TestDeleteGlobalGroup_Valid(t *testing.T) {
 	req = withURLParam(req, "groupId", g.GroupID)
 	w := httptest.NewRecorder()
 
-	DeleteGlobalGroup(st, testEncKey, silentLogger()).ServeHTTP(w, req)
+	DeleteGlobalGroup(st, testEncKey, silentLogger(), false).ServeHTTP(w, req)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d", w.Code)
 	}
@@ -99,7 +99,7 @@ func TestPutGlobalDesiredState_GroupNotFound(t *testing.T) {
 	req = withURLParam(req, "groupId", gid)
 	w := httptest.NewRecorder()
 
-	PutGlobalDesiredState(st, testEncKey, silentLogger()).ServeHTTP(w, req)
+	PutGlobalDesiredState(st, testEncKey, silentLogger(), false).ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", w.Code)
 	}
@@ -114,7 +114,7 @@ func TestPutGlobalDesiredState_Valid(t *testing.T) {
 	req = withURLParam(req, "groupId", g.GroupID)
 	w := httptest.NewRecorder()
 
-	PutGlobalDesiredState(st, testEncKey, silentLogger()).ServeHTTP(w, req)
+	PutGlobalDesiredState(st, testEncKey, silentLogger(), false).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -204,7 +204,7 @@ func TestDeleteGlobalDesiredState_Valid(t *testing.T) {
 	req = withURLParam(req, "groupId", g.GroupID)
 	w := httptest.NewRecorder()
 
-	DeleteGlobalDesiredState(st, testEncKey, silentLogger()).ServeHTTP(w, req)
+	DeleteGlobalDesiredState(st, testEncKey, silentLogger(), false).ServeHTTP(w, req)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d", w.Code)
 	}
@@ -238,7 +238,7 @@ func TestPutGlobalDesiredState_FansOutToPlanes(t *testing.T) {
 	req = withURLParam(req, "groupId", g.GroupID)
 	w := httptest.NewRecorder()
 
-	PutGlobalDesiredState(st, testEncKey, silentLogger()).ServeHTTP(w, req)
+	PutGlobalDesiredState(st, testEncKey, silentLogger(), false).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}

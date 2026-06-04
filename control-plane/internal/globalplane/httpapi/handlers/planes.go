@@ -2,12 +2,14 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/parcel/control-plane/internal/globalplane"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 type planesStore interface {
@@ -17,6 +19,7 @@ type planesStore interface {
 	UpdateRegionalPlane(planeID, name, baseURL string, encryptedToken []byte, tlsCAPem string, syncIntervalSeconds int) error
 	DeleteRegionalPlane(planeID string) error
 	ListAllPolicySyncStatus() ([]globalplane.PolicySyncStatus, error)
+	CreateAuditEvent(event store.AuditEvent) error
 }
 
 type syncRefresher interface {
@@ -93,9 +96,7 @@ func ListPlanes(st planesStore) http.HandlerFunc {
 }
 
 // RegisterPlane handles POST /api/v1/planes
-func RegisterPlane(st planesStore, encKey []byte, syncMgr interface {
-	Refresh(ctx interface{ Done() <-chan struct{} }) error
-}) http.HandlerFunc {
+func RegisterPlane(st planesStore, encKey []byte, syncMgr syncRefresher, logger *log.Logger, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Name                string `json:"name"`
@@ -130,11 +131,17 @@ func RegisterPlane(st planesStore, encKey []byte, syncMgr interface {
 			SyncIntervalSeconds: req.SyncIntervalSeconds,
 		}
 		if err := st.CreateRegionalPlane(p); err != nil {
+			ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "plane.register", "plane", p.PlaneID)
+			writeAudit(logger, st, ev, err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
-		// Start the worker for the newly registered plane.
 		_ = syncMgr.Refresh(r.Context())
+
+		ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "plane.register", "plane", p.PlaneID)
+		ev.AfterJSON = auditJSON(map[string]any{"name": p.Name, "baseUrl": p.BaseURL, "syncIntervalSeconds": p.SyncIntervalSeconds})
+		writeAudit(logger, st, ev, nil)
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]string{"planeId": p.PlaneID})
@@ -161,9 +168,7 @@ func GetPlane(st planesStore) http.HandlerFunc {
 }
 
 // UpdatePlane handles PATCH /api/v1/planes/{planeId}
-func UpdatePlane(st planesStore, encKey []byte, syncMgr interface {
-	Refresh(ctx interface{ Done() <-chan struct{} }) error
-}) http.HandlerFunc {
+func UpdatePlane(st planesStore, encKey []byte, syncMgr syncRefresher, logger *log.Logger, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		planeID := chi.URLParam(r, "planeId")
 		existing, ok, err := st.GetRegionalPlane(planeID)
@@ -208,21 +213,26 @@ func UpdatePlane(st planesStore, encKey []byte, syncMgr interface {
 			tlsCAPem = req.TLSCAPem
 		}
 		if err := st.UpdateRegionalPlane(planeID, req.Name, req.BaseURL, enc, tlsCAPem, req.SyncIntervalSeconds); err != nil {
+			ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "plane.update", "plane", planeID)
+			writeAudit(logger, st, ev, err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
 		_ = syncMgr.Refresh(r.Context())
+
+		ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "plane.update", "plane", planeID)
+		ev.AfterJSON = auditJSON(map[string]any{"name": req.Name, "baseUrl": req.BaseURL})
+		writeAudit(logger, st, ev, nil)
+
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
 // DeletePlane handles DELETE /api/v1/planes/{planeId}
-func DeletePlane(st planesStore, syncMgr interface {
-	Refresh(ctx interface{ Done() <-chan struct{} }) error
-}) http.HandlerFunc {
+func DeletePlane(st planesStore, syncMgr syncRefresher, logger *log.Logger, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		planeID := chi.URLParam(r, "planeId")
-		_, ok, err := st.GetRegionalPlane(planeID)
+		existing, ok, err := st.GetRegionalPlane(planeID)
 		if err != nil {
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
@@ -232,10 +242,17 @@ func DeletePlane(st planesStore, syncMgr interface {
 			return
 		}
 		if err := st.DeleteRegionalPlane(planeID); err != nil {
+			ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "plane.delete", "plane", planeID)
+			writeAudit(logger, st, ev, err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
 		_ = syncMgr.Refresh(r.Context())
+
+		ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "plane.delete", "plane", planeID)
+		ev.BeforeJSON = auditJSON(map[string]any{"name": existing.Name, "baseUrl": existing.BaseURL})
+		writeAudit(logger, st, ev, nil)
+
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

@@ -326,14 +326,11 @@ run_scenario "multi-agent" \
    AGENT_BIN=$LOG_DIR/agent-e2e-bin \
    '$BASE_DIR/scripts/test-multi-agent.sh'"
 
-# ── Scenario 6: Global plane sync (deferred) ─────────────────────────────────
-# Requires operator auth on the global-plane. That auth model is being
-# re-evaluated separately (the bootstrap-admin + login endpoint that had been
-# added to make this pass were reverted), so this scenario is SKIPPED by
-# default. Set E2E_RUN_GLOBAL_SYNC=1 to run it once global-plane operator auth
-# is resolved. The federation service-token scopes below are already corrected
-# (device.read, artifact.read, federation.push) so it is ready to re-enable.
-if [ "${E2E_RUN_GLOBAL_SYNC:-0}" = "1" ]; then
+# ── Scenario 6: Global plane sync ────────────────────────────────────────────
+# Global-plane operator auth (hardened local login + EnsureBootstrapAdmin) is
+# implemented in feat/global-plane-auth-phase1. The bootstrap admin is seeded
+# from AUTH_BOOTSTRAP_EMAIL/PASSWORD; the global-plane login endpoint is now
+# hardened (backoff, email normalisation, TOTP-pending, audit logging).
 run_scenario "global-plane-sync" '
   set -euo pipefail
   log() { echo "[global-sync] $*"; }
@@ -406,11 +403,6 @@ run_scenario "global-plane-sync" '
   [ "$POLICY_COUNT" -gt 0 ] || { echo "Global policy did not fan out to regional plane"; exit 1; }
   log "Policy fan-out confirmed: $POLICY_COUNT policy/policies on regional plane"
 '
-else
-  echo ""
-  log "Scenario: global-plane-sync — SKIPPED (set E2E_RUN_GLOBAL_SYNC=1; deferred pending global-plane operator-auth decision)"
-  SKIP=$((SKIP+1))
-fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

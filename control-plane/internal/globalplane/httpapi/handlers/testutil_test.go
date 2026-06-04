@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/parcel/control-plane/internal/globalplane"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 // testEncKey is a fixed 32-byte AES key for tests.
@@ -78,6 +79,7 @@ func (f *fakePlanesStore) DeleteRegionalPlane(planeID string) error {
 func (f *fakePlanesStore) ListAllPolicySyncStatus() ([]globalplane.PolicySyncStatus, error) {
 	return f.statuses, nil
 }
+func (f *fakePlanesStore) CreateAuditEvent(_ store.AuditEvent) error { return nil }
 
 // ── fakeGroupStore ────────────────────────────────────────────────────────────
 
@@ -158,6 +160,7 @@ func (f *fakeGroupStore) UpsertPolicySyncStatus(groupID, planeID string, pushedA
 	})
 	return nil
 }
+func (f *fakeGroupStore) CreateAuditEvent(_ store.AuditEvent) error { return nil }
 
 // ── fakeEnrollmentStore ───────────────────────────────────────────────────────
 
@@ -242,3 +245,4 @@ func (f *fakeEnrollmentStore) ListGlobalPendingEnrollments(filter globalplane.Gl
 	}
 	return out, nil
 }
+func (f *fakeEnrollmentStore) CreateAuditEvent(_ store.AuditEvent) error { return nil }

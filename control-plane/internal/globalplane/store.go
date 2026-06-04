@@ -1,6 +1,10 @@
 package globalplane
 
-import "time"
+import (
+	"time"
+
+	"github.com/parcel/control-plane/internal/store"
+)
 
 // RegionalPlane is a registered regional control plane.
 type RegionalPlane struct {
@@ -266,4 +270,9 @@ type Store interface {
 	UpsertGlobalPendingEnrollments(planeID string, items []GlobalPendingEnrollment) error
 	PurgeGlobalPendingEnrollmentsForPlane(planeID string) error
 	ListGlobalPendingEnrollments(filter GlobalPendingEnrollmentFilter) ([]GlobalPendingEnrollment, error)
+
+	// Audit
+	CreateAuditEvent(event store.AuditEvent) error
+	ListAuditEvents(filter store.AuditEventFilter) ([]store.AuditEvent, error)
+	DeleteAuditEventsBefore(cutoff time.Time) (int, error)
 }

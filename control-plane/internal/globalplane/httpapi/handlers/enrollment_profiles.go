@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/parcel/control-plane/internal/globalplane"
 	gpsync "github.com/parcel/control-plane/internal/globalplane/sync"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 type enrollmentStore interface {
@@ -21,6 +22,7 @@ type enrollmentStore interface {
 	UpdateGlobalEnrollmentProfile(profileID string, u globalplane.GlobalEnrollmentProfileUpdate) (globalplane.GlobalEnrollmentProfile, error)
 	DeleteGlobalEnrollmentProfile(profileID string) error
 	ListGlobalPendingEnrollments(filter globalplane.GlobalPendingEnrollmentFilter) ([]globalplane.GlobalPendingEnrollment, error)
+	CreateAuditEvent(event store.AuditEvent) error
 }
 
 // ListGlobalEnrollmentProfiles handles GET /api/v1/enrollment-profiles.
@@ -40,7 +42,7 @@ func ListGlobalEnrollmentProfiles(st enrollmentStore) http.HandlerFunc {
 }
 
 // CreateGlobalEnrollmentProfile handles POST /api/v1/enrollment-profiles.
-func CreateGlobalEnrollmentProfile(st enrollmentStore, logger *log.Logger) http.HandlerFunc {
+func CreateGlobalEnrollmentProfile(st enrollmentStore, logger *log.Logger, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Name              string          `json:"name"`
@@ -83,10 +85,16 @@ func CreateGlobalEnrollmentProfile(st enrollmentStore, logger *log.Logger) http.
 			DefaultLabelsJSON: labels,
 		})
 		if err != nil {
-			http.Error(w, "storage error", http.StatusInternalServerError)
 			logger.Printf("[global-plane] create enrollment profile: %v", err)
+			ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "enrollment_profile.create", "enrollment_profile", "")
+			writeAudit(logger, st, ev, err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+		ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "enrollment_profile.create", "enrollment_profile", p.ProfileID)
+		ev.AfterJSON = auditJSON(map[string]any{"name": p.Name})
+		writeAudit(logger, st, ev, nil)
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(p)
@@ -94,7 +102,7 @@ func CreateGlobalEnrollmentProfile(st enrollmentStore, logger *log.Logger) http.
 }
 
 // UpdateGlobalEnrollmentProfile handles PATCH /api/v1/enrollment-profiles/{profileId}.
-func UpdateGlobalEnrollmentProfile(st enrollmentStore, logger *log.Logger) http.HandlerFunc {
+func UpdateGlobalEnrollmentProfile(st enrollmentStore, logger *log.Logger, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		profileID := chi.URLParam(r, "profileId")
 		if _, ok, err := st.GetGlobalEnrollmentProfile(profileID); err != nil {
@@ -133,17 +141,23 @@ func UpdateGlobalEnrollmentProfile(st enrollmentStore, logger *log.Logger) http.
 			DefaultLabelsJSON: labels,
 		})
 		if err != nil {
-			http.Error(w, "storage error", http.StatusInternalServerError)
 			logger.Printf("[global-plane] update enrollment profile %s: %v", profileID, err)
+			ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "enrollment_profile.update", "enrollment_profile", profileID)
+			writeAudit(logger, st, ev, err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+		ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "enrollment_profile.update", "enrollment_profile", profileID)
+		ev.AfterJSON = auditJSON(map[string]any{"name": p.Name})
+		writeAudit(logger, st, ev, nil)
+
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(p)
 	}
 }
 
 // DeleteGlobalEnrollmentProfile handles DELETE /api/v1/enrollment-profiles/{profileId}.
-func DeleteGlobalEnrollmentProfile(st enrollmentStore, logger *log.Logger) http.HandlerFunc {
+func DeleteGlobalEnrollmentProfile(st enrollmentStore, logger *log.Logger, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		profileID := chi.URLParam(r, "profileId")
 		if _, ok, err := st.GetGlobalEnrollmentProfile(profileID); err != nil {
@@ -154,10 +168,15 @@ func DeleteGlobalEnrollmentProfile(st enrollmentStore, logger *log.Logger) http.
 			return
 		}
 		if err := st.DeleteGlobalEnrollmentProfile(profileID); err != nil {
-			http.Error(w, "storage error", http.StatusInternalServerError)
 			logger.Printf("[global-plane] delete enrollment profile %s: %v", profileID, err)
+			ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "enrollment_profile.delete", "enrollment_profile", profileID)
+			writeAudit(logger, st, ev, err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+		ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "enrollment_profile.delete", "enrollment_profile", profileID)
+		writeAudit(logger, st, ev, nil)
+
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -185,9 +204,9 @@ func ListGlobalPendingEnrollments(st enrollmentStore) http.HandlerFunc {
 
 // ApproveGlobalPendingEnrollment handles POST /api/v1/pending-enrollments/{requestId}/approve.
 // Looks up which regional plane owns the request and proxies the approve call.
-func ApproveGlobalPendingEnrollment(st enrollmentStore, encKey []byte, logger *log.Logger) http.HandlerFunc {
+func ApproveGlobalPendingEnrollment(st enrollmentStore, encKey []byte, logger *log.Logger, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		requestID := chi.URLParam(r, "requestId")
+		reqID := chi.URLParam(r, "requestId")
 		items, err := st.ListGlobalPendingEnrollments(globalplane.GlobalPendingEnrollmentFilter{})
 		if err != nil {
 			http.Error(w, "storage error", http.StatusInternalServerError)
@@ -195,7 +214,7 @@ func ApproveGlobalPendingEnrollment(st enrollmentStore, encKey []byte, logger *l
 		}
 		var planeID string
 		for _, item := range items {
-			if item.RequestID == requestID {
+			if item.RequestID == reqID {
 				planeID = item.PlaneID
 				break
 			}
@@ -209,23 +228,29 @@ func ApproveGlobalPendingEnrollment(st enrollmentStore, encKey []byte, logger *l
 			http.Error(w, "plane not found", http.StatusNotFound)
 			return
 		}
-		if err := proxyApprove(r.Context(), plane, requestID, encKey, logger); err != nil {
+		if err := proxyApprove(r.Context(), plane, reqID, encKey, logger); err != nil {
+			ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "enrollment.approve", "enrollment_request", reqID)
+			writeAudit(logger, st, ev, err)
 			http.Error(w, "proxy error: "+err.Error(), http.StatusBadGateway)
 			return
 		}
+		ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "enrollment.approve", "enrollment_request", reqID)
+		ev.AfterJSON = auditJSON(map[string]any{"planeId": planeID})
+		writeAudit(logger, st, ev, nil)
+
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"requestId": requestID, "status": "approved"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"requestId": reqID, "status": "approved"})
 	}
 }
 
 // DenyGlobalPendingEnrollment handles POST /api/v1/pending-enrollments/{requestId}/deny.
-func DenyGlobalPendingEnrollment(st enrollmentStore, encKey []byte, logger *log.Logger) http.HandlerFunc {
+func DenyGlobalPendingEnrollment(st enrollmentStore, encKey []byte, logger *log.Logger, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		requestID := chi.URLParam(r, "requestId")
-		var req struct {
+		reqID := chi.URLParam(r, "requestId")
+		var body struct {
 			Reason string `json:"reason"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewDecoder(r.Body).Decode(&body)
 
 		items, err := st.ListGlobalPendingEnrollments(globalplane.GlobalPendingEnrollmentFilter{})
 		if err != nil {
@@ -234,7 +259,7 @@ func DenyGlobalPendingEnrollment(st enrollmentStore, encKey []byte, logger *log.
 		}
 		var planeID string
 		for _, item := range items {
-			if item.RequestID == requestID {
+			if item.RequestID == reqID {
 				planeID = item.PlaneID
 				break
 			}
@@ -248,12 +273,18 @@ func DenyGlobalPendingEnrollment(st enrollmentStore, encKey []byte, logger *log.
 			http.Error(w, "plane not found", http.StatusNotFound)
 			return
 		}
-		if err := proxyDeny(r.Context(), plane, requestID, req.Reason, encKey, logger); err != nil {
+		if err := proxyDeny(r.Context(), plane, reqID, body.Reason, encKey, logger); err != nil {
+			ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "enrollment.deny", "enrollment_request", reqID)
+			writeAudit(logger, st, ev, err)
 			http.Error(w, "proxy error: "+err.Error(), http.StatusBadGateway)
 			return
 		}
+		ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "enrollment.deny", "enrollment_request", reqID)
+		ev.AfterJSON = auditJSON(map[string]any{"planeId": planeID, "reason": body.Reason})
+		writeAudit(logger, st, ev, nil)
+
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"requestId": requestID, "status": "denied"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"requestId": reqID, "status": "denied"})
 	}
 }
 

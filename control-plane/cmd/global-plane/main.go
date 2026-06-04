@@ -54,6 +54,26 @@ func main() {
 		logger.Fatalf("auth manager: %v", err)
 	}
 
+	// Bootstrap admin — idempotent; no-op once any user exists.
+	if authMode == "local" {
+		if bootEmail := strings.TrimSpace(os.Getenv("AUTH_BOOTSTRAP_EMAIL")); bootEmail != "" {
+			if created, err := store.EnsureBootstrapAdmin(bootEmail, os.Getenv("AUTH_BOOTSTRAP_PASSWORD")); err != nil {
+				logger.Fatalf("bootstrap admin: %v", err)
+			} else if created {
+				logger.Printf("global-plane bootstrap admin created: %s", bootEmail)
+			}
+		}
+	}
+
+	// Login backoff (mirrors regional defaults).
+	loginBackoff := auth.NewLoginBackoff(auth.LoginBackoffConfig{
+		Enabled:   true,
+		Threshold: 5,
+		BaseDelay: 30 * time.Second,
+		MaxDelay:  15 * time.Minute,
+		Window:    60 * time.Minute,
+	})
+
 	// Sync manager.
 	syncMgr := sync.NewManager(store, cfg.TokenEncryptionKey, logger)
 
@@ -74,12 +94,15 @@ func main() {
 	}
 
 	// Build dependencies.
+	trustProxy := os.Getenv("TRUST_PROXY") == "1"
 	deps := globalhttp.Dependencies{
 		Store:              store,
 		SyncManager:        syncMgr,
 		Auth:               authMgr,
+		LoginBackoff:       loginBackoff,
 		TokenEncryptionKey: cfg.TokenEncryptionKey,
 		CORSAllowedOrigins: splitOrigins(cfg.CORSAllowedOrigins),
+		TrustProxy:         trustProxy,
 		ObjectStore:        objStore,
 		S3Bucket:           cfg.MinIOBucket,
 		PresignExpires:     cfg.PresignExpires,

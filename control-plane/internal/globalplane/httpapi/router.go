@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"strings"
@@ -73,21 +74,41 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 	type ctxDone interface{ Done() <-chan struct{} }
 	syncAdapter := &syncAdapter{mgr: deps.SyncManager}
 
+	tp := deps.TrustProxy
+
 	r.Route("/api/v1", func(r chi.Router) {
+		// Operator login — public; mints a JWT for the global-plane.
+		r.Post("/auth/login", handlers.Login(logger, deps.Auth, deps.Store, tp, deps.LoginBackoff))
+
+		// Auth status — public; lets the UI know if login is available.
+		r.Get("/auth/status", func(w http.ResponseWriter, r *http.Request) {
+			type statusResp struct {
+				Enabled bool   `json:"enabled"`
+				Mode    string `json:"mode"`
+			}
+			enabled := deps.Auth != nil && deps.Auth.Enabled()
+			mode := "disabled"
+			if deps.Auth != nil {
+				mode = deps.Auth.Mode()
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(statusResp{Enabled: enabled, Mode: mode})
+		})
+
 		// Plane management — requires admin role or federation.manage scope.
 		r.With(requireScopeOrRole(auth.ScopeFederationManage, "admin")).
 			Get("/planes", handlers.ListPlanes(deps.Store))
 
 		r.With(requireScopeOrRole(auth.ScopeFederationManage, "admin")).
-			Post("/planes", handlers.RegisterPlane(deps.Store, deps.TokenEncryptionKey, syncAdapter))
+			Post("/planes", handlers.RegisterPlane(deps.Store, deps.TokenEncryptionKey, syncAdapter, logger, tp))
 
 		r.Route("/planes/{planeId}", func(r chi.Router) {
 			r.With(requireScopeOrRole(auth.ScopeFederationManage, "admin")).
 				Get("/", handlers.GetPlane(deps.Store))
 			r.With(requireRole("admin")).
-				Patch("/", handlers.UpdatePlane(deps.Store, deps.TokenEncryptionKey, syncAdapter))
+				Patch("/", handlers.UpdatePlane(deps.Store, deps.TokenEncryptionKey, syncAdapter, logger, tp))
 			r.With(requireRole("admin")).
-				Delete("/", handlers.DeletePlane(deps.Store, syncAdapter))
+				Delete("/", handlers.DeletePlane(deps.Store, syncAdapter, logger, tp))
 		})
 
 		// Aggregated read endpoints — viewer or device.read / artifact.read scope.
@@ -104,15 +125,15 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(requireScopeOrRole(auth.ScopeArtifactRead, "viewer")).
 			Get("/groups", handlers.ListGlobalGroups(deps.Store))
 		r.With(requireRole("operator")).
-			Post("/groups", handlers.CreateGlobalGroup(deps.Store, logger))
+			Post("/groups", handlers.CreateGlobalGroup(deps.Store, logger, tp))
 		r.With(requireRole("admin")).
-			Delete("/groups/{groupId}", handlers.DeleteGlobalGroup(deps.Store, deps.TokenEncryptionKey, logger))
+			Delete("/groups/{groupId}", handlers.DeleteGlobalGroup(deps.Store, deps.TokenEncryptionKey, logger, tp))
 		r.With(requireScopeOrRole(auth.ScopeArtifactRead, "viewer")).
 			Get("/groups/{groupId}/desired-state", handlers.GetGlobalDesiredState(deps.Store))
 		r.With(requireRole("operator")).
-			Put("/groups/{groupId}/desired-state", handlers.PutGlobalDesiredState(deps.Store, deps.TokenEncryptionKey, logger))
+			Put("/groups/{groupId}/desired-state", handlers.PutGlobalDesiredState(deps.Store, deps.TokenEncryptionKey, logger, tp))
 		r.With(requireRole("operator")).
-			Delete("/groups/{groupId}/desired-state", handlers.DeleteGlobalDesiredState(deps.Store, deps.TokenEncryptionKey, logger))
+			Delete("/groups/{groupId}/desired-state", handlers.DeleteGlobalDesiredState(deps.Store, deps.TokenEncryptionKey, logger, tp))
 		r.With(requireScopeOrRole(auth.ScopeArtifactRead, "viewer")).
 			Get("/desired-state", handlers.ListGlobalDesiredStates(deps.Store))
 
@@ -120,12 +141,12 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(requireScopeOrRole(auth.ScopeDeviceRead, "viewer")).
 			Get("/enrollment-profiles", handlers.ListGlobalEnrollmentProfiles(deps.Store))
 		r.With(requireRole("operator")).
-			Post("/enrollment-profiles", handlers.CreateGlobalEnrollmentProfile(deps.Store, logger))
+			Post("/enrollment-profiles", handlers.CreateGlobalEnrollmentProfile(deps.Store, logger, tp))
 		r.Route("/enrollment-profiles/{profileId}", func(r chi.Router) {
 			r.With(requireRole("operator")).
-				Patch("/", handlers.UpdateGlobalEnrollmentProfile(deps.Store, logger))
+				Patch("/", handlers.UpdateGlobalEnrollmentProfile(deps.Store, logger, tp))
 			r.With(requireRole("operator")).
-				Delete("/", handlers.DeleteGlobalEnrollmentProfile(deps.Store, logger))
+				Delete("/", handlers.DeleteGlobalEnrollmentProfile(deps.Store, logger, tp))
 		})
 
 		// Global pending enrollments (cached from regional planes, approve/deny proxied).
@@ -133,9 +154,9 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 			Get("/pending-enrollments", handlers.ListGlobalPendingEnrollments(deps.Store))
 		r.Route("/pending-enrollments/{requestId}", func(r chi.Router) {
 			r.With(requireRole("operator")).
-				Post("/approve", handlers.ApproveGlobalPendingEnrollment(deps.Store, deps.TokenEncryptionKey, logger))
+				Post("/approve", handlers.ApproveGlobalPendingEnrollment(deps.Store, deps.TokenEncryptionKey, logger, tp))
 			r.With(requireRole("operator")).
-				Post("/deny", handlers.DenyGlobalPendingEnrollment(deps.Store, deps.TokenEncryptionKey, logger))
+				Post("/deny", handlers.DenyGlobalPendingEnrollment(deps.Store, deps.TokenEncryptionKey, logger, tp))
 		})
 
 		// Federated artifact management.
@@ -154,6 +175,12 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 			r.With(requireScopeOrRole(auth.ScopeArtifactRead, "viewer")).
 				Get("/presign", handlers.PresignFederatedArtifact(deps.Store, deps.ObjectStore, deps.S3Bucket, deps.PresignExpires))
 		})
+
+		// Audit log — viewer or higher.
+		r.With(requireRole("viewer")).
+			Get("/audit", handlers.ListGlobalAuditEvents(logger, deps.Store, tp))
+		r.With(requireRole("viewer")).
+			Get("/audit/export", handlers.ExportGlobalAuditCSV(logger, deps.Store, tp))
 	})
 
 	_ = context.Background // satisfy import if unused elsewhere
