@@ -1,6 +1,10 @@
 package globalplane
 
-import "time"
+import (
+	"time"
+
+	"github.com/parcel/control-plane/internal/store"
+)
 
 // RegionalPlane is a registered regional control plane.
 type RegionalPlane struct {
@@ -106,25 +110,25 @@ type ArtifactReplicationStatus struct {
 
 // GlobalGroup is an operator-defined group on the global plane with a label selector.
 type GlobalGroup struct {
-	GroupID      string
-	Name         string
-	SelectorJSON []byte
-	CreatedBy    string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	GroupID      string    `json:"groupId"`
+	Name         string    `json:"name"`
+	SelectorJSON []byte    `json:"selectorJson,omitempty"`
+	CreatedBy    string    `json:"createdBy,omitempty"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
 // GlobalDesiredState is the desired artifact state for a global group.
 type GlobalDesiredState struct {
-	GroupID          string
-	ArtifactID       string
-	DesiredVersion   string
-	DesiredConfigRev string
-	PolicyJSON       []byte
-	ComponentsJSON   []byte
-	CheckinInterval  int
-	UpdatedAt        time.Time
-	UpdatedBy        string
+	GroupID          string    `json:"groupId"`
+	ArtifactID       string    `json:"artifactId,omitempty"`
+	DesiredVersion   string    `json:"desiredVersion,omitempty"`
+	DesiredConfigRev string    `json:"desiredConfigRev,omitempty"`
+	PolicyJSON       []byte    `json:"policyJson,omitempty"`
+	ComponentsJSON   []byte    `json:"componentsJson,omitempty"`
+	CheckinInterval  int       `json:"checkinInterval,omitempty"`
+	UpdatedAt        time.Time `json:"updatedAt"`
+	UpdatedBy        string    `json:"updatedBy,omitempty"`
 }
 
 // GlobalDesiredStateWithGroup pairs a group with its desired state for fan-out.
@@ -135,19 +139,19 @@ type GlobalDesiredStateWithGroup struct {
 
 // GlobalEnrollmentProfile is an enrollment profile created on the global plane.
 type GlobalEnrollmentProfile struct {
-	ProfileID         string
-	Name              string
-	RequireApproval   bool
-	AllowUntrustedHW  bool
-	ChallengeHint     string
-	ApprovalDelaySec  int
-	MaxUses           int
-	CertValidityDays  int
-	DefaultLabelsJSON []byte
-	Disabled          bool
-	CreatedBy         string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	ProfileID         string    `json:"profileId"`
+	Name              string    `json:"name"`
+	RequireApproval   bool      `json:"requireApproval"`
+	AllowUntrustedHW  bool      `json:"allowUntrustedHw"`
+	ChallengeHint     string    `json:"challengeHint,omitempty"`
+	ApprovalDelaySec  int       `json:"approvalDelaySec,omitempty"`
+	MaxUses           int       `json:"maxUses,omitempty"`
+	CertValidityDays  int       `json:"certValidityDays,omitempty"`
+	DefaultLabelsJSON []byte    `json:"defaultLabels,omitempty"`
+	Disabled          bool      `json:"disabled"`
+	CreatedBy         string    `json:"createdBy,omitempty"`
+	CreatedAt         time.Time `json:"createdAt"`
+	UpdatedAt         time.Time `json:"updatedAt"`
 }
 
 // GlobalEnrollmentProfileUpdate carries the mutable fields of a global enrollment profile.
@@ -266,4 +270,9 @@ type Store interface {
 	UpsertGlobalPendingEnrollments(planeID string, items []GlobalPendingEnrollment) error
 	PurgeGlobalPendingEnrollmentsForPlane(planeID string) error
 	ListGlobalPendingEnrollments(filter GlobalPendingEnrollmentFilter) ([]GlobalPendingEnrollment, error)
+
+	// Audit
+	CreateAuditEvent(event store.AuditEvent) error
+	ListAuditEvents(filter store.AuditEventFilter) ([]store.AuditEvent, error)
+	DeleteAuditEventsBefore(cutoff time.Time) (int, error)
 }

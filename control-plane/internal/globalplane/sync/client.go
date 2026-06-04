@@ -50,12 +50,14 @@ func newRegionalClient(baseURL, token, tlsCAPem string) (*regionalClient, error)
 }
 
 // DeviceRow is the minimal shape we need from GET /api/v1/devices.
+// Labels and Metadata are map[string]interface{} because the regional plane
+// stores them as json.RawMessage — values may not be plain strings.
 type DeviceRow struct {
-	DeviceID string            `json:"deviceId"`
-	Status   string            `json:"status"`
-	LastSeen *time.Time        `json:"lastSeen"`
-	Labels   map[string]string `json:"labels"`
-	Metadata map[string]string `json:"metadata"`
+	DeviceID string                 `json:"deviceId"`
+	Status   string                 `json:"status"`
+	LastSeen *time.Time             `json:"lastSeen"`
+	Labels   map[string]interface{} `json:"labels"`
+	Metadata map[string]interface{} `json:"metadata"`
 }
 
 // ArtifactRow is the minimal shape we need from GET /api/v1/artifacts.
@@ -81,18 +83,21 @@ type HealthSummary struct {
 }
 
 // FetchDevices retrieves all devices from the regional plane.
+// The regional plane returns a paginated object {"items":[...],"total":N}.
 func (c *regionalClient) FetchDevices(ctx context.Context) ([]globalplane.CachedDevice, error) {
 	var all []DeviceRow
 	offset := 0
 	limit := 500
 	for {
 		url := fmt.Sprintf("%s/api/v1/devices?limit=%d&offset=%d", c.baseURL, limit, offset)
-		var page []DeviceRow
-		if err := c.getJSON(ctx, url, &page); err != nil {
+		var resp struct {
+			Items []DeviceRow `json:"items"`
+		}
+		if err := c.getJSON(ctx, url, &resp); err != nil {
 			return nil, fmt.Errorf("fetch devices: %w", err)
 		}
-		all = append(all, page...)
-		if len(page) < limit {
+		all = append(all, resp.Items...)
+		if len(resp.Items) < limit {
 			break
 		}
 		offset += limit
@@ -103,11 +108,27 @@ func (c *regionalClient) FetchDevices(ctx context.Context) ([]globalplane.Cached
 			DeviceID: d.DeviceID,
 			Status:   d.Status,
 			LastSeen: d.LastSeen,
-			Labels:   d.Labels,
-			Metadata: d.Metadata,
+			Labels:   toStringMap(d.Labels),
+			Metadata: toStringMap(d.Metadata),
 		}
 	}
 	return out, nil
+}
+
+// toStringMap converts map[string]interface{} to map[string]string, keeping
+// only entries whose value is a JSON string. Non-string values (objects,
+// numbers, booleans) are silently skipped so they don't cause unmarshal errors.
+func toStringMap(m map[string]interface{}) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		if s, ok := v.(string); ok {
+			out[k] = s
+		}
+	}
+	return out
 }
 
 // FetchHealth retrieves the health summary from the regional plane.
@@ -118,18 +139,21 @@ func (c *regionalClient) FetchHealth(ctx context.Context) (HealthSummary, error)
 }
 
 // FetchArtifacts retrieves all artifact metadata from the regional plane.
+// The regional plane returns a paginated object {"items":[...],"total":N}.
 func (c *regionalClient) FetchArtifacts(ctx context.Context) ([]globalplane.CachedArtifact, error) {
 	var all []ArtifactRow
 	offset := 0
 	limit := 500
 	for {
 		url := fmt.Sprintf("%s/api/v1/artifacts?limit=%d&offset=%d", c.baseURL, limit, offset)
-		var page []ArtifactRow
-		if err := c.getJSON(ctx, url, &page); err != nil {
+		var resp struct {
+			Items []ArtifactRow `json:"items"`
+		}
+		if err := c.getJSON(ctx, url, &resp); err != nil {
 			return nil, fmt.Errorf("fetch artifacts: %w", err)
 		}
-		all = append(all, page...)
-		if len(page) < limit {
+		all = append(all, resp.Items...)
+		if len(resp.Items) < limit {
 			break
 		}
 		offset += limit

@@ -134,6 +134,10 @@ export default function GlobalPage({
   const [token, setToken] = useState(() => {
     try { return window.localStorage.getItem('hwops_global_token') || '' } catch { return '' }
   })
+  const [loginEmail, setLoginEmail] = useState('')
+  const [loginPassword, setLoginPassword] = useState('')
+  const [loginError, setLoginError] = useState(null)
+  const [loginLoading, setLoginLoading] = useState(false)
   const [planes, setPlanes] = useState([])
   const [healthMap, setHealthMap] = useState({}) // planeId → health snapshot
   const [devices, setDevices] = useState([])
@@ -237,6 +241,40 @@ export default function GlobalPage({
     if (onChangeGlobalPlaneUrl) onChangeGlobalPlaneUrl(urlInput)
   }
 
+  const handleLogin = async (e) => {
+    e.preventDefault()
+    setLoginError(null)
+    setLoginLoading(true)
+    try {
+      const url = globalPlaneUrl || urlInput
+      if (!url) throw new Error('Set the global-plane URL first')
+      const resp = await fetch(`${url}/api/v1/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: loginEmail, password: loginPassword }),
+      })
+      const data = await resp.json()
+      if (!resp.ok) throw new Error(data || `${resp.status}`)
+      if (!data.token) throw new Error('No token in response')
+      try { window.localStorage.setItem('hwops_global_token', data.token) } catch {}
+      setToken(data.token)
+      setLoginPassword('')
+      setLoginError(null)
+      if (onChangeGlobalPlaneUrl && urlInput) onChangeGlobalPlaneUrl(urlInput)
+    } catch (err) {
+      setLoginError(err.message)
+    } finally {
+      setLoginLoading(false)
+    }
+  }
+
+  const handleSignOut = () => {
+    try { window.localStorage.removeItem('hwops_global_token') } catch {}
+    setToken('')
+    setLoginEmail('')
+    setLoginPassword('')
+  }
+
   const handleRegister = async (e) => {
     e.preventDefault()
     setRegisterError(null)
@@ -300,7 +338,7 @@ export default function GlobalPage({
       {/* Connection config */}
       <div className="card" style={{ padding: '14px 18px', marginBottom: 20 }}>
         <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 10 }}>Global-plane connection</div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 10 }}>
           <div style={{ flex: '1 1 260px' }}>
             <label className="label">URL</label>
             <input
@@ -310,19 +348,63 @@ export default function GlobalPage({
               onChange={e => setUrlInput(e.target.value)}
             />
           </div>
-          <div style={{ flex: '1 1 260px' }}>
-            <label className="label">Bearer token (optional)</label>
-            <input
-              className="input"
-              type="password"
-              placeholder="JWT or service token"
-              value={token}
-              onChange={e => setToken(e.target.value)}
-            />
-          </div>
-          <button className="button" onClick={handleConnect}>Connect</button>
         </div>
-        {error && <div style={{ color: '#f27272', marginTop: 8, fontSize: 12 }}>{error}</div>}
+
+        {/* Login form — shown when no token is active */}
+        {!token ? (
+          <form onSubmit={handleLogin} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 4 }}>
+            <div style={{ flex: '1 1 180px' }}>
+              <label className="label">Email</label>
+              <input
+                className="input"
+                type="email"
+                placeholder="operator@example.com"
+                value={loginEmail}
+                onChange={e => setLoginEmail(e.target.value)}
+                autoComplete="username"
+              />
+            </div>
+            <div style={{ flex: '1 1 160px' }}>
+              <label className="label">Password</label>
+              <input
+                className="input"
+                type="password"
+                placeholder="Password"
+                value={loginPassword}
+                onChange={e => setLoginPassword(e.target.value)}
+                autoComplete="current-password"
+              />
+            </div>
+            <button className="button" type="submit" disabled={loginLoading}>
+              {loginLoading ? 'Signing in…' : 'Sign in'}
+            </button>
+          </form>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
+            <span className="chip success" style={{ fontSize: 12 }}>Authenticated</span>
+            <button className="button ghost" style={{ fontSize: 12 }} onClick={handleSignOut}>Sign out</button>
+          </div>
+        )}
+
+        {/* Service-token / break-glass fallback */}
+        <details style={{ marginTop: 8 }}>
+          <summary className="muted" style={{ fontSize: 12, cursor: 'pointer' }}>Use service token (break-glass)</summary>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', marginTop: 8 }}>
+            <div style={{ flex: '1 1 260px' }}>
+              <input
+                className="input"
+                type="password"
+                placeholder="JWT or service token"
+                value={token}
+                onChange={e => setToken(e.target.value)}
+              />
+            </div>
+            <button className="button ghost" onClick={handleConnect}>Set token</button>
+          </div>
+        </details>
+
+        {loginError && <div style={{ color: '#f27272', marginTop: 8, fontSize: 12 }}>{loginError}</div>}
+        {error && <div style={{ color: '#f27272', marginTop: 4, fontSize: 12 }}>{error}</div>}
       </div>
 
       {!effectiveUrl && (

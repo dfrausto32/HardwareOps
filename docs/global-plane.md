@@ -44,6 +44,17 @@ Generate an encryption key:
 openssl rand -base64 32
 ```
 
+### Bootstrap admin (local auth)
+
+To seed the first operator account on first run set:
+
+| Variable | Description |
+|---|---|
+| `AUTH_BOOTSTRAP_EMAIL` | Email for the initial admin user |
+| `AUTH_BOOTSTRAP_PASSWORD` | Password for the initial admin user |
+
+`EnsureBootstrapAdmin` is idempotent: it is a no-op once any user exists, so it is safe to leave these set in production configs.
+
 ### Optional variables
 
 | Variable | Default | Description |
@@ -55,6 +66,7 @@ openssl rand -base64 32
 | `ENABLE_TLS` | `0` | Set to `1` to enable TLS |
 | `TLS_CERT_PATH` | _(none)_ | TLS certificate path (when `ENABLE_TLS=1`) |
 | `TLS_KEY_PATH` | _(none)_ | TLS key path (when `ENABLE_TLS=1`) |
+| `TRUST_PROXY` | `0` | Set to `1` to honor `X-Forwarded-For`/`X-Real-IP` headers for source IP in audit events |
 
 ### Run
 
@@ -113,9 +125,45 @@ The global-plane immediately starts a sync goroutine for the new plane.
 
 ---
 
+## Operator Authentication
+
+The global-plane uses the same JWT / service-token mechanism as regional planes, with a distinct issuer (`parcel-global`) so a regional JWT is rejected.
+
+### Login (local auth)
+
+```bash
+# Obtain a JWT for the bootstrap admin (or any local user).
+curl -X POST https://<global-host>/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "admin@example.com", "password": "<password>"}'
+# → {"token":"<jwt>","expiresAt":"..."}
+```
+
+The login endpoint enforces progressive backoff after repeated failures (5-attempt threshold, 30s–15m backoff window). All login outcomes are written to the global audit log.
+
+Use the returned JWT as `Authorization: Bearer <jwt>` on all subsequent requests.
+
+---
+
 ## API Endpoints
 
 All routes are under `/api/v1`. Authentication uses the same JWT/service-token mechanism as regional planes.
+
+### Auth
+
+| Method | Path | Access | Description |
+|---|---|---|---|
+| `POST` | `/auth/login` | public | Local-auth login; returns JWT |
+| `GET` | `/auth/status` | public | Whether local auth is enabled |
+
+### Audit log
+
+| Method | Path | Access | Description |
+|---|---|---|---|
+| `GET` | `/audit` | viewer+ | Query audit events (filter by action, actor, target, time range) |
+| `GET` | `/audit/export` | viewer+ | Download audit log as CSV |
+
+Query params for `/audit`: `action`, `actorType`, `actorId`, `actorEmail`, `targetType`, `targetId`, `status`, `since` (RFC3339), `until` (RFC3339), `limit` (default 200, max 5000), `offset`.
 
 ### Plane management
 

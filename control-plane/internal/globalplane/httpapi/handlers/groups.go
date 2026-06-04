@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/parcel/control-plane/internal/globalplane"
 	gpsync "github.com/parcel/control-plane/internal/globalplane/sync"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 type groupStore interface {
@@ -23,6 +24,7 @@ type groupStore interface {
 	DeleteGlobalDesiredState(groupID string) error
 	ListRegionalPlanes() ([]globalplane.RegionalPlane, error)
 	UpsertPolicySyncStatus(groupID, planeID string, pushedAt *time.Time, pushErr string, retryCount int) error
+	CreateAuditEvent(event store.AuditEvent) error
 }
 
 // ListGlobalGroups handles GET /api/v1/groups.
@@ -42,7 +44,7 @@ func ListGlobalGroups(st groupStore) http.HandlerFunc {
 }
 
 // CreateGlobalGroup handles POST /api/v1/groups.
-func CreateGlobalGroup(st groupStore, logger *log.Logger) http.HandlerFunc {
+func CreateGlobalGroup(st groupStore, logger *log.Logger, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Name         string          `json:"name"`
@@ -65,10 +67,17 @@ func CreateGlobalGroup(st groupStore, logger *log.Logger) http.HandlerFunc {
 			SelectorJSON: sel,
 		})
 		if err != nil {
-			http.Error(w, "storage error", http.StatusInternalServerError)
 			logger.Printf("[global-plane] create group: %v", err)
+			ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "group.create", "group", "")
+			writeAudit(logger, st, ev, err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+
+		ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "group.create", "group", g.GroupID)
+		ev.AfterJSON = auditJSON(map[string]any{"name": g.Name})
+		writeAudit(logger, st, ev, nil)
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(g)
@@ -77,13 +86,15 @@ func CreateGlobalGroup(st groupStore, logger *log.Logger) http.HandlerFunc {
 
 // DeleteGlobalGroup handles DELETE /api/v1/groups/{groupId}.
 // Also fans out policy deletion to all enabled regional planes.
-func DeleteGlobalGroup(st groupStore, encKey []byte, logger *log.Logger) http.HandlerFunc {
+func DeleteGlobalGroup(st groupStore, encKey []byte, logger *log.Logger, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "groupId")
-		if _, ok, err := st.GetGlobalGroup(groupID); err != nil {
+		existing, ok, err := st.GetGlobalGroup(groupID)
+		if err != nil {
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
-		} else if !ok {
+		}
+		if !ok {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
@@ -92,10 +103,17 @@ func DeleteGlobalGroup(st groupStore, encKey []byte, logger *log.Logger) http.Ha
 		go fanOutDeletePolicy(st, encKey, groupID, logger)
 
 		if err := st.DeleteGlobalGroup(groupID); err != nil {
-			http.Error(w, "storage error", http.StatusInternalServerError)
 			logger.Printf("[global-plane] delete group %s: %v", groupID, err)
+			ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "group.delete", "group", groupID)
+			writeAudit(logger, st, ev, err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+
+		ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "group.delete", "group", groupID)
+		ev.BeforeJSON = auditJSON(map[string]any{"name": existing.Name})
+		writeAudit(logger, st, ev, nil)
+
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -120,7 +138,7 @@ func GetGlobalDesiredState(st groupStore) http.HandlerFunc {
 
 // PutGlobalDesiredState handles PUT /api/v1/groups/{groupId}/desired-state.
 // Persists the state and fans out to all enabled regional planes.
-func PutGlobalDesiredState(st groupStore, encKey []byte, logger *log.Logger) http.HandlerFunc {
+func PutGlobalDesiredState(st groupStore, encKey []byte, logger *log.Logger, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "groupId")
 		group, ok, err := st.GetGlobalGroup(groupID)
@@ -156,10 +174,19 @@ func PutGlobalDesiredState(st groupStore, encKey []byte, logger *log.Logger) htt
 			CheckinInterval:  req.CheckinInterval,
 		}
 		if err := st.UpsertGlobalDesiredState(state); err != nil {
-			http.Error(w, "storage error", http.StatusInternalServerError)
 			logger.Printf("[global-plane] upsert desired state for group %s: %v", groupID, err)
+			ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "group.desired_state.set", "group", groupID)
+			writeAudit(logger, st, ev, err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+
+		ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "group.desired_state.set", "group", groupID)
+		ev.AfterJSON = auditJSON(map[string]any{
+			"desiredVersion": req.DesiredVersion,
+			"artifactId":     req.ArtifactID,
+		})
+		writeAudit(logger, st, ev, nil)
 
 		// Fan-out to all enabled regional planes asynchronously.
 		go fanOutPushPolicy(st, encKey, group, state, logger)
@@ -170,15 +197,21 @@ func PutGlobalDesiredState(st groupStore, encKey []byte, logger *log.Logger) htt
 }
 
 // DeleteGlobalDesiredState handles DELETE /api/v1/groups/{groupId}/desired-state.
-func DeleteGlobalDesiredState(st groupStore, encKey []byte, logger *log.Logger) http.HandlerFunc {
+func DeleteGlobalDesiredState(st groupStore, encKey []byte, logger *log.Logger, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "groupId")
 		go fanOutDeletePolicy(st, encKey, groupID, logger)
 		if err := st.DeleteGlobalDesiredState(groupID); err != nil {
-			http.Error(w, "storage error", http.StatusInternalServerError)
 			logger.Printf("[global-plane] delete desired state for group %s: %v", groupID, err)
+			ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "group.desired_state.delete", "group", groupID)
+			writeAudit(logger, st, ev, err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+
+		ev := buildAuditEvent(r, trustProxy, auditActor{Type: "user", AuthMethod: "local"}, "group.desired_state.delete", "group", groupID)
+		writeAudit(logger, st, ev, nil)
+
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

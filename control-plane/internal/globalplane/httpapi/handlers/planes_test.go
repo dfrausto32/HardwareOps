@@ -116,7 +116,7 @@ func TestRegisterPlane_MissingRequiredFields(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/planes", strings.NewReader(tc.body))
 			w := httptest.NewRecorder()
-			RegisterPlane(st, testEncKey, noopSync{}).ServeHTTP(w, req)
+			RegisterPlane(st, testEncKey, noopSync{}, silentLogger(), false).ServeHTTP(w, req)
 			if w.Code != http.StatusBadRequest {
 				t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
 			}
@@ -130,7 +130,7 @@ func TestRegisterPlane_Valid(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/planes", strings.NewReader(body))
 	w := httptest.NewRecorder()
 
-	RegisterPlane(st, testEncKey, noopSync{}).ServeHTTP(w, req)
+	RegisterPlane(st, testEncKey, noopSync{}, silentLogger(), false).ServeHTTP(w, req)
 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
@@ -195,7 +195,7 @@ func TestDeletePlane_NotFound(t *testing.T) {
 	req = withURLParam(req, "planeId", uuid.NewString())
 	w := httptest.NewRecorder()
 
-	DeletePlane(st, noopSync{}).ServeHTTP(w, req)
+	DeletePlane(st, noopSync{}, silentLogger(), false).ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", w.Code)
 	}
@@ -210,7 +210,7 @@ func TestDeletePlane_Valid(t *testing.T) {
 	req = withURLParam(req, "planeId", planeID)
 	w := httptest.NewRecorder()
 
-	DeletePlane(st, noopSync{}).ServeHTTP(w, req)
+	DeletePlane(st, noopSync{}, silentLogger(), false).ServeHTTP(w, req)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d", w.Code)
 	}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/parcel/control-plane/internal/globalplane"
+	"github.com/parcel/control-plane/internal/store"
 )
 
 // ── Stub store ────────────────────────────────────────────────────────────────
@@ -159,6 +160,11 @@ func (s *stubStore) DeleteGlobalEnrollmentProfile(_ string) error { panic("not c
 func (s *stubStore) ListGlobalPendingEnrollments(_ globalplane.GlobalPendingEnrollmentFilter) ([]globalplane.GlobalPendingEnrollment, error) {
 	panic("not called")
 }
+func (s *stubStore) CreateAuditEvent(_ store.AuditEvent) error                    { panic("not called") }
+func (s *stubStore) ListAuditEvents(_ store.AuditEventFilter) ([]store.AuditEvent, error) {
+	panic("not called")
+}
+func (s *stubStore) DeleteAuditEventsBefore(_ time.Time) (int, error) { panic("not called") }
 
 // testEncKey is a fixed 32-byte AES key for tests.
 var testEncKey = []byte("test-encryption-key-32-bytes-xxx")

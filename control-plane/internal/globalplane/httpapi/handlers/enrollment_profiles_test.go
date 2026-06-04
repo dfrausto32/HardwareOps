@@ -33,7 +33,7 @@ func TestCreateGlobalEnrollmentProfile_MissingName(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/enrollment-profiles", strings.NewReader(`{"maxUses":5}`))
 	w := httptest.NewRecorder()
 
-	CreateGlobalEnrollmentProfile(st, silentLogger()).ServeHTTP(w, req)
+	CreateGlobalEnrollmentProfile(st, silentLogger(), false).ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
@@ -45,7 +45,7 @@ func TestCreateGlobalEnrollmentProfile_Valid(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/enrollment-profiles", strings.NewReader(body))
 	w := httptest.NewRecorder()
 
-	CreateGlobalEnrollmentProfile(st, silentLogger()).ServeHTTP(w, req)
+	CreateGlobalEnrollmentProfile(st, silentLogger(), false).ServeHTTP(w, req)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
 	}
@@ -68,7 +68,7 @@ func TestCreateGlobalEnrollmentProfile_DefaultsApprovalAndCertValidity(t *testin
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/enrollment-profiles", strings.NewReader(body))
 	w := httptest.NewRecorder()
 
-	CreateGlobalEnrollmentProfile(st, silentLogger()).ServeHTTP(w, req)
+	CreateGlobalEnrollmentProfile(st, silentLogger(), false).ServeHTTP(w, req)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
 	}
@@ -89,7 +89,7 @@ func TestUpdateGlobalEnrollmentProfile_NotFound(t *testing.T) {
 	req = withURLParam(req, "profileId", pid)
 	w := httptest.NewRecorder()
 
-	UpdateGlobalEnrollmentProfile(st, silentLogger()).ServeHTTP(w, req)
+	UpdateGlobalEnrollmentProfile(st, silentLogger(), false).ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", w.Code)
 	}
@@ -106,7 +106,7 @@ func TestUpdateGlobalEnrollmentProfile_Valid(t *testing.T) {
 	req = withURLParam(req, "profileId", p.ProfileID)
 	w := httptest.NewRecorder()
 
-	UpdateGlobalEnrollmentProfile(st, silentLogger()).ServeHTTP(w, req)
+	UpdateGlobalEnrollmentProfile(st, silentLogger(), false).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -126,7 +126,7 @@ func TestDeleteGlobalEnrollmentProfile_NotFound(t *testing.T) {
 	req = withURLParam(req, "profileId", pid)
 	w := httptest.NewRecorder()
 
-	DeleteGlobalEnrollmentProfile(st, silentLogger()).ServeHTTP(w, req)
+	DeleteGlobalEnrollmentProfile(st, silentLogger(), false).ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", w.Code)
 	}
@@ -140,7 +140,7 @@ func TestDeleteGlobalEnrollmentProfile_Valid(t *testing.T) {
 	req = withURLParam(req, "profileId", p.ProfileID)
 	w := httptest.NewRecorder()
 
-	DeleteGlobalEnrollmentProfile(st, silentLogger()).ServeHTTP(w, req)
+	DeleteGlobalEnrollmentProfile(st, silentLogger(), false).ServeHTTP(w, req)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d", w.Code)
 	}
@@ -208,7 +208,7 @@ func TestApproveGlobalPendingEnrollment_RequestNotInCache(t *testing.T) {
 	req = withURLParam(req, "requestId", "unknown-req")
 	w := httptest.NewRecorder()
 
-	ApproveGlobalPendingEnrollment(st, testEncKey, silentLogger()).ServeHTTP(w, req)
+	ApproveGlobalPendingEnrollment(st, testEncKey, silentLogger(), false).ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", w.Code)
 	}
@@ -242,7 +242,7 @@ func TestApproveGlobalPendingEnrollment_ProxiesCorrectly(t *testing.T) {
 	req = withURLParam(req, "requestId", requestID)
 	w := httptest.NewRecorder()
 
-	ApproveGlobalPendingEnrollment(st, testEncKey, silentLogger()).ServeHTTP(w, req)
+	ApproveGlobalPendingEnrollment(st, testEncKey, silentLogger(), false).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -293,7 +293,7 @@ func TestDenyGlobalPendingEnrollment_ProxiesWithReason(t *testing.T) {
 	req = withURLParam(req, "requestId", requestID)
 	w := httptest.NewRecorder()
 
-	DenyGlobalPendingEnrollment(st, testEncKey, silentLogger()).ServeHTTP(w, req)
+	DenyGlobalPendingEnrollment(st, testEncKey, silentLogger(), false).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}

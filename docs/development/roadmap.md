@@ -23,11 +23,11 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Operational Hardening (between B and C) | 🟢 Complete | Pull-boundary, token exposure, startup guardrails, break-glass backend, proxy trust policy, and abuse controls are all shipped. |
 | Phase C — Enterprise Readiness | 🟢 Complete | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, artifact tracking policies, the local-auth recovery stack (recovery codes, reset tokens, break-glass CLI), CI workload identity federation, supply-chain provenance policy (Cosign/Sigstore), LDAP/AD auth, and Vault secrets integration are all shipped. |
 | Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Connected email delivery complete. TOTP MFA for local accounts shipped. Remaining Phase D work is live-deployment acceptance gate execution (operational) and full VPC reference diagram (docs). |
-| Phase E — Federated Multi-Region | 🟡 In progress | Hub-and-spoke federation layer: global management plane above regional control planes. Agents unchanged. E1–E5 (aggregation, artifact federation, policy push, sync reconciler, enrollment profiles) complete. E6 (global PKI) planned. |
+| Phase E — Federated Multi-Region | 🟡 In progress | Hub-and-spoke federation layer: global management plane above regional control planes. Agents unchanged. E1–E5 (aggregation, artifact federation, policy push, sync reconciler, enrollment profiles) complete. Global-plane operator auth Phase 1 (hardened local login + audit) complete. Phase 2 (OIDC SSO on global-plane) planned. E6 (global PKI) deferred. |
 
 ### Active work queue (what is still to do)
 
-- **Decide global-plane operator-auth model** — blocks re-enabling the `global-plane-sync` E2E scenario. Options: hardened local login (mirror regional protections), seeded `federation.manage` service token, or SSO-only. See `docs/development/handoff-e2e-testing.md`.
+- ✅ **Global-plane operator-auth Phase 1 shipped** — hardened local login + EnsureBootstrapAdmin + per-user audit log on the global-plane. E2E scenario 6 (`global-plane-sync`) re-enabled and runs by default (PR: `feat/global-plane-auth-phase1`). Auth decision: pluggable multi-method (Local → OIDC → LDAP), OIDC as the primary enterprise IdP slot, SAML deferred. Phase 2 (OIDC on global-plane) is the next agent-scoped task.
 - **Stand up the comprehensive test & simulation pipeline** — see the new "Quality Engineering" section (Q1–Q5): coverage backlog, extended/nightly E2E, embedded-device simulation repo (`parcel-device-sim`), and unreliable-network simulation.
 - **Create `security@parcel.io` inbox** — `SECURITY.md` (VDP) is published and references this address. The mailbox must exist before the repo goes public or is shared with customers. Assign to ops/legal owner.
 - **Populate IR runbook escalation contacts** — `docs/incidents/ir-runbook.md` Section 5 has placeholder names/contacts for IC, Technical Lead, Communications Lead, Legal, and Executive escalation. Replace before first production deployment.
@@ -41,7 +41,8 @@ Use this section as the single source of truth for "what is done" vs "what is le
 ---
 
 ## Recently Completed (Current State)
-- ✅ Full-stack E2E pipeline green in GitHub Actions — control-plane over TLS + mTLS, real Postgres + MinIO, real agent enroll/check-in; 5 scenarios pass (`global-plane-sync` deferred). Foundation for the Quality Engineering track below.
+- ✅ Global-plane operator auth Phase 1 — hardened local login (backoff, email normalisation, TOTP-pending, audit logging), EnsureBootstrapAdmin, per-user audit log with query/CSV export, global UI login form, `federation.push`-scoped service-token break-glass fallback, and re-enabled `global-plane-sync` E2E scenario (6 passed). Auth decision recorded: Local → OIDC → LDAP with per-user audit regardless of method.
+- ✅ Full-stack E2E pipeline green in GitHub Actions — control-plane over TLS + mTLS, real Postgres + MinIO, real agent enroll/check-in; 6 scenarios pass. Foundation for the Quality Engineering track below.
 - ✅ Global-plane sync-worker context bug fixed — runtime-registered regional planes now sync (previously bound to the request context and never synced until restart); covered by a regression test.
 - ✅ Artifact signing + verification (Ed25519) end‑to‑end (packer → control‑plane → agent).
 - ✅ Device status model (active/stale/offline) with periodic refresh.

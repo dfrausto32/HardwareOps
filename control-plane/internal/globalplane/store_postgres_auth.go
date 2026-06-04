@@ -7,13 +7,47 @@ package globalplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-
+	"github.com/parcel/control-plane/internal/auth"
 	"github.com/parcel/control-plane/internal/store"
 )
+
+// EnsureBootstrapAdmin creates the initial admin user when the users table is
+// empty. It is idempotent: a no-op once any user exists. Returns true when a
+// new user was created. Mirrors auth.EnsureBootstrapAdmin for the global-plane.
+func (s *PostgresStore) EnsureBootstrapAdmin(email, password string) (bool, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
+	if email == "" || password == "" {
+		return false, errors.New("bootstrap email and password required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var count int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&count); err != nil {
+		return false, err
+	}
+	if count > 0 {
+		return false, nil // already seeded; no-op
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return false, err
+	}
+	// roles column is plain text (space-separated); see scanUser.
+	if _, err := s.pool.Exec(ctx,
+		`INSERT INTO users (user_id, email, password_hash, roles, disabled, created_at)
+		 VALUES ($1, $2, $3, 'admin', FALSE, now())`,
+		uuid.NewString(), email, hash,
+	); err != nil {
+		return false, err
+	}
+	return true, nil
+}
 
 func (s *PostgresStore) GetUser(userID string) (store.User, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

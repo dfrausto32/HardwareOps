@@ -268,7 +268,7 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(admin).Get("/events/retention", handlers.GetRuntimeEventRetention(logger, deps.Store))
 		r.With(admin).Put("/events/retention", handlers.SetRuntimeEventRetention(logger, deps.Store, deps.TrustProxy))
 		r.With(viewer).Get("/events", handlers.StreamEvents(logger, deps.Events))
-		r.With(viewer).Get("/health/summary", handlers.HealthSummaryHandler(logger, deps.Store))
+		r.With(deviceViewer).Get("/health/summary", handlers.HealthSummaryHandler(logger, deps.Store))
 		r.With(viewer).Get("/maintenance", handlers.GetMaintenance(deps.Maintenance))
 		r.With(admin).Put("/maintenance", handlers.SetMaintenance(logger, deps.Store, deps.Maintenance, deps.TrustProxy))
 		r.With(admin).Get("/maintenance/backups", handlers.ListBackups(deps.BackupDir))

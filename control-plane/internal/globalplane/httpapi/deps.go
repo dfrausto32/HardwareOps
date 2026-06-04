@@ -22,8 +22,10 @@ type Dependencies struct {
 	Store              globalplane.Store
 	SyncManager        *sync.Manager
 	Auth               *auth.Manager
+	LoginBackoff       *auth.LoginBackoff
 	TokenEncryptionKey []byte
 	CORSAllowedOrigins []string
+	TrustProxy         bool
 	// Artifact federation
 	ObjectStore    ObjectStore
 	S3Bucket       string
