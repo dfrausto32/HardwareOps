@@ -13,10 +13,14 @@ import (
 
 // Manager starts and stops per-plane poll workers.
 type Manager struct {
-	store   globalplane.Store
-	encKey  []byte
-	logger  *log.Logger
-	mu      sync.Mutex
+	store  globalplane.Store
+	encKey []byte
+	logger *log.Logger
+	mu     sync.Mutex
+	// baseCtx is the long-lived manager context used for worker lifetimes. It is
+	// set in Start so that workers launched by Refresh (e.g. from the
+	// RegisterPlane HTTP handler) outlive the request that triggered them.
+	baseCtx context.Context
 	workers map[string]*planeWorker // keyed by planeID
 }
 
@@ -33,6 +37,9 @@ func NewManager(store globalplane.Store, encKey []byte, logger *log.Logger) *Man
 // Start loads all enabled regional planes and launches their workers.
 // It also starts the replication and policy reconcilers. Blocks until ctx is cancelled.
 func (m *Manager) Start(ctx context.Context) error {
+	m.mu.Lock()
+	m.baseCtx = ctx
+	m.mu.Unlock()
 	if err := m.Refresh(ctx); err != nil {
 		return err
 	}
@@ -89,8 +96,14 @@ func (m *Manager) Refresh(ctx context.Context) error {
 			continue
 		}
 		if _, ok := m.workers[p.PlaneID]; !ok {
+			// Use the long-lived manager context so the worker is not bound to a
+			// request context when Refresh is called from an HTTP handler.
+			workerCtx := m.baseCtx
+			if workerCtx == nil {
+				workerCtx = ctx
+			}
 			w := newPlaneWorker(p, m.store, m.encKey, m.logger)
-			w.start(ctx)
+			w.start(workerCtx)
 			m.workers[p.PlaneID] = w
 			m.logger.Printf("[global-plane] started worker for plane %s (%s)", p.Name, p.PlaneID)
 		}
