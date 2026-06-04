@@ -138,6 +138,7 @@ export default function GlobalPage({
   const [loginPassword, setLoginPassword] = useState('')
   const [loginError, setLoginError] = useState(null)
   const [loginLoading, setLoginLoading] = useState(false)
+  const [authStatus, setAuthStatus] = useState(null) // {enabled, oidcEnabled, oidcLoginUrl}
   const [planes, setPlanes] = useState([])
   const [healthMap, setHealthMap] = useState({}) // planeId → health snapshot
   const [devices, setDevices] = useState([])
@@ -178,6 +179,28 @@ export default function GlobalPage({
   const pollRef = useRef(null)
 
   const effectiveUrl = globalPlaneUrl || urlInput
+
+  // Check for OIDC token returned via redirect (?global_oidc_token=...).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const oidcTok = params.get('global_oidc_token')
+    if (oidcTok) {
+      try { window.localStorage.setItem('hwops_global_token', oidcTok) } catch {}
+      setToken(oidcTok)
+      params.delete('global_oidc_token')
+      const newSearch = params.toString()
+      window.history.replaceState(null, '', newSearch ? '?' + newSearch : window.location.pathname)
+    }
+  }, [])
+
+  // Fetch auth status from the global-plane to know if OIDC is available.
+  useEffect(() => {
+    if (!effectiveUrl) return
+    fetch(`${effectiveUrl}/api/v1/auth/status`)
+      .then(r => r.json())
+      .then(setAuthStatus)
+      .catch(() => {})
+  }, [effectiveUrl])
 
   const apiFetch = useCallback(async (path, options = {}) => {
     if (!effectiveUrl) throw new Error('Global-plane URL not set')
@@ -352,33 +375,46 @@ export default function GlobalPage({
 
         {/* Login form — shown when no token is active */}
         {!token ? (
-          <form onSubmit={handleLogin} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 4 }}>
-            <div style={{ flex: '1 1 180px' }}>
-              <label className="label">Email</label>
-              <input
-                className="input"
-                type="email"
-                placeholder="operator@example.com"
-                value={loginEmail}
-                onChange={e => setLoginEmail(e.target.value)}
-                autoComplete="username"
-              />
-            </div>
-            <div style={{ flex: '1 1 160px' }}>
-              <label className="label">Password</label>
-              <input
-                className="input"
-                type="password"
-                placeholder="Password"
-                value={loginPassword}
-                onChange={e => setLoginPassword(e.target.value)}
-                autoComplete="current-password"
-              />
-            </div>
-            <button className="button" type="submit" disabled={loginLoading}>
-              {loginLoading ? 'Signing in…' : 'Sign in'}
-            </button>
-          </form>
+          <>
+            {authStatus?.oidcEnabled && (
+              <div style={{ marginBottom: 10 }}>
+                <a
+                  className="button"
+                  href={`${effectiveUrl}/api/v1/auth/oidc/login`}
+                  style={{ display: 'inline-block' }}
+                >
+                  Sign in with SSO
+                </a>
+              </div>
+            )}
+            <form onSubmit={handleLogin} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 4 }}>
+              <div style={{ flex: '1 1 180px' }}>
+                <label className="label">Email</label>
+                <input
+                  className="input"
+                  type="email"
+                  placeholder="operator@example.com"
+                  value={loginEmail}
+                  onChange={e => setLoginEmail(e.target.value)}
+                  autoComplete="username"
+                />
+              </div>
+              <div style={{ flex: '1 1 160px' }}>
+                <label className="label">Password</label>
+                <input
+                  className="input"
+                  type="password"
+                  placeholder="Password"
+                  value={loginPassword}
+                  onChange={e => setLoginPassword(e.target.value)}
+                  autoComplete="current-password"
+                />
+              </div>
+              <button className="button" type="submit" disabled={loginLoading}>
+                {loginLoading ? 'Signing in…' : 'Sign in'}
+              </button>
+            </form>
+          </>
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
             <span className="chip success" style={{ fontSize: 12 }}>Authenticated</span>

@@ -23,6 +23,12 @@ type Dependencies struct {
 	SyncManager        *sync.Manager
 	Auth               *auth.Manager
 	LoginBackoff       *auth.LoginBackoff
+	OIDCProvider       *auth.OIDCProvider
+	// OIDCLoginURL is the URL operators navigate to for SSO sign-in.
+	// Non-empty only when OIDCProvider is configured.
+	OIDCLoginURL       string
+	// PostLoginURL is where the OIDC callback sends the browser after auth.
+	PostLoginURL       string
 	TokenEncryptionKey []byte
 	CORSAllowedOrigins []string
 	TrustProxy         bool

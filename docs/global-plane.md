@@ -141,6 +141,31 @@ curl -X POST https://<global-host>/api/v1/auth/login \
 
 The login endpoint enforces progressive backoff after repeated failures (5-attempt threshold, 30s–15m backoff window). All login outcomes are written to the global audit log.
 
+### SSO (OIDC)
+
+Set the following env vars alongside the existing global-plane config (same names as the regional control-plane):
+
+| Variable | Required | Description |
+|---|---|---|
+| `AUTH_OIDC_ISSUER` | yes | IdP discovery URL (e.g. `https://accounts.google.com`) |
+| `AUTH_OIDC_CLIENT_ID` | yes | OAuth2 client ID |
+| `AUTH_OIDC_CLIENT_SECRET` | yes | OAuth2 client secret |
+| `AUTH_OIDC_REDIRECT_URL` | yes | Callback URL: `https://<global-host>/api/v1/auth/oidc/callback` |
+| `AUTH_OIDC_ROLE_MAP` | no | JSON map of IdP group → role, e.g. `{"platform-admins":"admin"}` |
+| `AUTH_OIDC_DEFAULT_ROLE` | no | Role for unmapped users (default: `viewer`) |
+| `AUTH_OIDC_GROUP_CLAIM` | no | JWT claim for group membership (default: `groups`) |
+| `GLOBAL_POST_LOGIN_URL` | no | Where to redirect after SSO (typically the regional UI origin) |
+
+Works with any OIDC IdP: Okta, Azure AD (Entra), Google Workspace, Auth0, Keycloak, etc.
+
+**OIDC callback flow:**
+1. Operator navigates to `GET /api/v1/auth/oidc/login` (or clicks "Sign in with SSO" in the UI)
+2. Browser redirected to IdP → operator authenticates
+3. IdP redirects to `GET /api/v1/auth/oidc/callback?code=...&state=...`
+4. Global-plane exchanges code → upserts user with mapped role → issues JWT
+5. If `GLOBAL_POST_LOGIN_URL` is set: redirects to `<post-login-url>?global_oidc_token=<jwt>`
+6. The regional UI's GlobalPage reads `global_oidc_token` from the URL and stores it
+
 Use the returned JWT as `Authorization: Bearer <jwt>` on all subsequent requests.
 
 ---

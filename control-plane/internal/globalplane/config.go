@@ -53,6 +53,21 @@ type Config struct {
 	// PublicBaseURL is the externally-reachable base URL of this global-plane,
 	// sent to regional planes as the globalPresignBaseUrl in federation metadata.
 	PublicBaseURL string
+
+	// OIDC SSO (same env vars as the regional control-plane)
+	OIDCIssuer       string
+	OIDCClientID     string
+	OIDCClientSecret string
+	OIDCRedirectURL  string
+	OIDCScopes       string
+	OIDCGroupClaim   string
+	OIDCRoleMap      string
+	OIDCDefaultRole  string
+
+	// PostLoginURL is where the OIDC callback redirects the browser after a
+	// successful SSO login, with ?global_oidc_token=<jwt> appended.
+	// Typically the regional UI origin, e.g. https://regional.example.com.
+	PostLoginURL string
 }
 
 // FromEnv reads Config from environment variables, applying defaults.
@@ -94,6 +109,16 @@ func FromEnv() (Config, error) {
 		return Config{}, fmt.Errorf("GLOBAL_SYNC_DEFAULT_INTERVAL: must be an integer >= 10 (got %q)", intervalStr)
 	}
 	cfg.DefaultSyncInterval = time.Duration(secs) * time.Second
+
+	cfg.OIDCIssuer = os.Getenv("AUTH_OIDC_ISSUER")
+	cfg.OIDCClientID = os.Getenv("AUTH_OIDC_CLIENT_ID")
+	cfg.OIDCClientSecret = os.Getenv("AUTH_OIDC_CLIENT_SECRET")
+	cfg.OIDCRedirectURL = os.Getenv("AUTH_OIDC_REDIRECT_URL")
+	cfg.OIDCScopes = envOr("AUTH_OIDC_SCOPES", "openid email profile groups")
+	cfg.OIDCGroupClaim = envOr("AUTH_OIDC_GROUP_CLAIM", "groups")
+	cfg.OIDCRoleMap = os.Getenv("AUTH_OIDC_ROLE_MAP")
+	cfg.OIDCDefaultRole = envOr("AUTH_OIDC_DEFAULT_ROLE", "viewer")
+	cfg.PostLoginURL = os.Getenv("GLOBAL_POST_LOGIN_URL")
 
 	cfg.MinIOEndpoint = os.Getenv("GLOBAL_MINIO_ENDPOINT")
 	cfg.MinIOAccessKey = os.Getenv("GLOBAL_MINIO_ACCESS_KEY")
