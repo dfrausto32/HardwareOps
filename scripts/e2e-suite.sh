@@ -328,6 +328,12 @@ run_scenario "multi-agent" '
     -d "{\"expiresInSec\":3600,\"maxUses\":5}")
   TOKEN=$(python3 -c "import json,sys; print(json.loads(sys.stdin.read())[\"token\"])" <<<"$TOKEN_RESP")
 
+  # Build the agent once. Three concurrent "go run" invocations race on the
+  # shared Go build cache and can fail; a prebuilt binary is safe to run in
+  # parallel.
+  AGENT_BIN="'"$LOG_DIR"'/agent-e2e-bin"
+  ( cd "'"$BASE_DIR"'/agent" && go build -o "$AGENT_BIN" ./cmd/agent )
+
   log "Enrolling and checking in 3 agents ..."
   # Each agent gets a unique HARDWARE_IDENTITY so they appear as distinct devices
   # to the control-plane's device identity conflict detection. Without this, all
@@ -340,14 +346,13 @@ run_scenario "multi-agent" '
     ART_ROOT="'"$LOG_DIR"'/multi-agent-data-${i}"
     mkdir -p "$ART_ROOT"
     (
-      cd "'"$BASE_DIR"'/agent"
       ENROLLMENT_TOKEN="$TOKEN" \
       CONTROL_PLANE_URL="'"$BASE_URL"'" \
       STATE_PATH="$STATE_PATH" \
       ARTIFACT_ROOT="$ART_ROOT" \
       CONTROL_PLANE_CA_CERT_PATH="'"$CA_CERT_PATH"'" \
       HARDWARE_IDENTITY="e2e-agent-${i}-$(hostname)" \
-      go run ./cmd/agent -once 2>&1
+      "$AGENT_BIN" -once 2>&1
     ) >> "'"$LOG_DIR"'/multi-agent-${i}.log" 2>&1 &
     PIDS+=($!)
   done
