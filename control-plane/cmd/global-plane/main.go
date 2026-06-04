@@ -65,6 +65,28 @@ func main() {
 		}
 	}
 
+	// OIDC provider (optional — only when AUTH_OIDC_ISSUER is set).
+	var oidcProvider *auth.OIDCProvider
+	oidcLoginURL := ""
+	if cfg.OIDCIssuer != "" {
+		p, err := auth.NewOIDCProviderWithConfig(context.Background(), auth.OIDCConfig{
+			Issuer:       cfg.OIDCIssuer,
+			ClientID:     cfg.OIDCClientID,
+			ClientSecret: cfg.OIDCClientSecret,
+			RedirectURL:  cfg.OIDCRedirectURL,
+			Scopes:       cfg.OIDCScopes,
+			GroupClaim:   cfg.OIDCGroupClaim,
+			RoleMap:      cfg.OIDCRoleMap,
+			DefaultRole:  cfg.OIDCDefaultRole,
+		}, store, authMgr)
+		if err != nil {
+			logger.Fatalf("global-plane oidc provider: %v", err)
+		}
+		oidcProvider = p
+		oidcLoginURL = cfg.HTTPAddr + "/api/v1/auth/oidc/login"
+		logger.Printf("global-plane OIDC SSO enabled (issuer=%s)", cfg.OIDCIssuer)
+	}
+
 	// Login backoff (mirrors regional defaults).
 	loginBackoff := auth.NewLoginBackoff(auth.LoginBackoffConfig{
 		Enabled:   true,
@@ -100,6 +122,9 @@ func main() {
 		SyncManager:        syncMgr,
 		Auth:               authMgr,
 		LoginBackoff:       loginBackoff,
+		OIDCProvider:       oidcProvider,
+		OIDCLoginURL:       oidcLoginURL,
+		PostLoginURL:       cfg.PostLoginURL,
 		TokenEncryptionKey: cfg.TokenEncryptionKey,
 		CORSAllowedOrigins: splitOrigins(cfg.CORSAllowedOrigins),
 		TrustProxy:         trustProxy,

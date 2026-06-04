@@ -165,6 +165,11 @@ func (s *stubStore) ListAuditEvents(_ store.AuditEventFilter) ([]store.AuditEven
 	panic("not called")
 }
 func (s *stubStore) DeleteAuditEventsBefore(_ time.Time) (int, error) { panic("not called") }
+func (s *stubStore) GetUserByExternalID(_, _ string) (store.User, bool, error) {
+	panic("not called")
+}
+func (s *stubStore) CreateUser(_ store.User) error              { panic("not called") }
+func (s *stubStore) UpdateUser(_ store.UserUpdate) error        { panic("not called") }
 
 // testEncKey is a fixed 32-byte AES key for tests.
 var testEncKey = []byte("test-encryption-key-32-bytes-xxx")
