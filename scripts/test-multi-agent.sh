@@ -41,16 +41,17 @@ AUTH_TOKEN=$(curl -sf "${curl_opts[@]}" "$BASE_URL/api/v1/auth/login" \
   -d "{\"email\":\"$AUTH_EMAIL\",\"password\":\"$AUTH_PASSWORD\"}" \
   | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["token"])')
 
-ENROLL_TOKEN=$(curl -sf "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/enrollments" \
-  -H "Authorization: Bearer $AUTH_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"expiresInSec":3600,"maxUses":10}' \
-  | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["token"])')
-
 echo "Enrolling and checking in $COUNT agents ..."
 for i in $(seq 1 "$COUNT"); do
   D="$WORK_DIR/agent-$i"
   mkdir -p "$D/data"
+  # Each device gets its own enrollment token: the legacy /api/v1/enrollments
+  # token is single-use (no maxUses), so a shared token would reject device 2+.
+  ENROLL_TOKEN=$(curl -sf "${curl_opts[@]}" -X POST "$BASE_URL/api/v1/enrollments" \
+    -H "Authorization: Bearer $AUTH_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"expiresInSec":3600}' \
+    | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["token"])')
   openssl req -newkey rsa:2048 -nodes \
     -keyout "$D/device.key" -out "$D/device.csr" \
     -subj "/CN=parcel-device-$i" 2>/dev/null
