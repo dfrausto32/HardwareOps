@@ -334,35 +334,26 @@ run_scenario "multi-agent" '
   AGENT_BIN="'"$LOG_DIR"'/agent-e2e-bin"
   ( cd "'"$BASE_DIR"'/agent" && go build -o "$AGENT_BIN" ./cmd/agent )
 
-  log "Enrolling and checking in 3 agents ..."
-  # Each agent gets a unique HARDWARE_IDENTITY so they appear as distinct devices
-  # to the control-plane's device identity conflict detection. Without this, all
-  # three would derive the same hardware ID from /etc/machine-id, which would
-  # trigger conflict warnings in audit mode and hard rejections in enforce mode.
-  # LICENSE_ENFORCE is not set (defaults false) so the device cap is not checked.
-  PIDS=()
+  log "Enrolling and checking in 3 agents sequentially ..."
+  # Each agent gets a unique HARDWARE_IDENTITY so they register as distinct
+  # devices (the control-plane derives a hardware ID from machine identity;
+  # without an override all three would collide and trip identity-conflict
+  # detection). LICENSE_ENFORCE is unset (defaults false) so the device cap is
+  # not checked. Agents run one at a time under set -e: any failure aborts the
+  # scenario and the agent output is captured in the scenario log.
   for i in 1 2 3; do
     STATE_PATH="'"$LOG_DIR"'/multi-agent-state-${i}.json"
     ART_ROOT="'"$LOG_DIR"'/multi-agent-data-${i}"
     mkdir -p "$ART_ROOT"
-    (
-      ENROLLMENT_TOKEN="$TOKEN" \
-      CONTROL_PLANE_URL="'"$BASE_URL"'" \
-      STATE_PATH="$STATE_PATH" \
-      ARTIFACT_ROOT="$ART_ROOT" \
-      CONTROL_PLANE_CA_CERT_PATH="'"$CA_CERT_PATH"'" \
-      HARDWARE_IDENTITY="e2e-agent-${i}-$(hostname)" \
-      "$AGENT_BIN" -once 2>&1
-    ) >> "'"$LOG_DIR"'/multi-agent-${i}.log" 2>&1 &
-    PIDS+=($!)
+    log "agent ${i} ..."
+    ENROLLMENT_TOKEN="$TOKEN" \
+    CONTROL_PLANE_URL="'"$BASE_URL"'" \
+    STATE_PATH="$STATE_PATH" \
+    ARTIFACT_ROOT="$ART_ROOT" \
+    CONTROL_PLANE_CA_CERT_PATH="'"$CA_CERT_PATH"'" \
+    HARDWARE_IDENTITY="e2e-agent-${i}-$(hostname)" \
+    "$AGENT_BIN" -once
   done
-
-  # Wait for all agents
-  FAIL_COUNT=0
-  for pid in "${PIDS[@]}"; do
-    wait "$pid" || FAIL_COUNT=$((FAIL_COUNT+1))
-  done
-  [ "$FAIL_COUNT" -eq 0 ] || { echo "'"$FAIL_COUNT"' agent(s) failed"; exit 1; }
   log "All 3 agents enrolled and checked in"
 '
 
