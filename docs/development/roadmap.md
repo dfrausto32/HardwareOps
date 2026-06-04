@@ -27,6 +27,8 @@ Use this section as the single source of truth for "what is done" vs "what is le
 
 ### Active work queue (what is still to do)
 
+- **Decide global-plane operator-auth model** — blocks re-enabling the `global-plane-sync` E2E scenario. Options: hardened local login (mirror regional protections), seeded `federation.manage` service token, or SSO-only. See `docs/development/handoff-e2e-testing.md`.
+- **Stand up the comprehensive test & simulation pipeline** — see the new "Quality Engineering" section (Q1–Q5): coverage backlog, extended/nightly E2E, embedded-device simulation repo (`parcel-device-sim`), and unreliable-network simulation.
 - **Create `security@parcel.io` inbox** — `SECURITY.md` (VDP) is published and references this address. The mailbox must exist before the repo goes public or is shared with customers. Assign to ops/legal owner.
 - **Populate IR runbook escalation contacts** — `docs/incidents/ir-runbook.md` Section 5 has placeholder names/contacts for IC, Technical Lead, Communications Lead, Legal, and Executive escalation. Replace before first production deployment.
 - **Submit BIS/NSA annual self-classification report** — Due February 1, 2027 (covering calendar year 2026). File via SNAP-R. See `docs/export-compliance.md` Section 2.
@@ -39,6 +41,8 @@ Use this section as the single source of truth for "what is done" vs "what is le
 ---
 
 ## Recently Completed (Current State)
+- ✅ Full-stack E2E pipeline green in GitHub Actions — control-plane over TLS + mTLS, real Postgres + MinIO, real agent enroll/check-in; 5 scenarios pass (`global-plane-sync` deferred). Foundation for the Quality Engineering track below.
+- ✅ Global-plane sync-worker context bug fixed — runtime-registered regional planes now sync (previously bound to the request context and never synced until restart); covered by a regression test.
 - ✅ Artifact signing + verification (Ed25519) end‑to‑end (packer → control‑plane → agent).
 - ✅ Device status model (active/stale/offline) with periodic refresh.
 - ✅ Agent throttling + jitter (fleet‑friendly check‑ins).
@@ -760,6 +764,56 @@ Inter-plane authentication uses the existing service token mechanism (`federatio
 - **Risks:** Regional planes need connectivity to global plane for enrollment enforcement if global license is the authority. Conflicts with full regional autonomy requirement.
 - **Acceptance:** TBD — requires product/commercial decision on license model for federated deployments.
 - **Notes:** Per-instance device caps remain in effect for regional planes operating standalone. The global license layer is additive. One option: regional planes enforce their own local cap; global admin sets per-region caps that regional planes download and cache (same pattern as global policies).
+
+---
+
+## Quality Engineering — Comprehensive Test & Simulation Pipeline
+
+> **Goal:** Every component and cross-component flow is exercised in GitHub Actions on each change, in an environment that mimics real-world deployments as closely as possible — TLS/mTLS, real datastores, real built binaries, unreliable/offline networks, and eventually real embedded-device firmware. New development lands with tests at the appropriate layer; regressions are caught before merge, not in the field.
+
+**Why this matters:** the platform's value proposition is safe deployment to autonomous devices in unreliable, bandwidth-constrained, and offline environments. The test suite must reproduce those conditions, not just a happy-path Linux process on a fast network.
+
+### Definition of Done (track exit criteria)
+- CI runs a layered test pyramid: fast Go/UI unit tests + a full-stack E2E smoke per PR, plus an extended/nightly suite for slower scenarios.
+- Production-representative posture in CI: TLS + mTLS, real Postgres + MinIO, real built binaries, real agent enrollment/check-in. ✅ baseline shipped.
+- Coverage gaps for security-sensitive and core paths are closed (Q1).
+- Edge/embedded device behavior is validated against simulated hardware, not only a Linux agent process (Q3).
+- Unreliable-network / offline behavior is explicitly tested (Q4).
+- The agreed checks are required for merge to `main` (Q5).
+
+### Feature Templates
+
+#### Q1 — Test pyramid & coverage backlog
+- **Status:** 🟡 In progress
+- **Scope:** Close known coverage gaps, primarily via fast Go handler/unit tests (in-memory store + `httptest` pattern). Priority: auth variants (OIDC, LDAP, TOTP, break-glass vouchers), `internal/certs/` (cert issuance/rotation — underpins mTLS), `internal/license/` (enforcement + device cap), device reenrollment, and the 5 untested global-plane handlers (`aggregated`, `auth`, `federation_artifacts`, `groups`, `planes`).
+- **Acceptance:** Each listed area has unit tests; the `unit-tests` CI job remains the breadth safety net; new product code lands with tests at the right layer (enforced in review).
+- **Notes:** Reserve new E2E scenarios for genuinely cross-component behavior. Do **not** push pure-auth flows into the bash E2E harness — use Go integration tests with mocked providers.
+
+#### Q2 — Real-world E2E environment fidelity
+- **Status:** 🟢 Baseline complete · 🟡 hardening
+- **Scope:** `scripts/e2e-suite.sh` runs the control-plane over TLS + optional mTLS against real Postgres + MinIO, with real built binaries and a real agent enrolling + checking in over mTLS. Harden: extract remaining fragile inline scenarios into dedicated scripts; add an extended suite for slower flows (cert-rotation E2E, license enforcement, release auto-update, lifecycle/prune, audit export, multi-regional fan-out).
+- **Acceptance:** Core flows pass on every PR; extended suite runs nightly / on label; logs uploaded as artifacts on failure.
+- **Notes:** Current state: 5 scenarios pass; `global-plane-sync` is skipped pending the global-plane operator-auth decision (see `docs/development/handoff-e2e-testing.md`).
+
+#### Q3 — Embedded / edge device simulation (new repo)
+- **Status:** ⬜ Planned
+- **Scope:** Stand up a dedicated simulation repo (working name **`parcel-device-sim`**) that mimics constrained embedded targets rather than a Linux process. Validate the agent (or a minimal agent profile) against emulated hardware — e.g. RP2040 / Raspberry Pi Pico via **Renode** or **QEMU**, plus ARM/aarch64 Linux SBC images. Drive enrollment → check-in → artifact apply → rollback on the simulated device and assert state from the control-plane.
+- **Dependencies:** stable agent build for the target architecture(s); agent footprint suitable for constrained targets; CI runners able to run the emulator (Renode/QEMU in a container).
+- **Risks:** Pico/RP2040 is bare-metal / MicroPython-class — the full Go agent may not fit. May require a minimal agent profile or a protocol-conformance shim that speaks the enrollment/check-in API. Emulation is slow → nightly/matrix, not per-PR.
+- **Acceptance:** a simulated device image enrolls with a regional control-plane and completes an artifact apply in CI; a failed simulated apply triggers rollback and reports status.
+- **Notes:** Keep the simulator in its own repo so emulator/firmware toolchains don't bloat the main build; wire into main CI via a reusable workflow or scheduled cross-repo trigger.
+
+#### Q4 — Unreliable-network & offline simulation
+- **Status:** ⬜ Planned
+- **Scope:** Explicitly test the core promise — operation in unreliable, bandwidth-constrained, intermittently-offline environments. Inject latency/jitter/packet-loss/partition (`tc netem`, toxiproxy) between agent↔control-plane and regional↔global. Assert: agents back off + jitter correctly, apply/rollback survive mid-transfer disconnects, federation reconcilers recover after partitions, and cached desired-state / enrollment-profiles are used when offline.
+- **Dependencies:** Q2 harness; network-shaping in CI.
+- **Acceptance:** deterministic scenarios for offline check-in, interrupted artifact download, and regional↔global partition recovery.
+
+#### Q5 — CI orchestration & required checks
+- **Status:** 🟡 In progress
+- **Scope:** Formalize the pipeline: per-PR (unit + core E2E), nightly/extended (Q2 extended + Q3 sim + Q4 network), and an architecture matrix where relevant. Make the agreed checks required for merge to `main`; upload logs on failure; track and quarantine flaky tests.
+- **Acceptance:** branch protection requires the agreed checks; extended suites run on schedule; flaky tests are tracked, not ignored.
+- **Notes:** Existing manual AWS smoke workflows (`artifact-duplicate-smoke.yml`, `workload-identity-smoke.yml`) remain for live-environment validation.
 
 ---
 
