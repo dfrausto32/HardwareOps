@@ -1,15 +1,24 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/parcel/control-plane/internal/auth"
 	"github.com/parcel/control-plane/internal/store"
 )
+
+// ldapAuthenticator is the subset of auth.LDAPProvider used by LDAPLogin.
+// Extracted as an interface so tests can stub LDAP authentication without a
+// real directory server.
+type ldapAuthenticator interface {
+	Authenticate(ctx context.Context, username, password string) (token string, expiresAt time.Time, user *store.User, err error)
+}
 
 type LDAPLoginRequest struct {
 	Username string `json:"username"`
@@ -19,7 +28,7 @@ type LDAPLoginRequest struct {
 // LDAPLogin handles POST /api/v1/auth/ldap/login.
 // It authenticates the user against the configured LDAP/AD directory and
 // returns a JWT identical to local/OIDC tokens on success.
-func LDAPLogin(logger *log.Logger, provider *auth.LDAPProvider, st store.Store, trustProxy bool) http.HandlerFunc {
+func LDAPLogin(logger *log.Logger, provider ldapAuthenticator, st store.Store, trustProxy bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if provider == nil {
 			http.Error(w, "ldap not configured", http.StatusNotFound)
