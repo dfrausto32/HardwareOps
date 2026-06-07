@@ -341,9 +341,9 @@ Same pattern but in `control-plane/migrations/global/`:
 
 ## Key Docs
 
-- `docs/local-dev-wsl.md` — canonical local dev guide
-- `docs/icd.md` — full API contract (Integration Control Document)
-- `docs/deploy.md` — end-to-end deployment guide
-- `docs/operations.md` — day-2 operations runbook
+- `docs/guides/local-dev-wsl.md` — canonical local dev guide
+- `docs/reference/icd.md` — full API contract (Integration Control Document)
+- `docs/guides/deploy.md` — end-to-end deployment guide
+- `docs/guides/operations.md` — day-2 operations runbook
 - `docs/development/roadmap.md` — authoritative feature status by phase
-- `docs/global-plane.md` — global-plane operator runbook
+- `docs/reference/global-plane.md` — global-plane operator runbook

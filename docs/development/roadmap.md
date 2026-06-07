@@ -33,9 +33,9 @@ Use this section as the single source of truth for "what is done" vs "what is le
 - **Stand up the comprehensive test & simulation pipeline** — see the new "Quality Engineering" section (Q1–Q5): coverage backlog, extended/nightly E2E, embedded-device simulation repo (`parcel-device-sim`), and unreliable-network simulation.
 - **Create `security@parcel.io` inbox** — `SECURITY.md` (VDP) is published and references this address. The mailbox must exist before the repo goes public or is shared with customers. Assign to ops/legal owner.
 - **Populate IR runbook escalation contacts** — `docs/incidents/ir-runbook.md` Section 5 has placeholder names/contacts for IC, Technical Lead, Communications Lead, Legal, and Executive escalation. Replace before first production deployment.
-- **Submit BIS/NSA annual self-classification report** — Due February 1, 2027 (covering calendar year 2026). File via SNAP-R. See `docs/export-compliance.md` Section 2.
-- **Insert export control clause into Terms of Service** — Clause text is in `docs/export-compliance.md` Section 4. Required before commercial distribution outside the U.S.
-- **Assign export compliance responsible parties** — `docs/export-compliance.md` Section 6 has TBD owners for BIS filing, restricted-party screening, and ToS maintenance.
+- **Submit BIS/NSA annual self-classification report** — Due February 1, 2027 (covering calendar year 2026). File via SNAP-R. See `docs/compliance/export-compliance.md` Section 2.
+- **Insert export control clause into Terms of Service** — Clause text is in `docs/compliance/export-compliance.md` Section 4. Required before commercial distribution outside the U.S.
+- **Assign export compliance responsible parties** — `docs/compliance/export-compliance.md` Section 6 has TBD owners for BIS filing, restricted-party screening, and ToS maintenance.
 
 ### Prepared next tasks (agent-scoped)
 - `E6-GLOBAL-PKI-HIERARCHY` — global root CA with regional intermediate CAs; enables cross-region device identity verification; requires reenrollment of existing devices
@@ -535,7 +535,7 @@ Confirm priorities with the team before mapping to agents.
 - **Scope:** Two-track integration: (1) artifact-level scanning via Grype or Trivy CLI at ingest time; (2) device-level scanning via Nessus/Tenable API sync. Both are read-only visibility with full UI integration.
 - **Dependencies:** Grype/Trivy binary in PATH (artifact scanning) or Tenable API credentials (device scanning). Both are independently optional; set `VULN_ARTIFACT_SCANNER=disabled` and leave `VULN_NESSUS_URL` blank to disable entirely.
 - **Implementation:** `internal/vulnscan/` package (scanner interface, GrypeScanner, TrivyScanner, ArtifactScanJob, NessusClient, NessusSyncJob); migration 0029; 7 new API endpoints; artifact + device UI views; settings page sync controls.
-- **Notes:** Non-blocking for deployments (read-only). Device matching via `hwops.network.hostname` / `hwops.network.ip` metadata fields. See `docs/vulnerability-scanning.md`.
+- **Notes:** Non-blocking for deployments (read-only). Device matching via `hwops.network.hostname` / `hwops.network.ip` metadata fields. See `docs/reference/vulnerability-scanning.md`.
 
 #### Cloud-native pull adapters (S3/GCS)
 - **Status:** 🟢 Complete
@@ -657,7 +657,7 @@ Confirm priorities with the team before mapping to agents.
   - TOTP secret stored as AES-256-GCM ciphertext; never returned after enroll response.
   - All four TOTP actions emit structured audit events.
   - Endpoints return 503 when `TOTP_ENCRYPTION_KEY` is unset.
-- **Notes:** April 2026. Migration `0036_totp.sql` adds `totp_secret` and `totp_enabled` to `users`. Auth flow in `auth/totp.go`; handlers in `handlers/auth_totp.go`. `GET /auth/me` and login responses include `totpEnabled` field. `docs/icd.md` §6.5 documents full setup flow. `docs/deployment-hardening.md` §3 includes `TOTP_ENCRYPTION_KEY` in on-prem template.
+- **Notes:** April 2026. Migration `0036_totp.sql` adds `totp_secret` and `totp_enabled` to `users`. Auth flow in `auth/totp.go`; handlers in `handlers/auth_totp.go`. `GET /auth/me` and login responses include `totpEnabled` field. `docs/reference/icd.md` §6.5 documents full setup flow. `docs/guides/deployment-hardening.md` §3 includes `TOTP_ENCRYPTION_KEY` in on-prem template.
 
 #### Connected email delivery for auth recovery/setup
 - **Status:** 🟢 Complete
@@ -669,7 +669,7 @@ Confirm priorities with the team before mapping to agents.
   - Email request flow does not reveal whether a user exists.
   - Delivery failures and successful sends are auditable.
   - On-prem/airgapped deployments remain fully functional with email disabled.
-- **Notes:** SMTP mailer package shipped with STARTTLS/TLS/plain modes, stdlib-only (no third-party mail library). `POST /api/v1/auth/forgot-password` (always-200, no user-existence leak), `POST /api/v1/users/{userId}/invite` (72-hour setup link), and `sendEmail: true` on `POST /api/v1/users/{userId}/password-reset-token` all wired. `smtpEnabled` field on `GET /api/v1/auth/status` gates UI forgot-password tab. SMTP vars in all deployment templates (on-prem compose, control-plane env example, AWS Terraform customer_stack and tfvars examples). `SMTP_PASSWORD` injected via ECS Secrets Manager `valueFrom` on AWS. `SMTP_SKIP_VERIFY` blocked by hardened profile. Audit events record `emailFound` and `emailSent` without user ID. Operator runbook in `docs/customer/security-and-recovery.md`; full config reference in `docs/email-delivery.md`.
+- **Notes:** SMTP mailer package shipped with STARTTLS/TLS/plain modes, stdlib-only (no third-party mail library). `POST /api/v1/auth/forgot-password` (always-200, no user-existence leak), `POST /api/v1/users/{userId}/invite` (72-hour setup link), and `sendEmail: true` on `POST /api/v1/users/{userId}/password-reset-token` all wired. `smtpEnabled` field on `GET /api/v1/auth/status` gates UI forgot-password tab. SMTP vars in all deployment templates (on-prem compose, control-plane env example, AWS Terraform customer_stack and tfvars examples). `SMTP_PASSWORD` injected via ECS Secrets Manager `valueFrom` on AWS. `SMTP_SKIP_VERIFY` blocked by hardened profile. Audit events record `emailFound` and `emailSent` without user ID. Operator runbook in `docs/customer/security-and-recovery.md`; full config reference in `docs/reference/email-delivery.md`.
 
 #### Multi-tenant controls (optional)
 - **Status:** ⬜ Backlog
@@ -724,13 +724,13 @@ Inter-plane authentication uses the existing service token mechanism (`federatio
 - **Dependencies:** Service tokens on regional planes; new `regional_planes` and `device_directory_cache` tables on global DB.
 - **Risks:** Regional plane API version skew; stale cache if sync goroutine falls behind.
 - **Acceptance:** Operator can register N regional planes and see a unified device list and health summary without opening N browser tabs. Zero changes to agents or regional control planes.
-- **Notes:** `cmd/global-plane` binary, `internal/globalplane` package (store, config, AES-256-GCM token encryption), `internal/globalplane/sync` (Manager + PlaneWorker with exponential backoff), `internal/globalplane/httpapi` (router, planes/aggregated handlers), 5 SQL migrations (`migrations/global/`). `auth.AuthStore` interface extracted so the global-plane store satisfies it without importing the full regional store. Two new service token scopes: `federation.push` and `federation.manage`. UI: `GlobalPage.jsx` with Planes health cards, Devices table, Artifacts table, Register Plane modal, 30s auto-refresh; admin-only nav entry with RBAC test coverage. Operator runbook in `docs/global-plane.md`.
+- **Notes:** `cmd/global-plane` binary, `internal/globalplane` package (store, config, AES-256-GCM token encryption), `internal/globalplane/sync` (Manager + PlaneWorker with exponential backoff), `internal/globalplane/httpapi` (router, planes/aggregated handlers), 5 SQL migrations (`migrations/global/`). `auth.AuthStore` interface extracted so the global-plane store satisfies it without importing the full regional store. Two new service token scopes: `federation.push` and `federation.manage`. UI: `GlobalPage.jsx` with Planes health cards, Devices table, Artifacts table, Register Plane modal, 30s auto-refresh; admin-only nav entry with RBAC test coverage. Operator runbook in `docs/reference/global-plane.md`.
 
 #### E2 — Artifact federation (single upload, N regions)
 - **Status:** ✅ Complete
 - **Scope:** Artifact uploaded once to global plane; metadata pushed to all regional planes; blobs replicated via MinIO bucket replication. Per-artifact, per-region replication status tracked and surfaced in global UI.
 - **Dependencies:** E1 (global plane registered); MinIO bucket replication configured per region.
-- **Notes:** `global_artifacts` + `artifact_replication_status` tables (global migration 0006); `federation_artifact_ingest` table (regional migration 0033); `store.FederationIngest` type + 3 new Store methods; `UploadFederatedArtifact`, `ListFederatedArtifacts`, `GetFederatedArtifact`, `GetReplicationStatus`, `PresignFederatedArtifact` handlers on global plane; `ReceiveFederatedArtifact` + `GetFederatedBlobStatus` handlers on regional plane under `federation.push` scope; replication reconciler polls every 60 s; Federated tab in GlobalPage.jsx with region confirmed/total chip; Upload artifact modal; `docs/artifact-federation.md` operator runbook; `deploy/global-plane.env.example`.
+- **Notes:** `global_artifacts` + `artifact_replication_status` tables (global migration 0006); `federation_artifact_ingest` table (regional migration 0033); `store.FederationIngest` type + 3 new Store methods; `UploadFederatedArtifact`, `ListFederatedArtifacts`, `GetFederatedArtifact`, `GetReplicationStatus`, `PresignFederatedArtifact` handlers on global plane; `ReceiveFederatedArtifact` + `GetFederatedBlobStatus` handlers on regional plane under `federation.push` scope; replication reconciler polls every 60 s; Federated tab in GlobalPage.jsx with region confirmed/total chip; Upload artifact modal; `docs/reference/artifact-federation.md` operator runbook; `deploy/global-plane.env.example`.
 
 #### E3 — Global desired state / policy push
 - **Status:** 🟢 Complete
@@ -914,7 +914,7 @@ Design detail lives in `development/bare-metal-firmware-ota.md`. The agent-resid
   - Add `variant` field to the signed license schema; `DEPLOYMENT_PROFILE=medical` requires `variant=medical` in the license.
   - Add `safetyClass` field (values: `A` | `B` | `C` | `unclassified`) to the `artifacts` table via `migrations/medical/0001_safety_class.sql`. Class maps to IEC 62304 software safety classifications.
   - Add `DEPLOYMENT_PROFILE` to all deployment templates (on-prem compose, AWS Terraform `customer_stack`, env examples) as an opt-in; default is `standard`.
-  - Add an IoMT section to `docs/compliance-status.md` mapping HIPAA, IEC 62304, ISO 14971, FDA cybersecurity guidance, and IEC 81001-5-1 against current implementation status.
+  - Add an IoMT section to `docs/compliance/compliance-status.md` mapping HIPAA, IEC 62304, ISO 14971, FDA cybersecurity guidance, and IEC 81001-5-1 against current implementation status.
   - Add a HIPAA BAA scope document (`docs/hipaa-baa-scope.md`) clarifying what Parcel does and does not process as PHI, and what vendor BAA requirements apply to cloud providers in the data chain.
 - **Dependencies:** License schema change; deployment template updates.
 - **Risks:** License variant enforcement must be airtight — a medical customer on a standard license must not be able to enable `DEPLOYMENT_PROFILE=medical` via env alone.

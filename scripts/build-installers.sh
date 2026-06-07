@@ -77,7 +77,7 @@ Legacy direct enrollment:
        ./scripts/agent-enroll.sh
 
 Docs:
-  docs/agent-systemd.md
+  docs/reference/agent-systemd.md
   docs/installer-flow.md
 AGENT_LINUX
   else
@@ -610,7 +610,7 @@ Notes:
   Each regional plane must have a service token with device.read, artifact.read,
   and federation.push scopes registered via POST /api/v1/planes on the global plane.
 - For artifact federation (E2), configure GLOBAL_MINIO_* variables.
-- See docs/global-desired-state.md and docs/artifact-federation.md.
+- See docs/reference/global-desired-state.md and docs/reference/artifact-federation.md.
 GLOBAL_README
 
   printf "\nPlatform: %s/%s\n" "$goos" "$goarch" >> "$stage/README.txt"

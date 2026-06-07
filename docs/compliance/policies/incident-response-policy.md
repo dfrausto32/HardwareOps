@@ -82,7 +82,7 @@ Do not destroy evidence during containment. Snapshots and log exports take prior
 
 After containment:
 1. Identify and eliminate the root cause (patch vulnerability, revoke compromised access, fix misconfiguration).
-2. Apply the fix via the emergency change process (`docs/policies/change-management-policy.md` Section 6).
+2. Apply the fix via the emergency change process (`docs/compliance/policies/change-management-policy.md` Section 6).
 3. Confirm the attack vector is closed before moving to recovery.
 
 ### 5.4 Recovery
@@ -155,6 +155,6 @@ A blameless post-mortem is conducted for all P0 and P1 incidents, and optionally
 ## 9. Related Documents
 
 - `docs/incidents/ir-runbook.md` — tactical playbooks for P0/P1/P2 scenarios
-- `docs/policies/access-control-policy.md` — access revocation procedures
-- `docs/policies/change-management-policy.md` — emergency change process
+- `docs/compliance/policies/access-control-policy.md` — access revocation procedures
+- `docs/compliance/policies/change-management-policy.md` — emergency change process
 - `SECURITY.md` — vulnerability disclosure program and external reporting

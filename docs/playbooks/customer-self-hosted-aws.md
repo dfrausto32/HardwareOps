@@ -574,9 +574,9 @@ aws ecs update-service \
 
 - Terraform modules: `deploy/aws/terraform/modules/customer_stack/`
 - Terraform env examples: `deploy/aws/terraform/envs/prod/`
-- Full deployment guide: `docs/deploy.md`
-- Hardening reference: `docs/deployment-hardening.md`
-- Backup commands: `docs/backup-restore.md`
-- API contract: `docs/icd.md`
+- Full deployment guide: `docs/guides/deploy.md`
+- Hardening reference: `docs/guides/deployment-hardening.md`
+- Backup commands: `docs/guides/backup-restore.md`
+- API contract: `docs/reference/icd.md`
 - Customer first-agent guide: `docs/customer/first-agent-onboarding.md`
 - CI integration: `docs/customer/ci-workflows.md`

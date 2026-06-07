@@ -135,5 +135,5 @@ There is no separate manual change log — the combination of GitHub and audit l
 
 - `docs/development/roadmap.md` — feature and phase planning
 - `docs/incidents/ir-runbook.md` — emergency change and rollback procedures under incident conditions
-- `docs/policies/access-control-policy.md` — who is authorized to deploy
-- `docs/policies/vulnerability-management-policy.md` — patch timelines driven by scan findings
+- `docs/compliance/policies/access-control-policy.md` — who is authorized to deploy
+- `docs/compliance/policies/vulnerability-management-policy.md` — patch timelines driven by scan findings

@@ -2,8 +2,8 @@
 
 This directory is a production-oriented Terraform scaffold for **vendor-hosted, per-customer** AWS deployments.
 
-Canonical deployment guide: `../../../docs/deploy.md`  
-Canonical operations guide: `../../../docs/operations.md`
+Canonical deployment guide: `../../../docs/guides/deploy.md`  
+Canonical operations guide: `../../../docs/guides/operations.md`
 
 Operational runbook: `../../../docs/development/aws-customer-deployment-runbook.md`.
 CLI helper: `../../../scripts/aws-customer.sh`.

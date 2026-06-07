@@ -59,8 +59,42 @@ These docs complement the canonical operator-facing docs in `../` (deploy, opera
 
 ---
 
+## Phase C Internals
+
+| Doc | What it covers |
+|---|---|
+| `phase-c-internals.md` | LDAP auth provider, Vault credential backend, cloud-pull adapters, artifact provenance — Phase C design and API deep dive |
+| `artifact-trusted-upload-ui.md` | Trusted artifact upload UI model: upload flow, signature verification steps, UX states |
+
+---
+
+## Testing and QA Handoff
+
+| Doc | What it covers |
+|---|---|
+| `handoff-e2e-testing.md` | Automated full-stack E2E suite status, how to run/extend (`../../scripts/e2e-suite.sh`) |
+
+---
+
+## Bare-Metal / Embedded (Phase F)
+
+| Doc | What it covers |
+|---|---|
+| `bare-metal-firmware-ota.md` | Phase F engineering design: gateway/device-of-devices, Transport interface, BLE GATT protocol, A/B firmware slots, RP2040/Pico target, firmware.json format |
+
+---
+
+## Multi-Agent and Docs
+
+| Doc | What it covers |
+|---|---|
+| `agent-launch-runbook.md` | Multi-agent worktree runbook: one-time setup, task briefs, interactive and headless parallel modes, parallelization rules |
+| `documentation-audit.md` | 2026-06-04 docs audit + 2026-06-07 reorg execution record |
+
+---
+
 ## Rule of thumb
 
-- Start in `../deploy.md` (deployment) or `../operations.md` (day-2) for runbook-style guidance.
+- Start in `../guides/deploy.md` (deployment) or `../guides/operations.md` (day-2) for runbook-style guidance.
 - Come here for design rationale, architecture decisions, and deep implementation details.
 - `roadmap.md` is the single source of truth for what is done and what comes next.

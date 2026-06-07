@@ -209,5 +209,5 @@ The user should appear with `"authProvider": "ldap"` and the role derived from g
 ## Related docs
 
 - `docs/auth-secrets-v1.md` — managing service account credentials and secret rotation
-- `docs/icd.md` — full API contract including `/api/v1/auth/*` and `/api/v1/users` endpoints
+- `docs/reference/icd.md` — full API contract including `/api/v1/auth/*` and `/api/v1/users` endpoints
 - `docs/development/phase-c-internals.md` — developer internals for the auth subsystem

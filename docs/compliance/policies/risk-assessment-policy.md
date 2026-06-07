@@ -87,7 +87,7 @@ Treatment actions are tracked in the risk register (Section 4) with an owner and
 
 ## 4. Risk Register
 
-The risk register is maintained in `docs/risk-register.md`. Each entry contains:
+The risk register is maintained in `docs/compliance/risk-register.md`. Each entry contains:
 
 | Field | Description |
 |-------|-------------|
@@ -115,7 +115,7 @@ The risk register is reviewed and updated:
 
 ## 5. Initial Risk Register — Baseline Entries
 
-The following risks are identified as of the policy effective date and are captured in `docs/risk-register.md`:
+The following risks are identified as of the policy effective date and are captured in `docs/compliance/risk-register.md`:
 
 | Risk ID | Description | Likelihood | Impact | Score | Level | Treatment |
 |---------|-------------|-----------|--------|-------|-------|-----------|
@@ -152,8 +152,8 @@ Risks accepted rather than mitigated must be:
 
 ## 8. Related Documents
 
-- `docs/risk-register.md` — live risk register
-- `docs/policies/vendor-management-policy.md` — vendor risk assessment
-- `docs/policies/vulnerability-management-policy.md` — vulnerability-driven risk inputs
-- `docs/policies/incident-response-policy.md` — risk materialization response
-- `docs/compliance-status.md` — compliance gap tracking
+- `docs/compliance/risk-register.md` — live risk register
+- `docs/compliance/policies/vendor-management-policy.md` — vendor risk assessment
+- `docs/compliance/policies/vulnerability-management-policy.md` — vulnerability-driven risk inputs
+- `docs/compliance/policies/incident-response-policy.md` — risk materialization response
+- `docs/compliance/compliance-status.md` — compliance gap tracking

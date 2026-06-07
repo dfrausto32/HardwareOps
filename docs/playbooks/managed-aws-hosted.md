@@ -347,6 +347,6 @@ aws ecs update-service \
 - Terraform modules: `deploy/aws/terraform/modules/customer_stack/`
 - Deployment runbook: `docs/development/aws-customer-deployment-runbook.md`
 - Customer operator guide: `docs/customer/setup-vendor-hosted-aws.md`
-- Hardening reference: `docs/deployment-hardening.md`
+- Hardening reference: `docs/guides/deployment-hardening.md`
 - Incident response: `docs/incidents/ir-runbook.md`
-- Backup commands: `docs/backup-restore.md`
+- Backup commands: `docs/guides/backup-restore.md`

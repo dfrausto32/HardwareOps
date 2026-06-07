@@ -64,7 +64,7 @@ enforces a distinct issuer (`parcel-global`), so a regional token is rejected.
 Options:
 1. **Hardened local login** — re-add a login endpoint that mirrors the regional
    one *with* its protections (login backoff/rate-limit, audit logging, TOTP/MFA,
-   email normalization). `docs/global-plane.md` says the global-plane uses "the
+   email normalization). `docs/reference/global-plane.md` says the global-plane uses "the
    same JWT/service-token mechanism as regional planes," so this is design-aligned.
 2. **Seeded service token** — at global-plane startup, seed a `federation.manage`
    service token (env-gated, like the reverted bootstrap-admin) and have operators/
@@ -108,6 +108,6 @@ and `Full stack E2E`. Logs upload as an artifact on failure.
 
 ## Pointers
 - Roadmap: `docs/development/roadmap.md` → "Quality Engineering" section.
-- Global-plane operator runbook: `docs/global-plane.md`.
+- Global-plane operator runbook: `docs/reference/global-plane.md`.
 - E2E suite: `scripts/e2e-suite.sh`; multi-agent: `scripts/test-multi-agent.sh`.
 - Test patterns: `CLAUDE.md` → "Test Patterns".
