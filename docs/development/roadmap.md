@@ -24,6 +24,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Phase C — Enterprise Readiness | 🟢 Complete | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, artifact tracking policies, the local-auth recovery stack (recovery codes, reset tokens, break-glass CLI), CI workload identity federation, supply-chain provenance policy (Cosign/Sigstore), LDAP/AD auth, and Vault secrets integration are all shipped. |
 | Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Connected email delivery complete. TOTP MFA for local accounts shipped. Remaining Phase D work is live-deployment acceptance gate execution (operational) and full VPC reference diagram (docs). |
 | Phase E — Federated Multi-Region | 🟡 In progress | Hub-and-spoke federation layer: global management plane above regional control planes. Agents unchanged. E1–E5 (aggregation, artifact federation, policy push, sync reconciler, enrollment profiles) complete. Global-plane operator auth: Phase 1 (local login + audit) and Phase 2 (OIDC SSO) complete. Phase 3 (LDAP) is roadmap. E6 (global PKI) deferred. |
+| Phase F — Bare-Metal Embedded & Constrained-Transport Devices | ⬜ Planned | True remote firmware OTA to microcontrollers (e.g. Raspberry Pi Pico) that cannot run the agent and have no IP. Pi-class gateway relays firmware over Bluetooth behind a pluggable transport abstraction. F1 (transport seam), F2 (agent-resident firmware apply), F3 (gateway/device-of-devices), F4 (BLE OTA), F5 (RP2040 bare-metal target), F6 (additional transports, backlog). Design in `docs/development/bare-metal-firmware-ota.md`. |
 | Phase G — Medical / IoMT Compliance | ⬜ Planned | Medical deployment variant (`DEPLOYMENT_PROFILE=medical`) gated behind a signed license. G1 (deployment profile + safety classification), G2 (IEC 62304 change control), G3 (FDA SBOM/VEX), G4 (HIPAA audit hardening), G5 (QMS artifact package). Separate `medical` CI test pipeline. All features invisible to standard deployments. |
 
 ### Active work queue (what is still to do)
@@ -38,6 +39,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 
 ### Prepared next tasks (agent-scoped)
 - `E6-GLOBAL-PKI-HIERARCHY` — global root CA with regional intermediate CAs; enables cross-region device identity verification; requires reenrollment of existing devices
+- `F1-TRANSPORT-SEAM` — extract the agent's HTTP/mTLS client (`agent/internal/client/client.go`) into a `Transport` interface with no behavior change, so non-IP transports (BLE, serial) can slot in behind it; foundation for Phase F bare-metal firmware OTA
 
 ---
 
@@ -816,6 +818,71 @@ Inter-plane authentication uses the existing service token mechanism (`federatio
 - **Scope:** Formalize the pipeline: per-PR (unit + core E2E), nightly/extended (Q2 extended + Q3 sim + Q4 network), and an architecture matrix where relevant. Make the agreed checks required for merge to `main`; upload logs on failure; track and quarantine flaky tests.
 - **Acceptance:** branch protection requires the agreed checks; extended suites run on schedule; flaky tests are tracked, not ignored.
 - **Notes:** Existing manual AWS smoke workflows (`artifact-duplicate-smoke.yml`, `workload-identity-smoke.yml`) remain for live-environment validation.
+
+---
+
+## Phase F — Bare-Metal Embedded & Constrained-Transport Devices
+**Goal:** Deliver true, fully remote firmware updates to bare-metal microcontrollers (e.g. Raspberry Pi Pico / RP2040) that cannot run the agent and have no IP networking. A Pi-class gateway relays firmware to these devices over Bluetooth (BLE first), behind a pluggable transport abstraction so additional links (serial/UART, radio) can be added later. Guiding principle: the most remote update path possible — no physical or USB touch.
+
+Design detail lives in `development/bare-metal-firmware-ota.md`. The agent-resident firmware case (a Linux-class device that runs the agent and flashes itself or an attached component) is covered separately in `development/artifact-apply-roadmap.md`.
+
+### Definition of Done
+- A microcontroller with no IP stack receives and applies a signed firmware image fully over the air via a gateway, with no physical intervention
+- Firmware is verified (SHA-256 + signature) before it reaches the device; incompatible images are refused by model/SoC/hw-revision targeting
+- A/B firmware slots with verify-readback and automatic rollback to the last-good image on failed boot
+- Sub-devices (MCUs) appear in the control-plane device directory under their gateway, with relayed capability inventory, desired state, and apply-results
+- Firmware rolls out in staged waves with automatic halt on failure thresholds
+- The agent's transport is abstracted so HTTP/mTLS, BLE, and future links share one interface
+
+### Feature Templates
+
+#### F1 — Agent transport abstraction
+- **Status:** ⬜ Planned
+- **Scope:** Extract the agent's HTTP/mTLS client into a `Transport` interface (CheckIn / GetArtifact / PresignArtifact / PostApplyResult). The current client becomes `HTTPTransport` with no behavior change; BLE and serial adapters implement the same interface later.
+- **Dependencies:** None. Foundation for all Phase F transport work.
+- **Risks:** Refactor regressions in the check-in/apply path if the interface boundary is drawn incorrectly.
+- **Acceptance:** Existing HTTP/mTLS check-in and apply behavior is unchanged behind the new interface; agent tests pass; a second (stub) transport can be wired without touching the check-in loop or apply dispatch.
+- **Notes:** Code to abstract: `agent/internal/client/client.go` (`NewWithTLS`, `CheckIn`, `GetArtifact`, `PresignArtifact`); call sites in `agent/cmd/agent/main.go` and `agent/internal/artifacts/apply.go`. Keep the loop and dispatch transport-agnostic.
+
+#### F2 — Agent-resident firmware apply
+- **Status:** ⬜ Planned
+- **Scope:** Implement the `FirmwareApplier` interface (currently a stub returning `ErrApplyNotImplemented`) for Linux-class devices that flash themselves or an attached component: preflight → stage → flash → verify → rollback, with A/B slots.
+- **Dependencies:** Existing apply interfaces (`agent/internal/artifacts/apply_interfaces.go`); `firmware.json` schema from `development/artifact-apply-roadmap.md`.
+- **Risks:** A bad flash can brick the device; rollback and compatibility gating must be solid before enabling outside demo mode.
+- **Acceptance:** A firmware artifact applies on a Linux-class target with verify-readback and rollback on failure; apply-results report per-component status; `ALLOW_UNSUPPORTED_APPLY` demo path remains available for visual validation.
+- **Notes:** Replaces `firmwareApplierStub` wired at `agent/internal/artifacts/apply_interfaces.go:64`. Completes the "Firmware Apply Plan (v2)" already drafted in `development/artifact-apply-roadmap.md`.
+
+#### F3 — Gateway / device-of-devices model
+- **Status:** ⬜ Planned
+- **Scope:** A Pi-class agent represents N bare-metal sub-devices it can reach over a constrained link. Control-plane gains a sub-device directory and capability inventory (model/SoC/hw-revision); the gateway relays desired state and apply-results on behalf of each sub-device.
+- **Dependencies:** F1 (transport abstraction).
+- **Risks:** Sub-device identity and ownership model must be unambiguous; stale sub-device state if the gateway is offline.
+- **Acceptance:** Sub-devices appear in the device directory owned by their gateway, with capability fields populated; firmware desired-state can be targeted at a sub-device and its apply-result is visible in the UI, all relayed through the gateway.
+- **Notes:** MCUs never authenticate to the control plane directly — the gateway holds the mTLS identity. Firmware artifact `Type` is already `"firmware"` (register-only today) and metadata rides in `MetadataJSON` (`control-plane/internal/store/store.go`), so no artifact-schema migration is needed to carry firmware fields.
+
+#### F4 — BLE OTA transport adapter
+- **Status:** ⬜ Planned
+- **Scope:** Bluetooth Low Energy adapter for the gateway↔MCU hop: a GATT firmware service with chunked, resumable transfer over the bandwidth-constrained/lossy link. SHA-256 + signature verification happen at the gateway boundary before any bytes reach the device; the BLE link is paired/bonded and encrypted.
+- **Dependencies:** F1 (transport abstraction), F3 (gateway/sub-device model).
+- **Risks:** BLE stack variability across host hardware; transfer interruptions on a lossy link; on-device verification limited by MCU RAM/flash.
+- **Acceptance:** A firmware image transfers to a BLE sub-device end-to-end with chunked, resumable delivery; verification fails closed if hash/signature is invalid; transfer survives a dropped connection without restarting from zero.
+- **Notes:** Reuses `downloadAndVerify` and `verifyEd25519` (`agent/internal/artifacts/apply.go`) at the gateway. `transport: ble` + `bleService` carried in `firmware.json`. Hardware test plan: `docs/testing/firmware-ota-hardware-test-plan.md`.
+
+#### F5 — RP2040 / Pi Pico bare-metal target
+- **Status:** ⬜ Planned
+- **Scope:** Reference bare-metal target on RP2040 (Pi Pico): a resident application-level OTA bootloader with A/B firmware slots, verify-readback, and rollback to the last-good slot. USB BOOTSEL/UF2 is provisioning-only (requires a physical button) and is explicitly not the remote path.
+- **Dependencies:** F4 (BLE OTA transport).
+- **Risks:** Recovery from a failed flash on a remote MCU is hard; the bootloader and slot-switch logic must be robust against power loss mid-write.
+- **Acceptance:** A Pico updates fully over the air (no physical touch), boots the new image, and automatically reverts to the prior slot if the new image fails its health check.
+- **Notes:** `picotool`/UF2 remain useful for initial factory provisioning. `slot` and `bootloaderMinVersion` fields in `firmware.json` drive A/B handoff and anti-rollback.
+
+#### F6 — Additional constrained transports
+- **Status:** ⬜ Backlog
+- **Scope:** Additional link adapters (serial/UART, and potentially radio/LoRa) implemented behind the F1 `Transport` interface, for devices where BLE is unavailable or unsuitable.
+- **Dependencies:** F1 (transport abstraction); patterns proven by F4.
+- **Risks:** Each new physical link adds maintenance surface; defer until a concrete device need exists.
+- **Acceptance:** TBD — at least one non-BLE constrained transport delivers a verified firmware image to a bare-metal device using the same interface and artifact format as F4/F5.
+- **Notes:** `transport` field in `firmware.json` selects the adapter (`ble` today; `serial` reserved). Kept as backlog so BLE remains the focused first deliverable.
 
 ---
 
