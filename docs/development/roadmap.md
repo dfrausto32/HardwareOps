@@ -24,6 +24,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Phase C — Enterprise Readiness | 🟢 Complete | Fixed RBAC, role-aware UI parity, break-glass APIs, first-contact approval onboarding, OIDC SSO, trusted-key artifact verification, trusted-key deployment wiring, trust-override UX, artifact tracking policies, the local-auth recovery stack (recovery codes, reset tokens, break-glass CLI), CI workload identity federation, supply-chain provenance policy (Cosign/Sigstore), LDAP/AD auth, and Vault secrets integration are all shipped. |
 | Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Connected email delivery complete. TOTP MFA for local accounts shipped. Remaining Phase D work is live-deployment acceptance gate execution (operational) and full VPC reference diagram (docs). |
 | Phase E — Federated Multi-Region | 🟡 In progress | Hub-and-spoke federation layer: global management plane above regional control planes. Agents unchanged. E1–E5 (aggregation, artifact federation, policy push, sync reconciler, enrollment profiles) complete. Global-plane operator auth: Phase 1 (local login + audit) and Phase 2 (OIDC SSO) complete. Phase 3 (LDAP) is roadmap. E6 (global PKI) deferred. |
+| Phase G — Medical / IoMT Compliance | ⬜ Planned | Medical deployment variant (`DEPLOYMENT_PROFILE=medical`) gated behind a signed license. G1 (deployment profile + safety classification), G2 (IEC 62304 change control), G3 (FDA SBOM/VEX), G4 (HIPAA audit hardening), G5 (QMS artifact package). Separate `medical` CI test pipeline. All features invisible to standard deployments. |
 
 ### Active work queue (what is still to do)
 
@@ -815,6 +816,163 @@ Inter-plane authentication uses the existing service token mechanism (`federatio
 - **Scope:** Formalize the pipeline: per-PR (unit + core E2E), nightly/extended (Q2 extended + Q3 sim + Q4 network), and an architecture matrix where relevant. Make the agreed checks required for merge to `main`; upload logs on failure; track and quarantine flaky tests.
 - **Acceptance:** branch protection requires the agreed checks; extended suites run on schedule; flaky tests are tracked, not ignored.
 - **Notes:** Existing manual AWS smoke workflows (`artifact-duplicate-smoke.yml`, `workload-identity-smoke.yml`) remain for live-environment validation.
+
+---
+
+## Phase G — Medical / IoMT Compliance
+**Goal:** Make the `medical` deployment variant validatable by device OEM quality teams against IEC 62304, ISO 14971, FDA cybersecurity guidance, and HIPAA. All features in this phase are gated behind `DEPLOYMENT_PROFILE=medical` (enforced via the signed license `variant` field) and are invisible to standard deployments.
+
+**Why the split matters:** Parcel is not a medical device and does not require FDA clearance. It is a tool in the OEM's software lifecycle — and their QMSR-compliant QMS requires evidence that the deployment tool itself is validated. The medical variant must emit the artifacts (change records, VEX files, HIPAA-formatted audit exports, QMS packages) that drop directly into an OEM's Document Master Record. Standard deployments carry none of this overhead.
+
+### Definition of Done
+- `DEPLOYMENT_PROFILE=medical` activates the medical API surface and migrations; standard deployments are unaffected.
+- Every deployment of a Class B or C artifact requires a completed and approved IEC 62304 change record before the desired-state push executes.
+- CycloneDX SBOMs are accompanied by VEX files on every artifact version; VEX refreshes automatically when new vuln scan results arrive.
+- HIPAA-formatted audit export satisfies the structured output an OEM's BAA documentation requires.
+- OEM QMS teams can download a single ZIP (QMS package) per artifact version containing everything needed for design transfer: manifest, SBOM, VEX, attestations, change record, approval audit trail, vulnerability scan summary.
+- A dedicated `medical-unit-tests` CI job and `scripts/e2e-suite-medical.sh` run independently from the standard pipeline; the standard pipeline never runs medical-variant tests.
+
+### Architecture notes
+
+- **License variant:** `variant` field added to the signed license schema (`license/license.go`). Values: `standard` | `medical`. The `DEPLOYMENT_PROFILE` env var is rejected if it disagrees with the license — operators cannot unlock medical mode without a medical license.
+- **Migrations:** Medical-only schema changes live in `control-plane/migrations/medical/`. Applied on startup only when `DEPLOYMENT_PROFILE=medical`. Standard migrations are untouched.
+- **Build tags:** Medical handler tests use `//go:build medical`. The standard `go test ./...` command never compiles or runs them.
+- **Router gating:** Medical-only routes are registered in `httpapi/router.go` only when `deps.DeploymentProfile == "medical"`. A standard deployment hitting a medical route returns 404.
+
+### Feature Templates
+
+#### G1 — Foundation: deployment profile + safety classification
+- **Status:** ⬜ Planned
+- **Scope:** Infrastructure that all subsequent medical features depend on.
+  - Add `variant` field to the signed license schema; `DEPLOYMENT_PROFILE=medical` requires `variant=medical` in the license.
+  - Add `safetyClass` field (values: `A` | `B` | `C` | `unclassified`) to the `artifacts` table via `migrations/medical/0001_safety_class.sql`. Class maps to IEC 62304 software safety classifications.
+  - Add `DEPLOYMENT_PROFILE` to all deployment templates (on-prem compose, AWS Terraform `customer_stack`, env examples) as an opt-in; default is `standard`.
+  - Add an IoMT section to `docs/compliance-status.md` mapping HIPAA, IEC 62304, ISO 14971, FDA cybersecurity guidance, and IEC 81001-5-1 against current implementation status.
+  - Add a HIPAA BAA scope document (`docs/hipaa-baa-scope.md`) clarifying what Parcel does and does not process as PHI, and what vendor BAA requirements apply to cloud providers in the data chain.
+- **Dependencies:** License schema change; deployment template updates.
+- **Risks:** License variant enforcement must be airtight — a medical customer on a standard license must not be able to enable `DEPLOYMENT_PROFILE=medical` via env alone.
+- **Acceptance:**
+  - `DEPLOYMENT_PROFILE=medical` with a `standard` license causes startup failure with a clear error.
+  - `GET /api/v1/artifacts/{id}` response includes `safetyClass` field when medical profile is active.
+  - Standard deployments: no schema change, no new fields, no new routes.
+
+#### G2 — IEC 62304 change control workflow
+- **Status:** ⬜ Planned
+- **Scope:** Treat every deployment of a Class B or C artifact as a regulated change event. Gate the desired-state push on a completed and approved change record.
+  - New `iec62304_change_records` table (`migrations/medical/0002_change_records.sql`): artifact ID, safety class, impact assessment text, risk control measures, approver user ID, approved-at timestamp, status (`draft` | `pending_approval` | `approved` | `rejected`).
+  - `POST /api/v1/artifacts/{id}/change-record` — create or update a change record for an artifact version (operator).
+  - `POST /api/v1/artifacts/{id}/change-record/approve` — sign off on a change record (admin); emits `change_record.approved` audit event.
+  - `POST /api/v1/artifacts/{id}/change-record/reject` — reject with reason (admin); emits `change_record.rejected` audit event.
+  - Deployment gate: when `REQUIRE_CHANGE_APPROVAL=1` (default on in medical profile), `PUT /api/v1/desired-state/groups/{groupId}` and `PUT /api/v1/desired-state/devices/{deviceId}` return 422 if any Class B or C artifact component in the desired state lacks an `approved` change record. Class A artifacts and `unclassified` artifacts are not gated.
+  - Change Control page in `ui-healthcare`: per-artifact change record status, draft/approve/reject workflow, link from desired-state editor to the relevant change record.
+- **Dependencies:** G1 (safety class field, deployment profile gate).
+- **Risks:** Operators must be able to emergency-override the gate (break-glass) with an audited reason; the gate must not be a hard blocker during incidents.
+- **Acceptance:**
+  - Pushing a Class C artifact to desired state without an approved change record returns 422 with a clear error referencing the change record ID needed.
+  - Break-glass override (`?bypassChangeApproval=true` with required `reason` body field) is available to admin only and emits a `change_record.bypassed` audit event.
+  - All change record state transitions are audited with actor, timestamp, and reason.
+  - Standard deployments: `iec62304_change_records` table does not exist; routes return 404.
+
+#### G3 — FDA SBOM / VEX (March 2026 enforcement)
+- **Status:** ⬜ Planned
+- **Scope:** Extend the existing SBOM pipeline (CycloneDX via Trivy, `internal/sbom/`) to produce VEX (Vulnerability Exploitability eXchange) files alongside each SBOM, and add lifecycle metadata fields required by the FDA June 2025 guidance.
+  - VEX generation job (`internal/sbom/vex.go`): runs after each vulnerability scan completes; maps scan findings to SBOM components; produces a CycloneDX VEX document with exploitability assertions (`affected` / `not_affected` / `under_investigation` / `fixed`) per CVE per component.
+  - VEX stored in MinIO at `sboms/{artifactID}.vex.json`; `vexObjectKey` field added to `artifacts` table via `migrations/medical/0003_vex.sql`.
+  - VEX refreshes automatically when a new vulnerability scan result is persisted for the artifact (same trigger as the existing SBOM job).
+  - `POST /api/v1/artifacts/{id}/sbom/vex/presign` — presigned download of the VEX file (audited).
+  - `POST /api/v1/artifacts/{id}/sbom/vex/assertions` — operator endpoint to manually set or override exploitability assertions for a specific CVE/component pair (required for the `not_affected` justification workflow the FDA expects).
+  - End-of-support date field (`eosDate`) added to artifact metadata (FDA lifecycle metadata requirement); surfaced in the artifact API response and in the SBOM `externalReferences`.
+  - SBOM download page in `ui-healthcare` updated to show VEX alongside SBOM with assertion status summary.
+- **Dependencies:** G1 (deployment profile gate); existing `internal/sbom/` and `vulnscan/` packages.
+- **Risks:** VEX generation requires the SBOM and vuln scan to both be complete; job ordering must be resilient to partial failures. Manual assertion override requires an audit trail to satisfy FDA review.
+- **Acceptance:**
+  - Every artifact with a completed SBOM and at least one completed vulnerability scan has a VEX file within 60 seconds of scan completion.
+  - `GET /api/v1/artifacts/{id}` returns `vexObjectKey` when VEX is available.
+  - Manual assertion overrides are audited with actor, CVE ID, component name, assertion value, and justification text.
+  - Standard deployments: VEX routes return 404; no `vexObjectKey` field; no `eosDate` field.
+
+#### G4 — HIPAA audit hardening
+- **Status:** ⬜ Planned
+- **Scope:** Extend the existing audit log to produce HIPAA-grade structured output consumable by an OEM's BAA documentation and compliance team.
+  - `phi_touched` boolean field added to `audit_events` via `migrations/medical/0004_audit_phi.sql`; set to `true` on any event where the handler operates on a resource that may contain or reference PHI (device metadata, telemetry, logs).
+  - `minimum_necessary` field on audit events: records which specific fields/scopes were accessed (not the data itself — just the access classification).
+  - `GET /api/v1/audit/hipaa-export` — HIPAA-formatted audit export endpoint (admin only); returns structured JSON with required HIPAA Security Rule fields: date/time, user ID, type of action, description of data accessed, `phi_touched` flag. Distinct from the general `GET /api/v1/audit` and `GET /api/v1/audit.csv` endpoints.
+  - `HipaaAuditPage.jsx` in `ui-healthcare` wired to the new `/hipaa-export` endpoint (currently it is a stub backed by the general audit API).
+  - Retention policy for HIPAA audit events: minimum 6-year retention enforced when `DEPLOYMENT_PROFILE=medical`, regardless of the general audit retention setting (`DeleteAuditEventsBefore`).
+- **Dependencies:** G1 (deployment profile gate).
+- **Risks:** `phi_touched` classification requires per-handler annotation — incomplete annotation is worse than no annotation because it creates false assurance. A handler audit is needed before shipping.
+- **Acceptance:**
+  - `GET /api/v1/audit/hipaa-export` returns only events with `phi_touched=true` (or all events if `?scope=all`) in the HIPAA-required field set.
+  - Retention policy enforces 6-year floor for medical deployments; the UI surfaces a warning if the configured retention is shorter.
+  - Standard deployments: `/hipaa-export` returns 404; `phi_touched` and `minimum_necessary` fields absent from audit events.
+
+#### G5 — QMS artifact package (QMSR / ISO 13485 evidence bundle)
+- **Status:** ⬜ Planned
+- **Scope:** Produce a single downloadable evidence bundle per artifact version that an OEM's QMS team can attach to their Device Master Record at design transfer. This is the primary deliverable that makes Parcel's medical variant worth buying over a general OTA tool.
+  - `POST /api/v1/artifacts/{id}/qms-package` — generates and returns a presigned download URL for a ZIP containing:
+    - `manifest.json` — artifact metadata (name, version, type, safety class, SBOM key, VEX key, attestation list, eos date)
+    - `sbom.cdx.json` — CycloneDX SBOM
+    - `sbom.vex.json` — VEX file
+    - `attestations.json` — all in-toto/SLSA attestations for the artifact
+    - `change-record.json` — IEC 62304 change record with impact assessment, risk control measures, approver, and approval timestamp
+    - `change-record-audit-trail.json` — full audit event sequence for the change record lifecycle (created → reviewed → approved/rejected)
+    - `vuln-scan-summary.json` — most recent vulnerability scan result with severity counts and critical/high findings
+    - `deployment-audit-trail.json` — audit events for all desired-state pushes referencing this artifact version
+  - Package generation is audited (`qms_package.generated` event with actor, artifact ID, timestamp).
+  - QMS Package download button in `ui-healthcare` artifact detail view.
+  - Packages are generated on demand (not pre-cached); presigned URL expires in 15 minutes.
+- **Dependencies:** G1 (safety class), G2 (change record), G3 (VEX), G4 (HIPAA audit — for the deployment audit trail format).
+- **Risks:** Package completeness must be deterministic — partial packages (missing VEX or change record) are worse than a clear error. The endpoint should return 422 with a checklist of missing prerequisites rather than a partial ZIP.
+- **Acceptance:**
+  - `POST /api/v1/artifacts/{id}/qms-package` returns 422 with a structured `prerequisites` object listing which of SBOM / VEX / change record / vuln scan are missing, if any are incomplete.
+  - A complete package ZIP contains exactly the 8 files listed above and is verifiable by checksum.
+  - Package generation is audited regardless of success or failure.
+  - Standard deployments: endpoint returns 404.
+
+---
+
+## Quality Engineering — Medical Test Suite
+
+> **Goal:** IoMT compliance flows are tested in complete isolation from the standard pipeline. A standard CI run never compiles or executes medical-variant tests. A medical CI run exercises the full G1–G5 feature stack against a `DEPLOYMENT_PROFILE=medical` stack.
+
+**Why separate:** Medical compliance tests encode regulatory requirements (IEC 62304 gate logic, VEX completeness, HIPAA retention floors). Mixing them with standard tests creates ambiguity about which assertions are product requirements and which are regulatory requirements. They must be independently auditable.
+
+### Structure
+
+```
+control-plane/internal/httpapi/handlers/medical/
+  ├── iec62304_test.go          // change record CRUD, approval workflow, deployment gate
+  ├── deployment_gate_test.go   // class B/C gate blocks; class A passes; break-glass audited
+  ├── sbom_vex_test.go          // VEX generation, assertion override, auto-refresh on new scan
+  ├── hipaa_audit_test.go       // HIPAA export format, phi_touched propagation, retention floor
+  ├── qms_package_test.go       // package completeness, prerequisites 422, audit event
+  └── testutil_test.go          // medical fake store implementing only the medical store interface
+
+scripts/
+  ├── e2e-suite.sh              // (existing standard suite — unmodified)
+  └── e2e-suite-medical.sh      // medical E2E scenarios (see below)
+```
+
+All files in `handlers/medical/` carry `//go:build medical`. The standard `go test ./...` never touches them. The medical CI job runs `go test -tags medical ./...`.
+
+### Feature Templates
+
+#### QM1 — Medical unit test suite
+- **Status:** ⬜ Planned
+- **Scope:** Handler-level unit tests for all G1–G5 API surface using the `//go:build medical` tag and an in-memory medical store fake. Covers: safety class enforcement, change record state machine (draft → pending_approval → approved/rejected), deployment gate (class B/C blocked, class A passes, break-glass audited), VEX generation trigger, HIPAA export field set, QMS package prerequisite validation and ZIP contents.
+- **Acceptance:** Each G1–G5 handler has unit test coverage; the medical CI job (`go test -tags medical ./...`) is a required check for any PR touching `migrations/medical/` or `handlers/medical/`.
+- **Notes:** Follow the same in-memory store + `httptest` pattern as the standard handler tests. Do not add medical assertions to existing standard test files.
+
+#### QM2 — Medical E2E suite (`e2e-suite-medical.sh`)
+- **Status:** ⬜ Planned
+- **Scope:** Full-stack E2E scenarios against a running `DEPLOYMENT_PROFILE=medical` stack (real Postgres + MinIO, real built binaries). Scenarios:
+  1. **Change record workflow** — upload Class C artifact → create change record → push desired state (expect 422) → approve change record → push desired state (expect success) → verify `change_record.approved` audit event.
+  2. **Break-glass override** — upload Class B artifact → push desired state with `?bypassChangeApproval=true` + reason → verify `change_record.bypassed` audit event and that deployment proceeded.
+  3. **VEX generation** — ingest artifact → trigger vuln scan → wait for VEX to appear → download VEX → verify CVE assertions reference SBOM component names.
+  4. **HIPAA audit export** — perform several device operations → call `/audit/hipaa-export` → verify `phi_touched` field present and required HIPAA fields populated.
+  5. **QMS package completeness** — attempt package download before change record approved (expect 422 with prerequisites) → complete all prerequisites → download package → verify 8-file ZIP structure and checksums.
+- **Dependencies:** QM1 (unit coverage should precede E2E); G1–G5 implemented.
+- **Acceptance:** All 5 scenarios pass in CI against a medical-profile stack; suite runs as a separate `medical-e2e` CI job on schedule (not per-PR due to runtime); logs uploaded as artifacts on failure.
 
 ---
 

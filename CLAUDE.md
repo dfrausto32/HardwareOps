@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Collaboration Style
+
+At the end of every response, recommend the next task. One sentence: what it is and why it's the logical next step given what was just done.
+
+---
+
 ## What This Project Is
 
 Parcel is a control-plane platform for deploying software and configuration to autonomous devices in unreliable, bandwidth-constrained, or offline environments. It has four main components:
