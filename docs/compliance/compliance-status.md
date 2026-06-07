@@ -1,6 +1,6 @@
 # Parcel — Compliance & Standards Status
-**Date:** 2026-04-03
-**Scope:** Assessment of implemented vs. not-yet-implemented compliance controls across all platform tiers
+**Date:** 2026-04-03 (IoMT section added 2026-06-07)
+**Scope:** Assessment of implemented vs. not-yet-implemented compliance controls across all platform tiers. Section 7 covers medical/IoMT compliance (roadmap Phase G); applies only to `medical` deployment profile.
 
 This document maps the compliance landscape relevant to a B2B SaaS software distribution platform against what Parcel has already built, what is partially addressed, and what is explicitly out of scope or not yet implemented.
 
@@ -253,7 +253,125 @@ FedRAMP authorization requires an agency sponsor, a 3PAO assessment, and ongoing
 
 ---
 
-## 7. Additional Controls Implemented (Not in Original List)
+## 7. Medical / IoMT Compliance
+
+> **Scope:** This section applies only to the **`medical` deployment profile** (`DEPLOYMENT_PROFILE=medical`, enforced via signed license `variant` field). Standard deployments are explicitly out of scope for all requirements below. See `docs/development/roadmap.md` Phase G for implementation status and phasing.
+
+All items in this section are planned under **Phase G** and are **not yet implemented**.
+
+---
+
+### Deployment Profile Split (medical vs. standard)
+**Status: ❌ Not implemented** — Phase G1 (prerequisite for all G-phase work)
+
+Medical compliance requirements must not apply to standard deployments. The planned enforcement mechanism:
+
+| Mechanism | Status |
+|---|---|
+| `DEPLOYMENT_PROFILE=medical` environment variable | ❌ Planned — G1 |
+| Signed license `variant` field (`medical` vs `standard`) | ❌ Planned — G1 |
+| Medical-only routes return 404 on standard deployments | ❌ Planned — G1 |
+| `migrations/medical/` subdirectory (medical-only schema only) | ❌ Planned — G1 |
+| `//go:build medical` build tag for test isolation | ❌ Planned — G1 |
+
+Phase G1 is the prerequisite for all subsequent G-phase items — no G2–G5 item should merge before the profile split is enforced.
+
+---
+
+### HIPAA / HITECH
+**Status: ❌ Not implemented** — Phase G4
+
+| Requirement | Status | Notes |
+|---|---|---|
+| PHI access audit logging (`phi_touched` marker) | ❌ | Existing audit log captures actor/action/target; no PHI classification field or PHI-specific retention policy |
+| Encryption of PHI at rest (AES-256) | ⚠️ | AES-256 applies to all data via AWS SSE/RDS encryption — but no PHI classification layer exists |
+| Minimum necessary access (PHI-scoped RBAC) | ❌ | `viewer/operator/admin` roles are not PHI-scoped; no attribute-level access control |
+| BAA (Business Associate Agreement) template | ❌ | No BAA template or BAA-tracking mechanism |
+| Breach notification ≤ 60 days (HHS + individuals) | ⚠️ | IR runbook covers breach notification generically; HIPAA-specific 60-day HHS notification path not documented |
+| De-identification support (Safe Harbor / Expert Determination) | ❌ | No de-identification pipeline or tooling |
+
+**Phase G4 will add:** `phi_touched` boolean on audit events, HIPAA-specific retention policy enforced at the store layer, and a PHI audit export endpoint. BAA template is a documentation deliverable, not a code change.
+
+---
+
+### IEC 62304 (Medical Device Software Lifecycle)
+**Status: ❌ Not implemented** — Phase G1 + G2
+
+IEC 62304 defines software safety classes (A / B / C) with progressively stricter development lifecycle requirements:
+
+| Requirement | Status | Notes |
+|---|---|---|
+| Software safety class assigned per artifact (`ClassA` / `ClassB` / `ClassC`) | ❌ | `manifest.json` has no `safetyClass` field; no validation at ingest |
+| Class B/C deployment gate — approved change record required | ❌ | No change control workflow; artifacts can be deployed without a change record |
+| Change records linked to artifact versions | ❌ | No `change_records` table or API |
+| Post-market surveillance artifact traceability | ❌ | Artifact lifecycle (deprecate/prune) exists; no IEC 62304 traceability fields |
+| Software development plan documentation | ❌ | No formal SDP; roadmap and design docs are informally equivalent |
+
+**G1** adds: `safety_class` field on artifacts.
+**G2** adds: `change_records` table, create/review/approve workflow, Class B/C deployment gate that blocks deploy without an approved change record.
+
+---
+
+### ISO 14971 (Risk Management for Medical Devices)
+**Status: ❌ Not implemented** — Phase G2
+
+ISO 14971 requires a per-change risk assessment as part of the software change control lifecycle.
+
+| Requirement | Status | Notes |
+|---|---|---|
+| Risk assessment record per software change | ❌ | No risk assessment sub-record on change records |
+| Residual risk documentation | ❌ | `docs/compliance/risk-register.md` covers platform-level risk; no per-change artifact risk fields |
+| Risk/benefit analysis for Class C changes | ❌ | No workflow enforcement |
+
+**Phase G2** will attach a `risk_assessment` sub-record to each change record (severity, probability, mitigation, residual risk). Class C changes will require risk review approval before the deployment gate clears.
+
+---
+
+### FDA Cybersecurity Guidance (2023) / Section 524B
+**Status: ⚠️ Partial — SBOM exists; VEX and lifecycle metadata absent** — Phase G3
+
+The FDA's 2023 cybersecurity guidance (Section 524B, enforcement from March 2026) requires:
+
+| Requirement | Status | Notes |
+|---|---|---|
+| SBOM generation (CycloneDX or SPDX) | ✅ | CycloneDX SBOMs generated via Trivy on artifact ingest (`SBOM_ENABLED=1`); stored in MinIO |
+| VEX (Vulnerability Exploitability eXchange) documents | ❌ | No VEX generation or storage; Trivy scan results exist but are not mapped to VEX statements |
+| SBOM/VEX lifecycle metadata (component lifecycle, end-of-support dates) | ❌ | No lifecycle fields on SBOM components |
+| SBOM update on new CVE disclosure | ❌ | No automated re-scan-and-re-VEX trigger on new CVE publication |
+| FDA disclosure within 24h of exploitable vulnerability in deployed device | ❌ | No FDA notification workflow or timeline tracking |
+
+**Phase G3** will add: VEX document generation (mapped from Trivy results), VEX storage in MinIO alongside the SBOM, download endpoint (`POST /artifacts/{id}/vex/presign`), and a script for generating the combined SBOM+VEX submission package.
+
+> **Enforcement note:** March 2026 was the FDA's stated enforcement start date. Medical deployments should treat Phase G3 as a blocking prerequisite for regulated production.
+
+---
+
+### IEC 81001-5-1 (Cybersecurity for Health Software)
+**Status: ⚠️ Partial — security controls present; lifecycle process documentation absent**
+
+| Requirement | Status | Notes |
+|---|---|---|
+| Vulnerability disclosure policy | ✅ | `SECURITY.md` — 48h acknowledgement, 90-day disclosure timeline |
+| Patch management (OTA update pipeline) | ✅ | Artifact OTA pipeline; rollback support in agent |
+| Security testing gate in change control | ❌ | No automated security test gate in the change record workflow (planned in G2) |
+| Post-market cybersecurity monitoring (ongoing re-scan) | ⚠️ | Trivy/Grype scans on ingest; no re-scan cadence for already-deployed versions |
+| Coordinated vulnerability disclosure with regulators | ❌ | No FDA/CERT notification workflow |
+
+---
+
+### QMS Package (OEM / Design Transfer)
+**Status: ❌ Not implemented** — Phase G5
+
+| Requirement | Status | Notes |
+|---|---|---|
+| Traceable artifact ZIP: SBOM + VEX + change record + risk assessment | ❌ | No QMS package generation endpoint |
+| DHF (Design History File) export | ❌ | Planned as G5 deliverable |
+
+**Phase G5** will add a `POST /api/v1/artifacts/{id}/qms-package` endpoint that assembles and signs a ZIP containing SBOM, VEX, change record, risk assessment, and audit trail for OEM design transfer and regulatory submission.
+
+---
+
+## 8. Additional Controls Implemented (Not in Original List)
 
 These controls exist in Parcel and strengthen the overall compliance posture beyond what was explicitly scoped above.
 
@@ -270,13 +388,18 @@ These controls exist in Parcel and strengthen the overall compliance posture bey
 
 ---
 
-## 8. Compliance Gap Summary
+## 9. Compliance Gap Summary
 
 ### Gaps Requiring Technical Work
 
 | Gap | Priority | Estimated Effort |
 |-----|----------|-----------------|
 | Password expiration policy | Low | Low |
+| Phase G1 — medical deployment profile split | High (medical customers) | Medium — see roadmap |
+| Phase G2 — IEC 62304 change control + ISO 14971 risk records | High (medical customers) | Large — new workflow + DB schema |
+| Phase G3 — FDA VEX generation + SBOM lifecycle metadata | High (medical customers, March 2026 FDA enforcement) | Medium |
+| Phase G4 — HIPAA audit hardening (`phi_touched`, PHI retention) | High (medical customers) | Medium |
+| Phase G5 — QMS package / DHF export endpoint | Medium (OEM/design transfer) | Medium |
 
 ### Gaps Requiring Process / Documentation Work (open actions)
 
@@ -291,10 +414,13 @@ These controls exist in Parcel and strengthen the overall compliance posture bey
 | SOC 2 policy layer | ✅ Done | 7 policies in `docs/compliance/policies/` covering CC6–CC9, A1, C1 |
 | SOC 2 audit engagement | ❌ Open | Policy docs complete; select AICPA-accredited auditor and begin Type I engagement |
 | Backup verification / restore drills | ❌ Open | Procedure documented in `docs/compliance/policies/backup-and-recovery-policy.md`; first drill not yet executed |
+| BAA template (HIPAA) | ❌ Open | Documentation deliverable for medical deployments; no code required |
+| IEC 62304 Software Development Plan | ❌ Open | Roadmap + design docs are informally equivalent; formal SDP needed for Class B/C |
+| FDA Section 524B acknowledgement for regulated customers | ❌ Open | Required before any medical customer goes into regulated production |
 
 ---
 
-## 9. Recommended Phased Roadmap
+## 10. Recommended Phased Roadmap
 
 ### Phase 1 — Close Immediate Gaps (0–3 months)
 1. ✅ Publish a security contact and VDP policy — `SECURITY.md`
@@ -315,6 +441,18 @@ These controls exist in Parcel and strengthen the overall compliance posture bey
 3. Evaluate CMMC Level 2 readiness assessment if DoD pipeline materializes
 4. Consider ISO 27001 if international enterprise sales require it
 
+### Phase 4 — Win Medical / IoMT Deals (parallel track — roadmap Phase G)
+
+> Prerequisite for any regulated medical customer. Blocked on no other phase — can run in parallel with Phase 3.
+
+1. **G1 — Deployment profile split**: `DEPLOYMENT_PROFILE=medical`, license `variant` field, medical-only route gating, `migrations/medical/` subdirectory.
+2. **G2 — IEC 62304 change control + ISO 14971 risk records**: `change_records` table, create/review/approve workflow, `risk_assessment` sub-records, Class B/C deployment gate.
+3. **G3 — FDA SBOM/VEX**: VEX document generation from Trivy results, MinIO storage, presign endpoint, CLI submission package. **Treat as urgent — FDA March 2026 enforcement.**
+4. **G4 — HIPAA audit hardening**: `phi_touched` field, PHI-specific retention policy, PHI audit export endpoint.
+5. **G5 — QMS package**: `POST /artifacts/{id}/qms-package` — signed ZIP with SBOM, VEX, change record, risk assessment, audit trail for OEM design transfer.
+6. **Documentation deliverables**: BAA template, IEC 62304 Software Development Plan, FDA Section 524B pre-submission acknowledgement.
+7. **Medical test suites**: `//go:build medical` handler tests, `scripts/e2e-suite-medical.sh` covering change record workflow, VEX generation, HIPAA audit export, QMS package completeness.
+
 ---
 
-*This document reflects the state of the codebase as of 2026-04-03. It is not a legal opinion or official compliance certification. Engage qualified counsel and auditors for formal assessments.*
+*This document reflects the state of the codebase as of 2026-04-03, with IoMT compliance section added 2026-06-07. It is not a legal opinion or official compliance certification. Engage qualified counsel and auditors for formal assessments.*
