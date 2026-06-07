@@ -296,7 +296,7 @@ aws rds restore-db-instance-to-point-in-time \
   --restore-time <ISO-8601-timestamp>
 ```
 
-Follow the full restore drill procedure in `docs/policies/backup-and-recovery-policy.md` §4.1.
+Follow the full restore drill procedure in `docs/compliance/policies/backup-and-recovery-policy.md` §4.1.
 
 ### Step 5 — Verify and Lift Maintenance Mode
 
@@ -310,7 +310,7 @@ Follow the full restore drill procedure in `docs/policies/backup-and-recovery-po
 
 - Follow breach notification obligations in Section 4.
 - File post-mortem per Section 7 within 5 business days.
-- Update `docs/risk-register.md` with post-incident status for RSK-013 through RSK-015.
+- Update `docs/compliance/risk-register.md` with post-incident status for RSK-013 through RSK-015.
 
 ---
 

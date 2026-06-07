@@ -85,7 +85,7 @@ AUTH_LDAP_ROLE_MAP={"CN=HW-Admins,DC=corp,DC=example,DC=com":"admin"}
 AUTH_LDAP_DEFAULT_ROLE=viewer
 ```
 
-Leave `AUTH_LDAP_URL` blank to keep LDAP disabled. See `docs/ldap-auth.md` for full configuration reference.
+Leave `AUTH_LDAP_URL` blank to keep LDAP disabled. See `docs/reference/ldap-auth.md` for full configuration reference.
 
 #### Optional: Vault pull-credential backend
 
@@ -97,7 +97,7 @@ ARTIFACT_PULL_CREDENTIALS_VAULT_TOKEN=<vault-token>
 ARTIFACT_PULL_CREDENTIALS_VAULT_PATH=secret/data/parcel/pull-creds
 ```
 
-See `docs/cloud-pull-adapters.md` for the expected secret format and rotation runbook.
+See `docs/reference/cloud-pull-adapters.md` for the expected secret format and rotation runbook.
 
 #### Optional: Keyless cosign / supply-chain provenance
 
@@ -109,7 +109,7 @@ ARTIFACT_REKOR_URL=https://rekor.internal
 ARTIFACT_REQUIRE_REKOR_LOG=1
 ```
 
-See `docs/artifact-provenance.md` for provenance policy configuration.
+See `docs/reference/artifact-provenance.md` for provenance policy configuration.
 
 ### 2.4 Verify control-plane and UI
 

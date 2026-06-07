@@ -140,7 +140,7 @@ The following CloudWatch alarms must be configured for AWS deployments:
 
 ## 5. Response Procedures
 
-Ransomware events are declared P0 incidents and handled per `docs/policies/incident-response-policy.md`. The tactical ransomware-specific playbook is in `docs/incidents/ir-runbook.md` Section 9.
+Ransomware events are declared P0 incidents and handled per `docs/compliance/policies/incident-response-policy.md`. The tactical ransomware-specific playbook is in `docs/incidents/ir-runbook.md` Section 9.
 
 ### 5.1 Severity Determination
 
@@ -165,7 +165,7 @@ Ransomware events are declared P0 incidents and handled per `docs/policies/incid
 |------------|-------------------|-------------|
 | S3 artifact objects (with Object Lock, R-01) | Artifacts within retention window are not deleted; restore is not needed if lock held | < 1 hour to confirm integrity |
 | S3 artifact objects (without Object Lock) | Restore from isolated backup (R-05); re-ingest from source CI if backup unavailable | 2–4 hours |
-| RDS PostgreSQL | RDS PITR to a point before the event; see `docs/policies/backup-and-recovery-policy.md` §4 | < 2 hours |
+| RDS PostgreSQL | RDS PITR to a point before the event; see `docs/compliance/policies/backup-and-recovery-policy.md` §4 | < 2 hours |
 | On-premises MinIO | Restore from `mc mirror` backup; verify object count and hashes | Per operator procedure; target < 4 hours |
 
 After recovery:
@@ -181,7 +181,7 @@ After recovery:
 Ransomware-resistant backups must satisfy all of the following:
 
 1. **Air-gap or write-only access** — the primary application credential cannot read or delete backup objects (see R-05).
-2. **Tested restorability** — backup restore drills are conducted per `docs/policies/backup-and-recovery-policy.md` §4; a backup that has never been tested is not a recovery asset.
+2. **Tested restorability** — backup restore drills are conducted per `docs/compliance/policies/backup-and-recovery-policy.md` §4; a backup that has never been tested is not a recovery asset.
 3. **Separate encryption keys** — backup encryption keys are stored separately from application encryption keys and are not accessible from the ECS task role.
 4. **Retention overlap** — backup retention period (≥ 30 days) must overlap with the artifact soft-delete deprecation window (30 days) to ensure that any ransomware event detectable within the deprecation window has a corresponding backup restore point.
 
@@ -216,11 +216,11 @@ However:
 
 ## 9. Related Documents
 
-- `docs/policies/backup-and-recovery-policy.md` — backup schedules, RTO/RPO targets, restore drills
-- `docs/policies/incident-response-policy.md` — IR lifecycle and breach notification
+- `docs/compliance/policies/backup-and-recovery-policy.md` — backup schedules, RTO/RPO targets, restore drills
+- `docs/compliance/policies/incident-response-policy.md` — IR lifecycle and breach notification
 - `docs/incidents/ir-runbook.md` §9 — ransomware response playbook
-- `docs/risk-register.md` — RSK-013, RSK-014, RSK-015 (ransomware risk entries)
-- `docs/deployment-hardening.md` — hardened profile requirements
+- `docs/compliance/risk-register.md` — RSK-013, RSK-014, RSK-015 (ransomware risk entries)
+- `docs/guides/deployment-hardening.md` — hardened profile requirements
 - `control-plane/internal/config/hardening.go` — hardened profile enforcement
 - `control-plane/internal/objectstore/minio.go` — object store implementation (R-01 target)
 - `control-plane/internal/httpapi/router.go` — rate limit wiring (R-02 target)

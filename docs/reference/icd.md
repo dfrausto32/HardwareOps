@@ -427,7 +427,7 @@ Response (same shape as local login):
 }
 ```
 
-The returned `token` is used identically to a local or OIDC JWT. See `docs/ldap-auth.md` for configuration and role mapping details.
+The returned `token` is used identically to a local or OIDC JWT. See `docs/reference/ldap-auth.md` for configuration and role mapping details.
 
 ### 6.6 Keyless artifact ingest and attestations
 
@@ -462,7 +462,7 @@ List attestations:
 GET /api/v1/artifacts/{artifactId}/attestations
 ```
 
-See `docs/artifact-provenance.md` for the full workflow including provenance policy configuration.
+See `docs/reference/artifact-provenance.md` for the full workflow including provenance policy configuration.
 
 ### 6.7 Vulnerability scan lifecycle
 
@@ -526,7 +526,7 @@ POST /api/v1/vulnerability-scans/nessus/sync
 GET /api/v1/vulnerability-scans/nessus/status
 ```
 
-See `docs/vulnerability-scanning.md` for configuration details and device-matching setup.
+See `docs/reference/vulnerability-scanning.md` for configuration details and device-matching setup.
 
 ### 6.8 Webhook lifecycle
 
@@ -642,15 +642,15 @@ Integrations must handle:
 
 ## 9) Related References
 
-- Deployment: `docs/deploy.md`
-- Operations: `docs/operations.md`
+- Deployment: `docs/guides/deploy.md`
+- Operations: `docs/guides/operations.md`
 - Artifact ingest deep dive: `docs/development/artifact-ingest.md`
 - Push vs pull guidance: `docs/development/artifact-ingest.md`
 - First-contact onboarding deep dive: `docs/development/agent-first-contact-onboarding.md`
-- LDAP/AD authentication: `docs/ldap-auth.md`
-- Keyless signing and attestations: `docs/artifact-provenance.md`
-- S3/GCS pull adapters and Vault credentials: `docs/cloud-pull-adapters.md`
+- LDAP/AD authentication: `docs/reference/ldap-auth.md`
+- Keyless signing and attestations: `docs/reference/artifact-provenance.md`
+- S3/GCS pull adapters and Vault credentials: `docs/reference/cloud-pull-adapters.md`
 - Phase C developer internals: `docs/development/phase-c-internals.md`
 - CI/CD feedback loop smoke test: `scripts/test-ci-feedback-loop.sh`
-- Email delivery: `docs/email-delivery.md`
-- Vulnerability scanning: `docs/vulnerability-scanning.md`
+- Email delivery: `docs/reference/email-delivery.md`
+- Vulnerability scanning: `docs/reference/vulnerability-scanning.md`

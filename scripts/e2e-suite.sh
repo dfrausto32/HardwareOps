@@ -34,7 +34,7 @@ E2E_ONLY=${E2E_ONLY:-}
 E2E_TIMEOUT_SECS=${E2E_TIMEOUT_SECS:-300}  # per-scenario timeout
 
 # Control-plane cert manager requires a CA cert + key at boot. Locally these
-# are created by hand (see docs/local-dev-wsl.md); in CI they won't exist, so
+# are created by hand (see docs/guides/local-dev-wsl.md); in CI they won't exist, so
 # Step 2.5 below generates an ephemeral CA (and TLS server cert) when missing.
 # The control-plane runs with TLS + optional mTLS so the device agent can
 # authenticate its check-in via its client certificate.

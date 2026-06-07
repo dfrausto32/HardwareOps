@@ -144,7 +144,7 @@ Exceptions to this policy require written approval from the Engineering Lead and
 
 ## 11. Related Documents
 
-- `docs/deployment-hardening.md` — technical enforcement of authentication requirements
+- `docs/guides/deployment-hardening.md` — technical enforcement of authentication requirements
 - `docs/incidents/ir-runbook.md` — response procedures for access-related incidents
-- `docs/policies/change-management-policy.md`
-- `docs/policies/risk-assessment-policy.md`
+- `docs/compliance/policies/change-management-policy.md`
+- `docs/compliance/policies/risk-assessment-policy.md`

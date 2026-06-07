@@ -117,7 +117,7 @@ The Safeguards Rule requires a written information security program with designa
 |-------------|--------|
 | Access controls | ✅ RBAC (`viewer`, `operator`, `admin`), scoped service tokens, OIDC federation |
 | Encryption in transit | ✅ TLS everywhere, mTLS for devices |
-| Encryption at rest | ✅ RDS: `storage_encrypted = true` hardcoded on both instance variants; S3: SSE always active (AWS-KMS CMK by default, AES256 fallback); Secrets Manager: AWS-managed encryption; ECS ephemeral storage: Fargate-encrypted. See `docs/deployment-hardening.md` §7 |
+| Encryption at rest | ✅ RDS: `storage_encrypted = true` hardcoded on both instance variants; S3: SSE always active (AWS-KMS CMK by default, AES256 fallback); Secrets Manager: AWS-managed encryption; ECS ephemeral storage: Fargate-encrypted. See `docs/guides/deployment-hardening.md` §7 |
 | Audit logging | ✅ Full audit trail with actor, IP, action, target, timestamp |
 | Incident response plan | ✅ `docs/incidents/ir-runbook.md` — severity ladder, P0/P1/P2 playbooks, breach notification timelines, escalation contacts (contacts TBD), and communication templates |
 
@@ -169,12 +169,12 @@ SOC 2 is an audit report, not a technical implementation. The underlying securit
 
 | Trust Service Criterion | Technical Status | Policy Status |
 |------------------------|-----------------|--------------|
-| CC6 — Logical and physical access controls | ✅ RBAC, mTLS, service tokens, OIDC, TOTP MFA | ✅ `docs/policies/access-control-policy.md` |
-| CC7 — System operations (monitoring, anomalies) | ✅ Audit log, Prometheus metrics, WebSocket event streams | ✅ `docs/policies/incident-response-policy.md` |
-| CC8 — Change management | ✅ Artifact versioning, lifecycle management, audit trail | ✅ `docs/policies/change-management-policy.md` |
-| CC9 — Risk mitigation | ✅ Vuln scanning + formal risk register | ✅ `docs/policies/risk-assessment-policy.md`, `docs/risk-register.md` |
-| A1 — Availability (backup, recovery) | ✅ Backup runner, health APIs, RDS PITR | ✅ `docs/policies/backup-and-recovery-policy.md` |
-| C1 — Confidentiality | ✅ Encryption at rest and in transit (AWS + on-prem) | ✅ `docs/policies/vendor-management-policy.md` |
+| CC6 — Logical and physical access controls | ✅ RBAC, mTLS, service tokens, OIDC, TOTP MFA | ✅ `docs/compliance/policies/access-control-policy.md` |
+| CC7 — System operations (monitoring, anomalies) | ✅ Audit log, Prometheus metrics, WebSocket event streams | ✅ `docs/compliance/policies/incident-response-policy.md` |
+| CC8 — Change management | ✅ Artifact versioning, lifecycle management, audit trail | ✅ `docs/compliance/policies/change-management-policy.md` |
+| CC9 — Risk mitigation | ✅ Vuln scanning + formal risk register | ✅ `docs/compliance/policies/risk-assessment-policy.md`, `docs/compliance/risk-register.md` |
+| A1 — Availability (backup, recovery) | ✅ Backup runner, health APIs, RDS PITR | ✅ `docs/compliance/policies/backup-and-recovery-policy.md` |
+| C1 — Confidentiality | ✅ Encryption at rest and in transit (AWS + on-prem) | ✅ `docs/compliance/policies/vendor-management-policy.md` |
 
 **Remaining to pursue SOC 2 Type I:** Engage an AICPA-accredited auditor; populate IR runbook escalation contacts; execute first quarterly restore drill. Type II additionally requires ≥ 6 months of operation under audit observation.
 
@@ -205,11 +205,11 @@ ISO 27001 requires a formal Information Security Management System (ISMS) with d
 | Media Protection (MP) | ❌ | No media sanitization controls |
 | Personnel Security (PS) | ❌ | Out of scope for software platform |
 | Physical Protection (PE) | N/A | AWS shared-responsibility model |
-| Risk Assessment (RA) | ✅ | `docs/risk-register.md` + `docs/policies/risk-assessment-policy.md` |
+| Risk Assessment (RA) | ✅ | `docs/compliance/risk-register.md` + `docs/compliance/policies/risk-assessment-policy.md` |
 | Security Assessment (CA) | ❌ | No formal self-assessment or third-party assessment |
 | System & Communications Protection (SC) | ✅ | TLS, mTLS, network segmentation via Terraform |
 | System & Information Integrity (SI) | ✅ | Vuln scanning, artifact signing, audit |
-| Program Management | ⚠️ | 7 formal policies in `docs/policies/`; no appointed ISSO; formal ISMS not yet established |
+| Program Management | ⚠️ | 7 formal policies in `docs/compliance/policies/`; no appointed ISSO; formal ISMS not yet established |
 
 ---
 
@@ -234,9 +234,9 @@ FedRAMP authorization requires an agency sponsor, a 3PAO assessment, and ongoing
 
 | Obligation | Status | Notes |
 |-----------|--------|-------|
-| Self-classification documented | ✅ | `docs/export-compliance.md` — ECCN 5D002.c.1, License Exception ENC 740.17(b)(1) |
+| Self-classification documented | ✅ | `docs/compliance/export-compliance.md` — ECCN 5D002.c.1, License Exception ENC 740.17(b)(1) |
 | Annual BIS/NSA SNAP-R report | ❌ | Due February 1, 2027 (first filing); tracked in roadmap work queue |
-| ToS export control clause | ❌ | Clause drafted in `docs/export-compliance.md` Section 4 — not yet in published ToS |
+| ToS export control clause | ❌ | Clause drafted in `docs/compliance/export-compliance.md` Section 4 — not yet in published ToS |
 | Restricted-party screening | ❌ | Process documented; not yet operationalized |
 | Embargoed country blocking | ✅ | WAFv2 geo-block rule covers all 5 OFAC-embargoed countries |
 
@@ -248,7 +248,7 @@ FedRAMP authorization requires an agency sponsor, a 3PAO assessment, and ongoing
 | Control | Status | Notes |
 |---------|--------|-------|
 | IP-based geo-blocking for embargoed countries | ✅ | WAFv2 `BlockSanctionedCountries` rule deployed by default in ALB module (`waf_blocked_country_codes = ["CU","IR","KP","RU","SY"]`) |
-| ToS prohibition clause | ❌ | Clause drafted in `docs/export-compliance.md` Section 4 — not yet inserted into published Terms of Service |
+| ToS prohibition clause | ❌ | Clause drafted in `docs/compliance/export-compliance.md` Section 4 — not yet inserted into published Terms of Service |
 | Restricted-party (SDN) screening for enterprise onboarding | ❌ | No automated screening; manual process not yet defined |
 
 ---
@@ -284,13 +284,13 @@ These controls exist in Parcel and strengthen the overall compliance posture bey
 |-----|--------|---------|
 | Create `security@parcel.io` inbox | ❌ Open | Roadmap work queue |
 | Populate IR runbook escalation contacts (Section 5) | ❌ Open | `docs/incidents/ir-runbook.md` |
-| Insert export control clause into Terms of Service | ❌ Open | Clause at `docs/export-compliance.md` §4 |
-| Submit annual BIS/NSA SNAP-R report | ❌ Open — due 2027-02-01 | `docs/export-compliance.md` §2; roadmap work queue |
-| Assign export compliance responsible parties | ❌ Open | `docs/export-compliance.md` §6 |
-| Formal risk assessment | ✅ Done | `docs/risk-register.md` + `docs/policies/risk-assessment-policy.md` |
-| SOC 2 policy layer | ✅ Done | 7 policies in `docs/policies/` covering CC6–CC9, A1, C1 |
+| Insert export control clause into Terms of Service | ❌ Open | Clause at `docs/compliance/export-compliance.md` §4 |
+| Submit annual BIS/NSA SNAP-R report | ❌ Open — due 2027-02-01 | `docs/compliance/export-compliance.md` §2; roadmap work queue |
+| Assign export compliance responsible parties | ❌ Open | `docs/compliance/export-compliance.md` §6 |
+| Formal risk assessment | ✅ Done | `docs/compliance/risk-register.md` + `docs/compliance/policies/risk-assessment-policy.md` |
+| SOC 2 policy layer | ✅ Done | 7 policies in `docs/compliance/policies/` covering CC6–CC9, A1, C1 |
 | SOC 2 audit engagement | ❌ Open | Policy docs complete; select AICPA-accredited auditor and begin Type I engagement |
-| Backup verification / restore drills | ❌ Open | Procedure documented in `docs/policies/backup-and-recovery-policy.md`; first drill not yet executed |
+| Backup verification / restore drills | ❌ Open | Procedure documented in `docs/compliance/policies/backup-and-recovery-policy.md`; first drill not yet executed |
 
 ---
 
@@ -300,14 +300,14 @@ These controls exist in Parcel and strengthen the overall compliance posture bey
 1. ✅ Publish a security contact and VDP policy — `SECURITY.md`
 2. ✅ Write an incident response runbook — `docs/incidents/ir-runbook.md`
 3. ✅ Enable WAFv2 geo-blocking for OFAC-embargoed countries — `modules/alb` Terraform
-4. ✅ Document EAR self-classification — `docs/export-compliance.md`
+4. ✅ Document EAR self-classification — `docs/compliance/export-compliance.md`
 5. ✅ Add SBOM generation to the artifact ingest pipeline — `internal/sbom/`, migration `0035`
 
 ### Phase 2 — Win Enterprise Deals (3–9 months)
-1. ✅ Verify and document encryption at rest — `docs/deployment-hardening.md` §7
+1. ✅ Verify and document encryption at rest — `docs/guides/deployment-hardening.md` §7
 2. ✅ Implement TOTP-based MFA for operator accounts — `auth/totp.go`, `handlers/auth_totp.go`, migration `0036`
-3. ✅ SOC 2 policy documentation — 7 policies in `docs/policies/`, risk register in `docs/risk-register.md`
-4. ✅ Quarterly vulnerability assessment process — `docs/policies/vulnerability-management-policy.md`
+3. ✅ SOC 2 policy documentation — 7 policies in `docs/compliance/policies/`, risk register in `docs/compliance/risk-register.md`
+4. ✅ Quarterly vulnerability assessment process — `docs/compliance/policies/vulnerability-management-policy.md`
 
 ### Phase 3 — Win Government / Defense Deals (9–18 months)
 1. Complete NIST 800-171 self-assessment and document POA&M

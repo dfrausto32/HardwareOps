@@ -48,7 +48,7 @@ Before engaging a new vendor that will process, store, or transmit customer data
 3. **Data Processing Agreement (DPA):** If the vendor processes personal data of EU residents, a DPA must be in place before data flows.
 4. **Approval:** Engineering Lead approves onboarding. For vendors accessing production customer data, approval also requires the CEO/founder.
 5. **Registration:** Vendor is added to the inventory table above.
-6. **Least-privilege access:** Vendor is granted only the access required for their service. Access is provisioned per `docs/policies/access-control-policy.md`.
+6. **Least-privilege access:** Vendor is granted only the access required for their service. Access is provisioned per `docs/compliance/policies/access-control-policy.md`.
 
 ---
 
@@ -118,7 +118,7 @@ As the primary cloud provider, AWS is responsible for security **of** the cloud 
 
 ## 10. Related Documents
 
-- `docs/policies/access-control-policy.md` — vendor access provisioning
-- `docs/policies/risk-assessment-policy.md` — risk register and treatment
-- `docs/deployment-hardening.md` §7 — AWS encryption-at-rest evidence
-- `docs/export-compliance.md` — third-party transfer obligations under EAR
+- `docs/compliance/policies/access-control-policy.md` — vendor access provisioning
+- `docs/compliance/policies/risk-assessment-policy.md` — risk register and treatment
+- `docs/guides/deployment-hardening.md` §7 — AWS encryption-at-rest evidence
+- `docs/compliance/export-compliance.md` — third-party transfer obligations under EAR

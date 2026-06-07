@@ -292,5 +292,5 @@ After configuring provenance:
 
 - `docs/development/phase-c-internals.md` — implementation details (Fulcio OIDs, Rekor verification, policy evaluation)
 - `docs/development/artifact-ingest.md` — artifact ingest methods overview
-- `docs/icd.md` — API contract including attestation endpoints
-- `docs/deployment-hardening.md` — hardened profile policy floors
+- `docs/reference/icd.md` — API contract including attestation endpoints
+- `docs/guides/deployment-hardening.md` — hardened profile policy floors

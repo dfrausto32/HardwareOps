@@ -19,7 +19,7 @@ All policies are reviewed annually. The review date and owner are stated in each
 
 ## Related Documents
 
-- `docs/risk-register.md` — live risk register (maintained per Risk Assessment Policy)
-- `docs/compliance-status.md` — current compliance posture
+- `docs/compliance/risk-register.md` — live risk register (maintained per Risk Assessment Policy)
+- `docs/compliance/compliance-status.md` — current compliance posture
 - `docs/incidents/ir-runbook.md` — tactical IR playbooks (referenced by Incident Response Policy)
 - `SECURITY.md` — vulnerability disclosure program

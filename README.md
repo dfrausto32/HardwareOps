@@ -298,14 +298,14 @@ cd control-plane && go test ./...
 
 | Topic | Where to read |
 |---|---|
-| Full API contract | `docs/icd.md` |
-| Deployment (on-prem + AWS) | `docs/deploy.md` |
-| Day-2 operations (backup, upgrade, cert rotation) | `docs/operations.md` |
-| Local dev guide (detailed WSL2 flow) | `docs/local-dev-wsl.md` |
-| Artifact signing and provenance | `docs/artifact-provenance.md` |
-| Cloud pull adapters (S3/GCS) | `docs/cloud-pull-adapters.md` |
-| LDAP/AD authentication | `docs/ldap-auth.md` |
-| Vulnerability scanning | `docs/vulnerability-scanning.md` |
+| Full API contract | `docs/reference/icd.md` |
+| Deployment (on-prem + AWS) | `docs/guides/deploy.md` |
+| Day-2 operations (backup, upgrade, cert rotation) | `docs/guides/operations.md` |
+| Local dev guide (detailed WSL2 flow) | `docs/guides/local-dev-wsl.md` |
+| Artifact signing and provenance | `docs/reference/artifact-provenance.md` |
+| Cloud pull adapters (S3/GCS) | `docs/reference/cloud-pull-adapters.md` |
+| LDAP/AD authentication | `docs/reference/ldap-auth.md` |
+| Vulnerability scanning | `docs/reference/vulnerability-scanning.md` |
 | Feature roadmap and status | `docs/development/roadmap.md` |
 | Phase C feature internals | `docs/development/phase-c-internals.md` |
 | Full documentation map | `docs/README.md` |

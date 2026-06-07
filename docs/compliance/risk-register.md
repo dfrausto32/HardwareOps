@@ -3,7 +3,7 @@
 **Next Full Review:** 2027-04-06  
 **Owner:** Engineering Lead
 
-See `docs/policies/risk-assessment-policy.md` for scoring methodology and review process.
+See `docs/compliance/policies/risk-assessment-policy.md` for scoring methodology and review process.
 
 ---
 

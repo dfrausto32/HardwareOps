@@ -279,5 +279,5 @@ Alert if `resolverAvailable` becomes `false` after a successful startup — indi
 
 - `docs/development/artifact-ingest.md` — full pull ingest workflow and adapter framework
 - `docs/development/phase-c-internals.md` — adapter implementation details
-- `docs/icd.md` — API contract for pull and credential endpoints
-- `docs/operations.md` — pull credential reload operations procedure
+- `docs/reference/icd.md` — API contract for pull and credential endpoints
+- `docs/guides/operations.md` — pull credential reload operations procedure

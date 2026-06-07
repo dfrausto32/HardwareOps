@@ -1,7 +1,7 @@
 # Local Dev Compose
 
-For the consolidated deployment flow, see `../../docs/deploy.md`.
-For local dev details, see `../../docs/local-dev-wsl.md`.
+For the consolidated deployment flow, see `../../docs/guides/deploy.md`.
+For local dev details, see `../../docs/guides/local-dev-wsl.md`.
 
 1) Copy env:
    cp .env.example .env

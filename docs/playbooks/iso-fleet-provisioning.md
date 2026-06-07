@@ -226,5 +226,5 @@ Test with two VMs booted from the same image before production rollout:
 - Machine-id init service: `deploy/systemd/parcel-machine-id-init.service`
 - Agent service: `deploy/systemd/parcel-agent.service`
 - Agent installer: `scripts/agent-install.sh`
-- Agent systemd guide: `docs/agent-systemd.md`
+- Agent systemd guide: `docs/reference/agent-systemd.md`
 - First agent onboarding: `docs/customer/first-agent-onboarding.md`

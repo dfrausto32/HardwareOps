@@ -270,7 +270,7 @@ This avoids any network calls or AWS credential requirements in unit tests.
        artifactingest.NewMyAdapter(timeout),
    )
    ```
-4. Document the URI scheme and credential keys in `docs/cloud-pull-adapters.md`.
+4. Document the URI scheme and credential keys in `docs/reference/cloud-pull-adapters.md`.
 
 No configuration changes are required if the adapter uses the existing `Credentials` map — operators configure credentials through the existing credential resolver system.
 

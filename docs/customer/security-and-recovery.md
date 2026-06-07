@@ -52,7 +52,7 @@ To invite a new user directly by email (sends a 72-hour account-setup link):
 POST /api/v1/users/{userId}/invite
 ```
 
-See `docs/email-delivery.md` for SMTP configuration and provider examples (AWS SES, SendGrid, Google Workspace, local relay).
+See `docs/reference/email-delivery.md` for SMTP configuration and provider examples (AWS SES, SendGrid, Google Workspace, local relay).
 
 ### Layer 4 — Break-glass local CLI (total lockout)
 

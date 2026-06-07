@@ -123,6 +123,6 @@ Data retention periods balance operational investigation needs against storage c
 ## 8. Related Documents
 
 - `backup/runner.go` — backup runner implementation
-- `docs/operations.md` — day-2 operational runbook including backup commands
-- `docs/policies/incident-response-policy.md` — disaster recovery under incident conditions
-- `docs/deployment-hardening.md` §7 — encryption of backup data at rest
+- `docs/guides/operations.md` — day-2 operational runbook including backup commands
+- `docs/compliance/policies/incident-response-policy.md` — disaster recovery under incident conditions
+- `docs/guides/deployment-hardening.md` §7 — encryption of backup data at rest
