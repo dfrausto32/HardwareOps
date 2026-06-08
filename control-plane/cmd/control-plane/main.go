@@ -55,6 +55,9 @@ func main() {
 	}
 	defer cleanupPEMFiles()
 
+	if err := config.ValidateDeploymentProfile(cfg); err != nil {
+		logger.Fatalf("deployment profile validation failed: %v", err)
+	}
 	if err := config.ValidateHardening(cfg); err != nil {
 		logger.Fatalf("hardened profile validation failed: %v", err)
 	}
@@ -82,11 +85,18 @@ func main() {
 	}
 	defer pool.Close()
 
+	logger.Printf("deployment profile: %s", cfg.DeploymentProfile)
 	if cfg.AutoMigrate {
 		if err := migrate.Apply(context.Background(), pool, cfg.MigrationsDir); err != nil {
 			logger.Fatalf("auto-migrate: %v", err)
 		}
 		logger.Printf("auto-migrate complete (%s)", cfg.MigrationsDir)
+		if cfg.IsMedical() {
+			if err := migrate.Apply(context.Background(), pool, cfg.MedicalMigrationsDir); err != nil {
+				logger.Fatalf("auto-migrate medical: %v", err)
+			}
+			logger.Printf("auto-migrate medical complete (%s)", cfg.MedicalMigrationsDir)
+		}
 	}
 
 	activeCertPath := cfg.ActiveCACertPath
@@ -528,6 +538,7 @@ func main() {
 		ArtifactSignatureEnforceIngest:  cfg.ArtifactSignatureEnforceIngest,
 		ArtifactSignatureKeyID:          cfg.ArtifactSignatureKeyID,
 		HardenedProfile:                 cfg.HardenedProfile,
+		DeploymentProfile:               cfg.DeploymentProfile,
 		ArtifactPullCreds:               pullCredentialManager,
 		ArtifactPullCredsManager:        pullCredentialManager,
 		ReleaseAutoUpdate:               releaseAutoUpdateManager,

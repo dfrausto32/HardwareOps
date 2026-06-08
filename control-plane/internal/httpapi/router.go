@@ -305,6 +305,13 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(viewer).Get("/maintenance/upgrade/preflight", handlers.GetUpgradePreflight(deps.Upgrade, deps.UpgradeUpdatesDir))
 		r.With(viewer).Get("/maintenance/upgrade", handlers.GetUpgradeStatus(deps.Upgrade))
 		r.With(admin).Post("/maintenance/upgrade", handlers.ApplyUpgrade(logger, deps.Store, deps.Upgrade, deps.Maintenance, deps.TrustProxy, deps.UpgradeUpdatesDir, deps.Metrics))
+
+		// Medical-only subrouter (Phase G). Returns 404 on standard deployments.
+		medicalOnly := MedicalOnly(deps.DeploymentProfile)
+		r.Route("/medical", func(r chi.Router) {
+			r.Use(medicalOnly)
+			r.With(viewer).Get("/status", MedicalStatus(deps.DeploymentProfile))
+		})
 	})
 
 	return r

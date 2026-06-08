@@ -27,6 +27,19 @@ var blockedHardenedTrustedProxyCIDRs = map[string]struct{}{
 	"fe80::/10":      {},
 }
 
+// ValidateDeploymentProfile rejects invalid profile values and enforces that
+// DEPLOYMENT_PROFILE=medical requires HARDENED_PROFILE=1.
+func ValidateDeploymentProfile(cfg Config) error {
+	p := cfg.DeploymentProfile
+	if p != "standard" && p != "medical" {
+		return fmt.Errorf("DEPLOYMENT_PROFILE %q invalid: must be 'standard' or 'medical'", p)
+	}
+	if p == "medical" && !cfg.HardenedProfile {
+		return fmt.Errorf("DEPLOYMENT_PROFILE=medical requires HARDENED_PROFILE=1")
+	}
+	return nil
+}
+
 // ValidateHardening enforces strict runtime guardrails when HARDENED_PROFILE=1.
 func ValidateHardening(cfg Config) error {
 	if !cfg.HardenedProfile {

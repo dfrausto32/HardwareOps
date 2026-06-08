@@ -157,6 +157,11 @@ type Config struct {
 	DeviceIdentityRequireOnEnroll          bool
 	DeviceIdentityRequireOnCheckin         bool
 	HardenedProfile                        bool
+	// DeploymentProfile gates medical-only features. Valid values: "standard" (default), "medical".
+	DeploymentProfile                      string
+	// MedicalMigrationsDir is the path to medical-only SQL migrations, applied after base
+	// migrations when DeploymentProfile is "medical".
+	MedicalMigrationsDir                   string
 	DBMaxConns                             int
 	DBMinConns                             int
 	DBMaxConnIdleTime                      time.Duration
@@ -364,6 +369,8 @@ func FromEnv() Config {
 		DeviceIdentityRequireOnEnroll:          parseBoolEnvDefault("DEVICE_IDENTITY_REQUIRE_ON_ENROLL", false),
 		DeviceIdentityRequireOnCheckin:         parseBoolEnvDefault("DEVICE_IDENTITY_REQUIRE_ON_CHECKIN", false),
 		HardenedProfile:                        parseBoolEnvDefault("HARDENED_PROFILE", false),
+		DeploymentProfile:                      deploymentProfileFromEnv(),
+		MedicalMigrationsDir:                   getenvDefault("MEDICAL_MIGRATIONS_DIR", "./migrations/medical"),
 		DBMaxConns:                             getenvInt("DB_MAX_CONNS", 50),
 		DBMinConns:                             getenvInt("DB_MIN_CONNS", 5),
 		DBMaxConnIdleTime:                      parseDurationDefault(getenvDefault("DB_MAX_CONN_IDLE_TIME", "10m"), 10*time.Minute),
@@ -394,6 +401,19 @@ func FromEnv() Config {
 		WebhookMaxRetries:                      getenvInt("WEBHOOK_MAX_RETRIES", 3),
 		TriggerFanoutLimit:                     getenvInt("TRIGGER_FANOUT_LIMIT", 500),
 	}
+}
+
+func deploymentProfileFromEnv() string {
+	p := strings.ToLower(strings.TrimSpace(os.Getenv("DEPLOYMENT_PROFILE")))
+	if p == "medical" {
+		return "medical"
+	}
+	return "standard"
+}
+
+// IsMedical returns true when the deployment is configured for the medical profile.
+func (c Config) IsMedical() bool {
+	return c.DeploymentProfile == "medical"
 }
 
 func trustedProxyCIDRsFromEnv() ([]string, bool) {

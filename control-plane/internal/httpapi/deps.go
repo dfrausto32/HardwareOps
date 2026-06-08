@@ -95,6 +95,9 @@ type Dependencies struct {
 	ArtifactSignatureEnforceIngest  bool
 	ArtifactSignatureKeyID          string
 	HardenedProfile                 bool
+	// DeploymentProfile is "standard" (default) or "medical". Medical-only routes
+	// return 404 when this is "standard".
+	DeploymentProfile               string
 	ArtifactPullCreds               artifactingest.CredentialResolver
 	ArtifactPullCredsManager        *artifactingest.PullCredentialManager
 	ReleaseAutoUpdate               *releaseautoupdate.Manager

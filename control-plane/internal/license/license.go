@@ -18,6 +18,8 @@ type Payload struct {
 	MaxDevices int        `json:"maxDevices"`
 	NotBefore  *time.Time `json:"notBefore,omitempty"`
 	ExpiresAt  *time.Time `json:"expiresAt,omitempty"`
+	// Variant gates medical-profile features. Valid values: "standard" (default), "medical".
+	Variant    string     `json:"variant,omitempty"`
 }
 
 type File struct {
@@ -66,6 +68,17 @@ func NewManager(path, publicKeyPEMOrB64, publicKeyPath string, enforce bool, cac
 
 func (m *Manager) Enabled() bool {
 	return m != nil && m.enforce
+}
+
+// IsMedical returns true when the loaded license explicitly grants the medical variant.
+// Returns false when license enforcement is disabled (so a non-enforced dev environment
+// never silently becomes a medical deployment — DEPLOYMENT_PROFILE is the primary gate).
+func (m *Manager) IsMedical() bool {
+	if m == nil || !m.enforce {
+		return false
+	}
+	info := m.Snapshot()
+	return info.Valid && info.Payload.Variant == "medical"
 }
 
 func (m *Manager) Snapshot() Info {

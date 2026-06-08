@@ -25,7 +25,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Connected email delivery complete. TOTP MFA for local accounts shipped. Remaining Phase D work is live-deployment acceptance gate execution (operational) and full VPC reference diagram (docs). |
 | Phase E — Federated Multi-Region | 🟡 In progress | Hub-and-spoke federation layer: global management plane above regional control planes. Agents unchanged. E1–E5 (aggregation, artifact federation, policy push, sync reconciler, enrollment profiles) complete. Global-plane operator auth: Phase 1 (local login + audit) and Phase 2 (OIDC SSO) complete. Phase 3 (LDAP) is roadmap. E6 (global PKI) deferred. |
 | Phase F — Bare-Metal Embedded & Constrained-Transport Devices | ⬜ Planned | True remote firmware OTA to microcontrollers (e.g. Raspberry Pi Pico) that cannot run the agent and have no IP. Pi-class gateway relays firmware over Bluetooth behind a pluggable transport abstraction. F1 (transport seam), F2 (agent-resident firmware apply), F3 (gateway/device-of-devices), F4 (BLE OTA), F5 (RP2040 bare-metal target), F6 (additional transports, backlog). Design in `docs/development/bare-metal-firmware-ota.md`. |
-| Phase G — Medical / IoMT Compliance | ⬜ Planned | Medical deployment variant (`DEPLOYMENT_PROFILE=medical`) gated behind a signed license. G1 (deployment profile + safety classification), G2 (IEC 62304 change control), G3 (FDA SBOM/VEX), G4 (HIPAA audit hardening), G5 (QMS artifact package). Separate `medical` CI test pipeline. All features invisible to standard deployments. |
+| Phase G — Medical / IoMT Compliance | 🟡 In Progress | G1 ✅ (`DEPLOYMENT_PROFILE=medical`, license `variant`, `MedicalOnly` middleware, `migrations/medical/0001`). G2–G5 planned. |
 
 ### Active work queue (what is still to do)
 
@@ -909,7 +909,7 @@ Design detail lives in `development/bare-metal-firmware-ota.md`. The agent-resid
 ### Feature Templates
 
 #### G1 — Foundation: deployment profile + safety classification
-- **Status:** ⬜ Planned
+- **Status:** ✅ Complete
 - **Scope:** Infrastructure that all subsequent medical features depend on.
   - Add `variant` field to the signed license schema; `DEPLOYMENT_PROFILE=medical` requires `variant=medical` in the license.
   - Add `safetyClass` field (values: `A` | `B` | `C` | `unclassified`) to the `artifacts` table via `migrations/medical/0001_safety_class.sql`. Class maps to IEC 62304 software safety classifications.

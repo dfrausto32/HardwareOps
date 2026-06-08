@@ -211,6 +211,54 @@ func TestLicense_InvalidPublicKey(t *testing.T) {
 	}
 }
 
+func TestLicense_MedicalVariant(t *testing.T) {
+	dir := t.TempDir()
+	pubB64, priv := genKey(t)
+	path := signedLicenseFile(t, dir, Payload{IssuedTo: "HospitalCo", MaxDevices: 500, Variant: "medical"}, priv)
+
+	mgr, err := NewManager(path, pubB64, "", true, 0)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	info := mgr.Snapshot()
+	if !info.Valid {
+		t.Fatalf("expected valid license: %s", info.Error)
+	}
+	if info.Payload.Variant != "medical" {
+		t.Errorf("expected Variant=medical, got %q", info.Payload.Variant)
+	}
+	if !mgr.IsMedical() {
+		t.Error("expected IsMedical()=true for medical variant license")
+	}
+}
+
+func TestLicense_StandardVariant_NotMedical(t *testing.T) {
+	dir := t.TempDir()
+	pubB64, priv := genKey(t)
+	// Variant omitted — standard deployment.
+	path := signedLicenseFile(t, dir, Payload{IssuedTo: "Acme", MaxDevices: 100}, priv)
+
+	mgr, err := NewManager(path, pubB64, "", true, 0)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if mgr.IsMedical() {
+		t.Error("expected IsMedical()=false for standard license")
+	}
+}
+
+func TestLicense_IsMedical_NotEnforced(t *testing.T) {
+	// Even if the license file would say "medical", IsMedical() returns false
+	// when enforcement is disabled — a dev env must not silently become medical.
+	mgr, err := NewManager("", "", "", false, 0)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if mgr.IsMedical() {
+		t.Error("expected IsMedical()=false when enforce=false")
+	}
+}
+
 func TestParsePublicKey_Base64(t *testing.T) {
 	pubB64, _ := genKey(t)
 	pub, err := parsePublicKey(pubB64)
