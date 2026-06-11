@@ -147,6 +147,7 @@ func main() {
 
 	hub := events.NewHub(128)
 	store := postgres.New(pool)
+	store.SetMedicalProfile(cfg.IsMedical())
 	var metricsCollector *metrics.Metrics
 	if cfg.MetricsEnabled {
 		metricsCollector = metrics.New()
@@ -193,6 +194,12 @@ func main() {
 			logger.Fatalf("license init: %v", err)
 		}
 		licenseManager = manager
+	}
+	// The medical profile is a licensed variant: DEPLOYMENT_PROFILE=medical must
+	// be backed by a signed license with variant=medical (G1). HARDENED_PROFILE
+	// validation already guarantees LICENSE_ENFORCE=1 here.
+	if cfg.IsMedical() && (licenseManager == nil || !licenseManager.IsMedical()) {
+		logger.Fatal("DEPLOYMENT_PROFILE=medical requires a valid license with variant=medical")
 	}
 	upgradeLogDir := cfg.UpgradeLogDir
 	if upgradeLogDir == "" {

@@ -6,7 +6,7 @@ ALTER TABLE artifacts
 -- Manual exploitability assertions per CVE/component pair.
 CREATE TABLE IF NOT EXISTS vex_assertions (
     assertion_id    text PRIMARY KEY,
-    artifact_id     text NOT NULL REFERENCES artifacts(artifact_id) ON DELETE CASCADE,
+    artifact_id     uuid NOT NULL REFERENCES artifacts(artifact_id) ON DELETE CASCADE,
     cve_id          text NOT NULL,
     component_name  text NOT NULL DEFAULT '',
     assertion       text NOT NULL

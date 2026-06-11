@@ -696,6 +696,9 @@ type Store interface {
 	GetChangeRecord(recordID string) (ChangeRecord, bool, error)
 	GetChangeRecordForArtifact(artifactID string) (ChangeRecord, bool, error)
 	UpdateChangeRecord(record ChangeRecord) (ChangeRecord, error)
+	// SetArtifactSafetyClass writes the IEC 62304 classification to the artifact
+	// (artifacts.safety_class, created by migrations/medical/0001).
+	SetArtifactSafetyClass(artifactID, safetyClass string) error
 
 	// VEX assertions — medical-profile only (migrations/medical/0003).
 	SetArtifactVexObjectKey(artifactID, vexObjectKey string) error

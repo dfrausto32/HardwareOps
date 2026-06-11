@@ -259,9 +259,17 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(requireScopeOrRole(auth.ScopeFederationPush, "operator")).Post("/pending-enrollments/{requestId}/deny", handlers.DenyPendingEnrollment(logger, deps.Store, deps.TrustProxy, deps.Metrics))
 		r.With(operator).Post("/pending-enrollments/{requestId}/reset", handlers.ResetPendingEnrollment(logger, deps.Store, deps.TrustProxy, deps.Metrics))
 		r.With(viewer).Get("/desired-state", handlers.ListDesiredState(logger, deps.Store, deps.TrustProxy))
-		r.With(operator).Put("/desired-state/groups/{groupId}", handlers.PutDesiredStateGroupWithPolicy(logger, deps.Store, deps.TrustProxy, artifactSigPolicy, deps.ReleaseAutoUpdate))
+		// In the medical profile the IEC 62304 change-approval gate applies to the
+		// standard desired-state routes too — not just the /medical/ aliases.
+		putDesiredGroup := handlers.PutDesiredStateGroupWithPolicy(logger, deps.Store, deps.TrustProxy, artifactSigPolicy, deps.ReleaseAutoUpdate)
+		putDesiredDevice := handlers.PutDesiredStateDeviceWithPolicy(logger, deps.Store, deps.TrustProxy, artifactSigPolicy, deps.ReleaseAutoUpdate)
+		if deps.RequireChangeApproval {
+			putDesiredGroup = handlers.PutDesiredStateGroupWithPolicyMedical(logger, deps.Store, deps.TrustProxy, artifactSigPolicy, deps.ReleaseAutoUpdate)
+			putDesiredDevice = handlers.PutDesiredStateDeviceWithPolicyMedical(logger, deps.Store, deps.TrustProxy, artifactSigPolicy, deps.ReleaseAutoUpdate)
+		}
+		r.With(operator).Put("/desired-state/groups/{groupId}", putDesiredGroup)
 		r.With(operator).Delete("/desired-state/groups/{groupId}", handlers.DeleteDesiredStateGroup(logger, deps.Store, deps.TrustProxy))
-		r.With(operator).Put("/desired-state/devices/{deviceId}", handlers.PutDesiredStateDeviceWithPolicy(logger, deps.Store, deps.TrustProxy, artifactSigPolicy, deps.ReleaseAutoUpdate))
+		r.With(operator).Put("/desired-state/devices/{deviceId}", putDesiredDevice)
 		r.With(operator).Delete("/desired-state/devices/{deviceId}", handlers.DeleteDesiredStateDevice(logger, deps.Store, deps.TrustProxy))
 		r.With(viewer).Get("/logs/{deviceId}", handlers.GetDeviceLogs(logger, deps.Store, deps.LogDir, deps.TrustProxy))
 		r.With(viewer).Get("/events/history", handlers.ListRuntimeEvents(logger, deps.Store, deps.TrustProxy))

@@ -19,6 +19,7 @@ type changeRecordStore interface {
 	GetChangeRecordForArtifact(artifactID string) (store.ChangeRecord, bool, error)
 	GetChangeRecord(recordID string) (store.ChangeRecord, bool, error)
 	UpdateChangeRecord(record store.ChangeRecord) (store.ChangeRecord, error)
+	SetArtifactSafetyClass(artifactID, safetyClass string) error
 	CreateAuditEvent(event store.AuditEvent) error
 }
 
@@ -134,6 +135,14 @@ func UpsertChangeRecord(logger *log.Logger, st changeRecordStore, trustProxy boo
 		}
 		if err != nil {
 			logger.Printf("change_record upsert store error: %v", err)
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+
+		// The change record is the classification authority: the deployment gate
+		// and QMS package read the class from the artifact row, so keep it in sync.
+		if err := st.SetArtifactSafetyClass(artifactID, req.SafetyClass); err != nil {
+			logger.Printf("change_record upsert set artifact safety class error: %v", err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}

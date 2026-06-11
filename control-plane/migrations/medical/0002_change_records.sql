@@ -3,7 +3,7 @@
 
 CREATE TABLE IF NOT EXISTS iec62304_change_records (
     record_id            text PRIMARY KEY,
-    artifact_id          text NOT NULL REFERENCES artifacts(artifact_id) ON DELETE CASCADE,
+    artifact_id          uuid NOT NULL REFERENCES artifacts(artifact_id) ON DELETE CASCADE,
     safety_class         text NOT NULL CHECK (safety_class IN ('ClassA', 'ClassB', 'ClassC')),
     impact_summary       text NOT NULL DEFAULT '',
     risk_controls        text NOT NULL DEFAULT '',

@@ -8,6 +8,7 @@ MAX_DEVICES=${MAX_DEVICES:-}
 NOT_BEFORE=${NOT_BEFORE:-}
 EXPIRES_AT=${EXPIRES_AT:-}
 KEY_ID=${KEY_ID:-}
+VARIANT=${VARIANT:-}
 
 if [ -z "$LICENSE_KEY" ] || [ ! -f "$LICENSE_KEY" ]; then
   echo "LICENSE_KEY must point to an Ed25519 private key (PEM)." >&2
@@ -26,9 +27,14 @@ tmpdir=$(mktemp -d)
 payload_json="$tmpdir/payload.json"
 sig_bin="$tmpdir/sig.bin"
 
-python3 - <<'PY' "$payload_json" "$ISSUED_TO" "$MAX_DEVICES" "$NOT_BEFORE" "$EXPIRES_AT"
+if [ -n "$VARIANT" ] && [ "$VARIANT" != "standard" ] && [ "$VARIANT" != "medical" ]; then
+  echo "VARIANT must be 'standard' or 'medical' when set." >&2
+  exit 1
+fi
+
+python3 - <<'PY' "$payload_json" "$ISSUED_TO" "$MAX_DEVICES" "$NOT_BEFORE" "$EXPIRES_AT" "$VARIANT"
 import json, sys
-out, issued_to, max_devices, not_before, expires_at = sys.argv[1:6]
+out, issued_to, max_devices, not_before, expires_at, variant = sys.argv[1:7]
 payload = {
     "issuedTo": issued_to,
     "maxDevices": int(max_devices),
@@ -37,6 +43,8 @@ if not_before:
     payload["notBefore"] = not_before
 if expires_at:
     payload["expiresAt"] = expires_at
+if variant:
+    payload["variant"] = variant
 with open(out, "w") as f:
     json.dump(payload, f, separators=(",", ":"), ensure_ascii=False)
 PY

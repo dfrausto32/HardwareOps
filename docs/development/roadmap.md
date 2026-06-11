@@ -25,7 +25,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Connected email delivery complete. TOTP MFA for local accounts shipped. Remaining Phase D work is live-deployment acceptance gate execution (operational) and full VPC reference diagram (docs). |
 | Phase E — Federated Multi-Region | 🟡 In progress | Hub-and-spoke federation layer: global management plane above regional control planes. Agents unchanged. E1–E5 (aggregation, artifact federation, policy push, sync reconciler, enrollment profiles) complete. Global-plane operator auth: Phase 1 (local login + audit) and Phase 2 (OIDC SSO) complete. Phase 3 (LDAP) is roadmap. E6 (global PKI) deferred. |
 | Phase F — Bare-Metal Embedded & Constrained-Transport Devices | ⬜ Planned | True remote firmware OTA to microcontrollers (e.g. Raspberry Pi Pico) that cannot run the agent and have no IP. Pi-class gateway relays firmware over Bluetooth behind a pluggable transport abstraction. F1 (transport seam), F2 (agent-resident firmware apply), F3 (gateway/device-of-devices), F4 (BLE OTA), F5 (RP2040 bare-metal target), F6 (additional transports, backlog). Design in `docs/development/bare-metal-firmware-ota.md`. |
-| Phase G — Medical / IoMT Compliance | ✅ Complete | G1–G5 all complete. G5: 8-file QMS evidence ZIP (manifest, SBOM, VEX, attestations, change record+audit trail, vuln summary, deployment audit trail), prerequisite 422 with structured checklist, on-demand presigned URL, 12 tests. |
+| Phase G — Medical / IoMT Compliance | ✅ Complete | G1–G5 + QM1 + QM2 complete. QM2 (`e2e-suite-medical.sh`, 6 scenarios vs. real hardened medical stack) surfaced and fixed 4 integration gaps. Remaining follow-up: scan/SBOM jobs must extract tar.gz bundles before scanning (G3 known gap). |
 
 ### Active work queue (what is still to do)
 
@@ -941,7 +941,8 @@ Design detail lives in `development/bare-metal-firmware-ota.md`. The agent-resid
   - Standard deployments: `iec62304_change_records` table does not exist; routes return 404.
 
 #### G3 — FDA SBOM / VEX (March 2026 enforcement)
-- **Status:** ✅ Complete
+- **Status:** ✅ Complete — with one known depth gap (below)
+- **Known gap (follow-up):** the SBOM generator and vuln scanners run `trivy fs` / `grype` directly against the packed `.tar.gz` artifact blob, which neither tool unpacks — so SBOM components and scan findings are always empty for bundle artifacts. The pipeline (scan → VEX → presign → QMS package) is verified end-to-end by `e2e-suite-medical.sh`, but for real findings the scan/SBOM jobs must safely extract the bundle to a temp dir before invoking the scanner. Tracked as the G3 follow-up.
 - **Scope:** Extend the existing SBOM pipeline (CycloneDX via Trivy, `internal/sbom/`) to produce VEX (Vulnerability Exploitability eXchange) files alongside each SBOM, and add lifecycle metadata fields required by the FDA June 2025 guidance.
   - VEX generation job (`internal/sbom/vex.go`): runs after each vulnerability scan completes; maps scan findings to SBOM components; produces a CycloneDX VEX document with exploitability assertions (`affected` / `not_affected` / `under_investigation` / `fixed`) per CVE per component.
   - VEX stored in MinIO at `sboms/{artifactID}.vex.json`; `vexObjectKey` field added to `artifacts` table via `migrations/medical/0003_vex.sql`.
@@ -1031,7 +1032,8 @@ All files in `handlers/medical/` carry `//go:build medical`. The standard `go te
 - **Notes:** 51 tests across 5 files in `internal/httpapi/handlers/medical/`. Activated with `go test -tags medical ./...`; invisible to standard `./...` run via build constraints.
 
 #### QM2 — Medical E2E suite (`e2e-suite-medical.sh`)
-- **Status:** ⬜ Planned
+- **Status:** ✅ Complete
+- **Notes:** `scripts/e2e-suite-medical.sh` — boots a full hardened medical stack (signed `variant=medical` license, `require_verified` artifact trust, `DEVICE_IDENTITY_MODE=enforce`) against real Postgres + MinIO and runs 6 scenarios: license-variant startup rejection, change-record gate (422 → approve → 200), break-glass bypass audit, VEX generation/download, HIPAA export field validation, and QMS package (prerequisite 422 checklist + 8-file ZIP). Scenarios needing a scanner SKIP cleanly when `trivy` is absent. First runs of this suite surfaced and led to fixes for: license variant never enforced at startup, `safety_class`/`vex_object_key`/`eos_date` never read from postgres, the change-approval gate missing from the standard desired-state routes, and `uuid` vs `text` FK mismatches in medical migrations 0002/0003.
 - **Scope:** Full-stack E2E scenarios against a running `DEPLOYMENT_PROFILE=medical` stack (real Postgres + MinIO, real built binaries). Scenarios:
   1. **Change record workflow** — upload Class C artifact → create change record → push desired state (expect 422) → approve change record → push desired state (expect success) → verify `change_record.approved` audit event.
   2. **Break-glass override** — upload Class B artifact → push desired state with `?bypassChangeApproval=true` + reason → verify `change_record.bypassed` audit event and that deployment proceeded.

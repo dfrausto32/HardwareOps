@@ -14,10 +14,21 @@ import (
 
 type Store struct {
 	pool *pgxpool.Pool
+	// medical enables queries over columns that only exist when the medical
+	// migrations (migrations/medical/) have been applied: artifacts.safety_class,
+	// artifacts.vex_object_key, artifacts.eos_date.
+	medical bool
 }
 
 func New(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
+}
+
+// SetMedicalProfile must be called when DEPLOYMENT_PROFILE=medical so artifact
+// reads include the medical-only columns. Without it those columns are absent
+// from the schema and must not be referenced.
+func (s *Store) SetMedicalProfile(enabled bool) {
+	s.medical = enabled
 }
 
 func (s *Store) UpsertDevice(device store.Device) error {
@@ -1850,16 +1861,32 @@ func (s *Store) GetArtifact(artifactID string) (store.Artifact, bool, error) {
 	defer cancel()
 
 	var a store.Artifact
-	err := s.pool.QueryRow(ctx, `
-		SELECT artifact_id, name, version, COALESCE(type, 'app_bundle'), COALESCE(status, 'active'), object_key, sha256, COALESCE(signature, ''),
-		       COALESCE(signature_type, ''), COALESCE(signature_key_id, ''), COALESCE(verification_status, 'legacy'), COALESCE(verification_error, ''),
-		       COALESCE(verified_at, '0001-01-01T00:00:00Z'::timestamptz),
-		       size_bytes, COALESCE(metadata, '{}'::jsonb), created_at,
-		       COALESCE(deprecated_at, '0001-01-01T00:00:00Z'::timestamptz), COALESCE(delete_after, '0001-01-01T00:00:00Z'::timestamptz),
-		       COALESCE(sbom_object_key, '')
-		FROM artifacts
-		WHERE artifact_id = $1
-	`, artifactID).Scan(&a.ArtifactID, &a.Name, &a.Version, &a.Type, &a.Status, &a.ObjectKey, &a.SHA256, &a.Signature, &a.SignatureType, &a.SignatureKeyID, &a.VerificationStatus, &a.VerificationError, &a.VerifiedAt, &a.SizeBytes, &a.MetadataJSON, &a.CreatedAt, &a.DeprecatedAt, &a.DeleteAfter, &a.SBOMObjectKey)
+	var err error
+	if s.medical {
+		err = s.pool.QueryRow(ctx, `
+			SELECT artifact_id, name, version, COALESCE(type, 'app_bundle'), COALESCE(status, 'active'), object_key, sha256, COALESCE(signature, ''),
+			       COALESCE(signature_type, ''), COALESCE(signature_key_id, ''), COALESCE(verification_status, 'legacy'), COALESCE(verification_error, ''),
+			       COALESCE(verified_at, '0001-01-01T00:00:00Z'::timestamptz),
+			       size_bytes, COALESCE(metadata, '{}'::jsonb), created_at,
+			       COALESCE(deprecated_at, '0001-01-01T00:00:00Z'::timestamptz), COALESCE(delete_after, '0001-01-01T00:00:00Z'::timestamptz),
+			       COALESCE(sbom_object_key, ''),
+			       COALESCE(safety_class, ''), COALESCE(vex_object_key, ''),
+			       COALESCE(eos_date, '0001-01-01'::date)
+			FROM artifacts
+			WHERE artifact_id = $1
+		`, artifactID).Scan(&a.ArtifactID, &a.Name, &a.Version, &a.Type, &a.Status, &a.ObjectKey, &a.SHA256, &a.Signature, &a.SignatureType, &a.SignatureKeyID, &a.VerificationStatus, &a.VerificationError, &a.VerifiedAt, &a.SizeBytes, &a.MetadataJSON, &a.CreatedAt, &a.DeprecatedAt, &a.DeleteAfter, &a.SBOMObjectKey, &a.SafetyClass, &a.VexObjectKey, &a.EosDate)
+	} else {
+		err = s.pool.QueryRow(ctx, `
+			SELECT artifact_id, name, version, COALESCE(type, 'app_bundle'), COALESCE(status, 'active'), object_key, sha256, COALESCE(signature, ''),
+			       COALESCE(signature_type, ''), COALESCE(signature_key_id, ''), COALESCE(verification_status, 'legacy'), COALESCE(verification_error, ''),
+			       COALESCE(verified_at, '0001-01-01T00:00:00Z'::timestamptz),
+			       size_bytes, COALESCE(metadata, '{}'::jsonb), created_at,
+			       COALESCE(deprecated_at, '0001-01-01T00:00:00Z'::timestamptz), COALESCE(delete_after, '0001-01-01T00:00:00Z'::timestamptz),
+			       COALESCE(sbom_object_key, '')
+			FROM artifacts
+			WHERE artifact_id = $1
+		`, artifactID).Scan(&a.ArtifactID, &a.Name, &a.Version, &a.Type, &a.Status, &a.ObjectKey, &a.SHA256, &a.Signature, &a.SignatureType, &a.SignatureKeyID, &a.VerificationStatus, &a.VerificationError, &a.VerifiedAt, &a.SizeBytes, &a.MetadataJSON, &a.CreatedAt, &a.DeprecatedAt, &a.DeleteAfter, &a.SBOMObjectKey)
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.Artifact{}, false, nil
 	}
@@ -4280,6 +4307,16 @@ func nullTime(t time.Time) interface{} {
 		return nil
 	}
 	return t
+}
+
+func (s *Store) SetArtifactSafetyClass(artifactID, safetyClass string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx,
+		`UPDATE artifacts SET safety_class = $2 WHERE artifact_id = $1`,
+		artifactID, safetyClass,
+	)
+	return err
 }
 
 func (s *Store) SetArtifactVexObjectKey(artifactID, vexObjectKey string) error {

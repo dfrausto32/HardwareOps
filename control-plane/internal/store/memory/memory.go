@@ -1107,6 +1107,18 @@ func (s *Store) SetArtifactSBOMObjectKey(artifactID, sbomObjectKey string) error
 	return nil
 }
 
+func (s *Store) SetArtifactSafetyClass(artifactID, safetyClass string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.artifacts[artifactID]
+	if !ok {
+		return errors.New("artifact not found")
+	}
+	a.SafetyClass = safetyClass
+	s.artifacts[artifactID] = a
+	return nil
+}
+
 func (s *Store) SetArtifactVexObjectKey(artifactID, vexObjectKey string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
