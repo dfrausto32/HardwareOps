@@ -269,8 +269,12 @@ ok "licenses signed"
 # ── Step 4: Control-plane env ─────────────────────────────────────────────────
 # Full hardened-profile environment; LICENSE_PATH is parameterised so scenario 0
 # can boot once against the standard license and assert the startup failure.
-cp_env() { # cp_env LICENSE_PATH
-  env \
+#
+# NOTE: cp_env execs. Always call it from a subshell (command substitution or
+# `( cp_env ... ) &`) — backgrounding it directly would otherwise make $! the
+# subshell PID instead of the binary, leaving an orphaned server on cleanup.
+cp_env() { # cp_env LICENSE_PATH CMD...
+  exec env \
     DATABASE_URL="$CP_DB" \
     HTTP_ADDR=":${MED_CP_PORT}" \
     ENABLE_TLS=1 \
@@ -318,7 +322,7 @@ cp_env() { # cp_env LICENSE_PATH
 # ── Scenario 0: license variant enforcement ───────────────────────────────────
 scenario_license_variant() {
   local out rc=0
-  out=$(cp_env "$STANDARD_LICENSE" timeout 20 "$BIN_DIR/control-plane" 2>&1) || rc=$?
+  out=$( ( cp_env "$STANDARD_LICENSE" timeout 20 "$BIN_DIR/control-plane" ) 2>&1 ) || rc=$?
   if [ "$rc" -eq 0 ] || [ "$rc" -eq 124 ]; then
     echo "control-plane unexpectedly started with a standard-variant license (rc=$rc)"
     echo "$out" | tail -5
@@ -332,10 +336,32 @@ scenario_license_variant() {
 run_scenario "license-variant" scenario_license_variant
 
 # ── Step 5: Start the medical control-plane ───────────────────────────────────
+# A stale server from an earlier run answering on the port would make every
+# scenario silently test old code — fail fast instead.
+if curl -sk "$BASE_URL/healthz" > /dev/null 2>&1; then
+  err "something is already listening on $BASE_URL — kill the stale control-plane first"
+  exit 1
+fi
+
 log "Starting medical control-plane on :${MED_CP_PORT} ..."
-cp_env "$MEDICAL_LICENSE" "$BIN_DIR/control-plane" > "$LOG_DIR/control-plane.log" 2>&1 &
+( cp_env "$MEDICAL_LICENSE" "$BIN_DIR/control-plane" ) > "$LOG_DIR/control-plane.log" 2>&1 &
 CP_PID=$!
-wait_for_url "$BASE_URL/healthz" "medical control-plane" 60
+
+# Wait for healthz, and fail fast if the server process dies (e.g. bind error).
+log "Waiting for medical control-plane ..."
+i=0
+until curl -sf --cacert "$CA_CERT_PATH" "$BASE_URL/healthz" > /dev/null 2>&1; do
+  if ! kill -0 "$CP_PID" 2>/dev/null; then
+    err "control-plane exited during startup:"
+    tail -10 "$LOG_DIR/control-plane.log" | sed 's/^/    /' >&2
+    CP_PID=""
+    exit 1
+  fi
+  sleep 1
+  i=$((i+1))
+  [ "$i" -lt 60 ] || { err "Timed out waiting for control-plane after 60s"; exit 1; }
+done
+ok "medical control-plane is up (${i}s)"
 
 # Retried: /healthz can come up before the bootstrap admin row is seeded.
 ADMIN_TOKEN=""
@@ -419,18 +445,14 @@ doc = json.load(open(sys.argv[1]))
 assert doc.get("bomFormat") == "CycloneDX", f"unexpected bomFormat: {doc.get('bomFormat')}"
 assert doc.get("metadata", {}).get("component", {}).get("name"), "VEX missing artifact component metadata"
 vulns = doc.get("vulnerabilities") or []
+# The uploaded bundle pins old urllib3/requests, so the scan must find CVEs
+# (the scan job extracts the tar.gz before invoking the scanner).
+assert vulns, "VEX has no vulnerability entries despite known-vulnerable pinned deps"
 for v in vulns:
     assert v.get("id"), "vulnerability entry missing id"
     assert v.get("analysis", {}).get("state"), f"vulnerability {v.get('id')} missing analysis state"
     assert v.get("affects"), f"vulnerability {v.get('id')} missing affects (SBOM component refs)"
-if vulns:
-    print(f"VEX valid: {len(vulns)} CVE assertion(s) referencing SBOM components")
-else:
-    # Known G3 gap: the scan job runs `trivy fs` on the packed tar.gz blob,
-    # which trivy does not unpack, so findings are always empty. See roadmap
-    # G3 follow-up (extract artifact before scanning).
-    print("WARNING: VEX pipeline works end-to-end but has 0 findings — "
-          "scanner does not unpack tar.gz artifacts (G3 follow-up)")
+print(f"VEX valid: {len(vulns)} CVE assertion(s) referencing SBOM components")
 PY
 }
 

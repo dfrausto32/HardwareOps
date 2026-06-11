@@ -5,6 +5,7 @@ package sbom
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/parcel/control-plane/internal/archive"
 	"github.com/parcel/control-plane/internal/store"
 )
 
@@ -91,7 +93,18 @@ func (j *ArtifactSBOMJob) run(artifactID, objectKey, sha256 string) {
 }
 
 func (j *ArtifactSBOMJob) generate(ctx context.Context, path string) ([]byte, error) {
-	out, err := exec.CommandContext(ctx, j.binPath, "fs", "--format", "cyclonedx", "--quiet", path).Output()
+	// Bundle artifacts are tar.gz, which `trivy fs` does not unpack — extract
+	// and generate the SBOM from the contents. Non-tarball blobs (e.g.
+	// firmware) are scanned as-is.
+	scanPath := path
+	if dir, err := archive.ExtractToTempDir(path, "hwops-sbom-extract-*"); err == nil {
+		defer os.RemoveAll(dir)
+		scanPath = dir
+	} else if !errors.Is(err, archive.ErrNotTarGz) {
+		return nil, fmt.Errorf("extract artifact: %w", err)
+	}
+
+	out, err := exec.CommandContext(ctx, j.binPath, "fs", "--format", "cyclonedx", "--quiet", scanPath).Output()
 	if err != nil {
 		if len(out) == 0 {
 			return nil, fmt.Errorf("trivy: %w", err)

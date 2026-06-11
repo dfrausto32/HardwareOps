@@ -2,9 +2,12 @@ package vulnscan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/parcel/control-plane/internal/archive"
 )
 
 // ObjectStore is the subset of the MinIO/S3 client the scanners need.
@@ -32,4 +35,20 @@ func downloadToTemp(ctx context.Context, store ObjectStore, bucket, key string) 
 	}
 	f.Close()
 	return f.Name(), nil
+}
+
+// prepareScanPath returns the path a CLI scanner should be pointed at for the
+// downloaded artifact blob at tmp. Bundle artifacts are tar.gz, which neither
+// trivy nor grype unpack — so the bundle is extracted to a temp dir and that
+// dir is scanned. Non-tarball blobs (e.g. firmware images) are scanned as-is.
+// The returned cleanup must always be called.
+func prepareScanPath(tmp string) (string, func(), error) {
+	dir, err := archive.ExtractToTempDir(tmp, "hwops-vuln-scan-extract-*")
+	if err == nil {
+		return dir, func() { os.RemoveAll(dir) }, nil
+	}
+	if errors.Is(err, archive.ErrNotTarGz) {
+		return tmp, func() {}, nil
+	}
+	return "", func() {}, fmt.Errorf("extract artifact: %w", err)
 }

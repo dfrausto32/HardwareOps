@@ -33,7 +33,19 @@ func (g *GrypeScanner) Scan(ctx context.Context, req ScanRequest) (ScanResult, e
 	}
 	defer os.Remove(tmp)
 
-	out, err := exec.CommandContext(ctx, g.binPath, tmp, "-o", "json").Output()
+	scanPath, cleanup, err := prepareScanPath(tmp)
+	if err != nil {
+		return ScanResult{}, fmt.Errorf("grype: %w", err)
+	}
+	defer cleanup()
+
+	// Use the explicit dir: scheme when scanning an extracted bundle so grype
+	// does not misdetect the directory as an image reference.
+	target := scanPath
+	if scanPath != tmp {
+		target = "dir:" + scanPath
+	}
+	out, err := exec.CommandContext(ctx, g.binPath, target, "-o", "json").Output()
 	if err != nil {
 		// Grype exits non-zero when findings are present; try to parse anyway.
 		if len(out) == 0 {

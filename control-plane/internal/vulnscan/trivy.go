@@ -33,7 +33,13 @@ func (t *TrivyScanner) Scan(ctx context.Context, req ScanRequest) (ScanResult, e
 	}
 	defer os.Remove(tmp)
 
-	out, err := exec.CommandContext(ctx, t.binPath, "fs", "--format", "json", tmp).Output()
+	scanPath, cleanup, err := prepareScanPath(tmp)
+	if err != nil {
+		return ScanResult{}, fmt.Errorf("trivy: %w", err)
+	}
+	defer cleanup()
+
+	out, err := exec.CommandContext(ctx, t.binPath, "fs", "--format", "json", scanPath).Output()
 	if err != nil {
 		if len(out) == 0 {
 			return ScanResult{}, fmt.Errorf("trivy: run: %w", err)
