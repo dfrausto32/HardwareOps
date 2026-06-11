@@ -175,7 +175,9 @@ func GetAuditRetention(logger *log.Logger, st store.Store) http.HandlerFunc {
 	}
 }
 
-func SetAuditRetention(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
+// SetAuditRetention updates the audit retention policy.
+// minRetentionDays enforces a floor (0 = no floor); medical deployments pass store.HIPAAMinRetentionDays.
+func SetAuditRetention(logger *log.Logger, st store.Store, trustProxy bool, minRetentionDays int) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Days int `json:"days"`
@@ -186,6 +188,10 @@ func SetAuditRetention(logger *log.Logger, st store.Store, trustProxy bool) http
 		}
 		if req.Days <= 0 || req.Days > 3650 {
 			http.Error(w, "days must be between 1 and 3650", http.StatusBadRequest)
+			return
+		}
+		if minRetentionDays > 0 && req.Days < minRetentionDays {
+			http.Error(w, fmt.Sprintf("HIPAA requires a minimum %d-day audit retention in medical deployments", minRetentionDays), http.StatusUnprocessableEntity)
 			return
 		}
 		before, _ := st.GetAuditRetentionDays()
@@ -324,4 +330,83 @@ func compactJSON(b []byte) string {
 		return string(trim)
 	}
 	return buf.String()
+}
+
+// HIPAAExportEvent is the HIPAA Security Rule-compliant audit event representation.
+type HIPAAExportEvent struct {
+	DateTime         time.Time `json:"dateTime"`
+	UserID           string    `json:"userId"`
+	UserEmail        string    `json:"userEmail,omitempty"`
+	ActionType       string    `json:"actionType"`
+	TargetType       string    `json:"targetType,omitempty"`
+	TargetID         string    `json:"targetId,omitempty"`
+	DataAccessed     string    `json:"dataAccessed"`
+	PhiTouched       bool      `json:"phiTouched"`
+	SourceIP         string    `json:"sourceIp,omitempty"`
+	AuthMethod       string    `json:"authMethod,omitempty"`
+	Status           string    `json:"status"`
+}
+
+type HIPAAExportResponse struct {
+	Items  []HIPAAExportEvent `json:"items"`
+	Limit  int                `json:"limit"`
+	Offset int                `json:"offset"`
+}
+
+type hipaaExportStore interface {
+	ListAuditEvents(filter store.AuditEventFilter) ([]store.AuditEvent, error)
+	CreateAuditEvent(event store.AuditEvent) error
+}
+
+// HIPAAExportAudit handles GET /api/v1/medical/audit/hipaa-export.
+// Returns PHI-touching events by default; ?scope=all returns all events.
+func HIPAAExportAudit(logger *log.Logger, st hipaaExportStore, trustProxy bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		filter, err := parseAuditFilter(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		// Default: only PHI-touching events. ?scope=all returns everything.
+		if r.URL.Query().Get("scope") != "all" {
+			t := true
+			filter.PhiTouched = &t
+		}
+
+		events, err := st.ListAuditEvents(filter)
+		if err != nil {
+			if logger != nil {
+				logger.Printf("hipaa export list error: %v", err)
+			}
+			http.Error(w, "storage error", http.StatusInternalServerError)
+			return
+		}
+
+		items := make([]HIPAAExportEvent, 0, len(events))
+		for _, ev := range events {
+			items = append(items, HIPAAExportEvent{
+				DateTime:     ev.OccurredAt,
+				UserID:       ev.ActorID,
+				UserEmail:    ev.ActorEmail,
+				ActionType:   ev.Action,
+				TargetType:   ev.TargetType,
+				TargetID:     ev.TargetID,
+				DataAccessed: ev.MinimumNecessary,
+				PhiTouched:   ev.PhiTouched,
+				SourceIP:     ev.SourceIP,
+				AuthMethod:   ev.AuthMethod,
+				Status:       ev.Status,
+			})
+		}
+
+		resp := HIPAAExportResponse{Items: items, Limit: filter.Limit, Offset: filter.Offset}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+
+		actorID := changeRecordActorID(r)
+		event := buildAuditEvent(r, trustProxy, actorUser(actorID), "audit.hipaa_export", "audit", "")
+		event.MetadataJSON = auditJSON(map[string]any{"count": len(items), "scope": r.URL.Query().Get("scope")})
+		writeChangeRecordAudit(logger, st, event)
+	}
 }

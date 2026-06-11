@@ -215,7 +215,7 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(admin).Get("/audit", handlers.ListAuditEvents(logger, deps.Store, deps.TrustProxy))
 		r.With(admin).Get("/audit.csv", handlers.ExportAuditCSV(logger, deps.Store, deps.TrustProxy))
 		r.With(admin).Get("/audit/retention", handlers.GetAuditRetention(logger, deps.Store))
-		r.With(admin).Put("/audit/retention", handlers.SetAuditRetention(logger, deps.Store, deps.TrustProxy))
+		r.With(admin).Put("/audit/retention", handlers.SetAuditRetention(logger, deps.Store, deps.TrustProxy, deps.AuditMinRetentionDays))
 		r.With(admin).Get("/license", handlers.GetLicenseStatus(logger, deps.Store, deps.License))
 		r.With(viewer).Get("/release-auto-update", handlers.GetReleaseAutoUpdateStatus(logger, deps.Store, deps.ReleaseAutoUpdate))
 		r.With(admin).Put("/release-auto-update", handlers.SetReleaseAutoUpdateSettings(logger, deps.Store, deps.ReleaseAutoUpdate, deps.TrustProxy))
@@ -311,6 +311,27 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.Route("/medical", func(r chi.Router) {
 			r.Use(medicalOnly)
 			r.With(viewer).Get("/status", MedicalStatus(deps.DeploymentProfile))
+
+			// IEC 62304 change records (Phase G2).
+			r.With(operator).Post("/artifacts/{artifactId}/change-record", handlers.UpsertChangeRecord(logger, deps.Store, deps.TrustProxy))
+			r.With(viewer).Get("/artifacts/{artifactId}/change-record", handlers.GetChangeRecord(logger, deps.Store))
+			r.With(operator).Post("/artifacts/{artifactId}/change-record/submit", handlers.SubmitChangeRecord(logger, deps.Store, deps.TrustProxy))
+			r.With(admin).Post("/artifacts/{artifactId}/change-record/approve", handlers.ApproveChangeRecord(logger, deps.Store, deps.TrustProxy))
+			r.With(admin).Post("/artifacts/{artifactId}/change-record/reject", handlers.RejectChangeRecord(logger, deps.Store, deps.TrustProxy))
+
+			// QMS evidence bundle (Phase G5).
+			r.With(operator).Post("/artifacts/{artifactId}/qms-package", handlers.PostQMSPackage(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.PresignExpires, deps.TrustProxy))
+
+			// HIPAA audit export (Phase G4).
+			r.With(admin).Get("/audit/hipaa-export", handlers.HIPAAExportAudit(logger, deps.Store, deps.TrustProxy))
+
+			// VEX document endpoints (Phase G3).
+			r.With(artifactViewer).Post("/artifacts/{artifactId}/sbom/vex/presign", handlers.PostVexPresign(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.PresignExpires, deps.TrustProxy))
+			r.With(operator).Post("/artifacts/{artifactId}/sbom/vex/assertions", handlers.UpsertVexAssertion(logger, deps.Store, deps.TrustProxy))
+
+			// Desired-state with change-approval gate (medical profile overrides standard routes).
+			r.With(operator).Put("/desired-state/groups/{groupId}", handlers.PutDesiredStateGroupWithPolicyMedical(logger, deps.Store, deps.TrustProxy, artifactSigPolicy, deps.ReleaseAutoUpdate))
+			r.With(operator).Put("/desired-state/devices/{deviceId}", handlers.PutDesiredStateDeviceWithPolicyMedical(logger, deps.Store, deps.TrustProxy, artifactSigPolicy, deps.ReleaseAutoUpdate))
 		})
 	})
 

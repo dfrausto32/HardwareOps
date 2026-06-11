@@ -52,6 +52,10 @@ type Store struct {
 	deployTriggers        map[string]store.DeployTrigger
 	federationIngests     map[string]store.FederationIngest
 	globalPolicyCaches    map[string]store.GlobalPolicyCache // keyed by groupID
+	changeRecords         map[string]store.ChangeRecord      // keyed by recordID
+	changeRecordArtIdx    map[string]string                   // artifactID → recordID
+	vexAssertions         map[string]store.VexAssertion       // keyed by assertionID
+	vexAssertionIdx       map[string]string                   // "artifactID|cveID|componentName" → assertionID
 }
 
 func New() *Store {
@@ -93,6 +97,10 @@ func New() *Store {
 		deployTriggers:        map[string]store.DeployTrigger{},
 		federationIngests:     map[string]store.FederationIngest{},
 		globalPolicyCaches:    map[string]store.GlobalPolicyCache{},
+		changeRecords:         map[string]store.ChangeRecord{},
+		changeRecordArtIdx:    map[string]string{},
+		vexAssertions:         map[string]store.VexAssertion{},
+		vexAssertionIdx:       map[string]string{},
 	}
 }
 
@@ -1099,6 +1107,46 @@ func (s *Store) SetArtifactSBOMObjectKey(artifactID, sbomObjectKey string) error
 	return nil
 }
 
+func (s *Store) SetArtifactVexObjectKey(artifactID, vexObjectKey string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.artifacts[artifactID]
+	if !ok {
+		return errors.New("artifact not found")
+	}
+	a.VexObjectKey = vexObjectKey
+	s.artifacts[artifactID] = a
+	return nil
+}
+
+func (s *Store) UpsertVexAssertion(assertion store.VexAssertion) (store.VexAssertion, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	idxKey := assertion.ArtifactID + "|" + assertion.CVEID + "|" + assertion.ComponentName
+	if existing, ok := s.vexAssertionIdx[idxKey]; ok {
+		assertion.AssertionID = existing
+	}
+	if assertion.AssertionID == "" {
+		return store.VexAssertion{}, errors.New("assertionID required")
+	}
+	assertion.CreatedAt = time.Now().UTC()
+	s.vexAssertions[assertion.AssertionID] = assertion
+	s.vexAssertionIdx[idxKey] = assertion.AssertionID
+	return assertion, nil
+}
+
+func (s *Store) ListVexAssertions(artifactID string) ([]store.VexAssertion, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []store.VexAssertion
+	for _, a := range s.vexAssertions {
+		if a.ArtifactID == artifactID {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
 func (s *Store) FindArtifactByNameTypeVersion(name, artifactType, version string) (store.Artifact, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1978,6 +2026,9 @@ func (s *Store) ListAuditEvents(filter store.AuditEventFilter) ([]store.AuditEve
 		if !filter.Until.IsZero() && ev.OccurredAt.After(filter.Until) {
 			continue
 		}
+		if filter.PhiTouched != nil && ev.PhiTouched != *filter.PhiTouched {
+			continue
+		}
 		matches = append(matches, ev)
 	}
 	sort.Slice(matches, func(i, j int) bool {
@@ -2575,4 +2626,47 @@ func (s *Store) DeleteGlobalPolicyCache(groupID string) error {
 	defer s.mu.Unlock()
 	delete(s.globalPolicyCaches, groupID)
 	return nil
+}
+
+func (s *Store) CreateChangeRecord(record store.ChangeRecord) (store.ChangeRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.changeRecordArtIdx[record.ArtifactID]; exists {
+		return store.ChangeRecord{}, fmt.Errorf("change record already exists for artifact %s", record.ArtifactID)
+	}
+	now := time.Now().UTC()
+	record.CreatedAt = now
+	record.UpdatedAt = now
+	s.changeRecords[record.RecordID] = record
+	s.changeRecordArtIdx[record.ArtifactID] = record.RecordID
+	return record, nil
+}
+
+func (s *Store) GetChangeRecord(recordID string) (store.ChangeRecord, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.changeRecords[recordID]
+	return r, ok, nil
+}
+
+func (s *Store) GetChangeRecordForArtifact(artifactID string) (store.ChangeRecord, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rid, ok := s.changeRecordArtIdx[artifactID]
+	if !ok {
+		return store.ChangeRecord{}, false, nil
+	}
+	r := s.changeRecords[rid]
+	return r, true, nil
+}
+
+func (s *Store) UpdateChangeRecord(record store.ChangeRecord) (store.ChangeRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.changeRecords[record.RecordID]; !ok {
+		return store.ChangeRecord{}, store.ErrChangeRecordNotFound
+	}
+	record.UpdatedAt = time.Now().UTC()
+	s.changeRecords[record.RecordID] = record
+	return record, nil
 }

@@ -105,7 +105,7 @@ func TestAuditRetention(t *testing.T) {
 	body := []byte(`{"days":30}`)
 	req = httptest.NewRequest(http.MethodPut, "/api/v1/audit/retention", bytes.NewReader(body))
 	w = httptest.NewRecorder()
-	SetAuditRetention(logger, mem, false).ServeHTTP(w, req)
+	SetAuditRetention(logger, mem, false, 0).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}

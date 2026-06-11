@@ -28,6 +28,7 @@ type ArtifactSBOMJob struct {
 	bucket      string
 	store       store.Store
 	logger      *log.Logger
+	onComplete  func(artifactID string) // called after successful SBOM generation
 }
 
 // NewArtifactSBOMJob creates an ArtifactSBOMJob. binPath defaults to "trivy".
@@ -47,6 +48,11 @@ func NewArtifactSBOMJob(binPath string, objectStore ObjectStore, bucket string, 
 // Trigger starts a background SBOM generation for the given artifact.
 func (j *ArtifactSBOMJob) Trigger(artifactID, objectKey, sha256 string) {
 	go j.run(artifactID, objectKey, sha256)
+}
+
+// SetOnComplete registers a callback fired after successful SBOM generation.
+func (j *ArtifactSBOMJob) SetOnComplete(fn func(artifactID string)) {
+	j.onComplete = fn
 }
 
 func (j *ArtifactSBOMJob) run(artifactID, objectKey, sha256 string) {
@@ -79,6 +85,9 @@ func (j *ArtifactSBOMJob) run(artifactID, objectKey, sha256 string) {
 	}
 
 	j.logger.Printf("sbom: generated for artifact %s key=%s sha256=%s", artifactID, sbomKey, sha256)
+	if j.onComplete != nil {
+		j.onComplete(artifactID)
+	}
 }
 
 func (j *ArtifactSBOMJob) generate(ctx context.Context, path string) ([]byte, error) {

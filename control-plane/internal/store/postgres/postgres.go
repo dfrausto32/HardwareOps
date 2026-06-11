@@ -2523,11 +2523,13 @@ func (s *Store) CreateAuditEvent(event store.AuditEvent) error {
 		INSERT INTO audit_events (
 			event_id, occurred_at, actor_type, actor_id, actor_email, actor_roles,
 			auth_method, source_ip, user_agent, request_id, action,
-			target_type, target_id, status, error, before, after, metadata
+			target_type, target_id, status, error, before, after, metadata,
+			phi_touched, minimum_necessary
 		) VALUES (
 			COALESCE($1::uuid, gen_random_uuid()), $2, $3, $4, $5, $6,
 			$7, $8, $9, $10, $11,
-			$12, $13, $14, $15, $16, $17, $18
+			$12, $13, $14, $15, $16, $17, $18,
+			$19, $20
 		)
 	`, nullIfEmpty(event.EventID),
 		occurredAt,
@@ -2547,6 +2549,8 @@ func (s *Store) CreateAuditEvent(event store.AuditEvent) error {
 		nullIfEmptyBytes(event.BeforeJSON),
 		nullIfEmptyBytes(event.AfterJSON),
 		nullIfEmptyBytes(event.MetadataJSON),
+		event.PhiTouched,
+		event.MinimumNecessary,
 	)
 	return err
 }
@@ -2568,7 +2572,8 @@ func (s *Store) ListAuditEvents(filter store.AuditEventFilter) ([]store.AuditEve
 		SELECT event_id, occurred_at, actor_type, actor_id, COALESCE(actor_email, ''), COALESCE(actor_roles, '[]'::jsonb),
 		       COALESCE(auth_method, ''), COALESCE(source_ip, ''), COALESCE(user_agent, ''), COALESCE(request_id, ''),
 		       action, COALESCE(target_type, ''), COALESCE(target_id, ''), status, COALESCE(error, ''),
-		       COALESCE(before, '{}'::jsonb), COALESCE(after, '{}'::jsonb), COALESCE(metadata, '{}'::jsonb)
+		       COALESCE(before, '{}'::jsonb), COALESCE(after, '{}'::jsonb), COALESCE(metadata, '{}'::jsonb),
+		       COALESCE(phi_touched, false), COALESCE(minimum_necessary, '')
 		FROM audit_events
 		WHERE ($1 = '' OR action = $1)
 		  AND ($2 = '' OR actor_type = $2)
@@ -2579,10 +2584,11 @@ func (s *Store) ListAuditEvents(filter store.AuditEventFilter) ([]store.AuditEve
 		  AND ($7 = '' OR status = $7)
 		  AND ($8::timestamptz IS NULL OR occurred_at >= $8)
 		  AND ($9::timestamptz IS NULL OR occurred_at <= $9)
+		  AND ($10::boolean IS NULL OR phi_touched = $10)
 		ORDER BY occurred_at DESC
-		LIMIT $10 OFFSET $11
+		LIMIT $11 OFFSET $12
 	`, filter.Action, filter.ActorType, filter.ActorID, filter.ActorEmail, filter.TargetType, filter.TargetID, filter.Status,
-		nullIfZeroTime(filter.Since), nullIfZeroTime(filter.Until), limit, offset)
+		nullIfZeroTime(filter.Since), nullIfZeroTime(filter.Until), filter.PhiTouched, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -2593,7 +2599,8 @@ func (s *Store) ListAuditEvents(filter store.AuditEventFilter) ([]store.AuditEve
 		var ev store.AuditEvent
 		if err := rows.Scan(&ev.EventID, &ev.OccurredAt, &ev.ActorType, &ev.ActorID, &ev.ActorEmail, &ev.ActorRolesJSON,
 			&ev.AuthMethod, &ev.SourceIP, &ev.UserAgent, &ev.RequestID, &ev.Action, &ev.TargetType, &ev.TargetID,
-			&ev.Status, &ev.Error, &ev.BeforeJSON, &ev.AfterJSON, &ev.MetadataJSON); err != nil {
+			&ev.Status, &ev.Error, &ev.BeforeJSON, &ev.AfterJSON, &ev.MetadataJSON,
+			&ev.PhiTouched, &ev.MinimumNecessary); err != nil {
 			return nil, err
 		}
 		out = append(out, ev)
@@ -4158,4 +4165,178 @@ func (s *Store) ConfirmFederationBlobLocal(artifactID string, confirmedAt time.T
 		WHERE artifact_id = $1
 	`, artifactID, confirmedAt)
 	return err
+}
+
+func (s *Store) CreateChangeRecord(record store.ChangeRecord) (store.ChangeRecord, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	now := time.Now().UTC()
+	record.CreatedAt = now
+	record.UpdatedAt = now
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO iec62304_change_records
+			(record_id, artifact_id, safety_class, impact_summary, risk_controls, status,
+			 created_by_user_id, updated_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`, record.RecordID, record.ArtifactID, record.SafetyClass,
+		record.ImpactSummary, record.RiskControls, record.Status,
+		record.CreatedByUserID, record.UpdatedAt, record.CreatedAt)
+	if err != nil {
+		return store.ChangeRecord{}, err
+	}
+	return record, nil
+}
+
+func (s *Store) GetChangeRecord(recordID string) (store.ChangeRecord, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var r store.ChangeRecord
+	var approvedAt, rejectedAt sql.NullTime
+	err := s.pool.QueryRow(ctx, `
+		SELECT record_id, artifact_id, safety_class, impact_summary, risk_controls, status,
+		       created_by_user_id, updated_at, created_at,
+		       approved_by_user_id, approved_at,
+		       rejected_by_user_id, rejected_at, rejected_reason
+		FROM iec62304_change_records WHERE record_id = $1
+	`, recordID).Scan(
+		&r.RecordID, &r.ArtifactID, &r.SafetyClass, &r.ImpactSummary, &r.RiskControls, &r.Status,
+		&r.CreatedByUserID, &r.UpdatedAt, &r.CreatedAt,
+		&r.ApprovedByUserID, &approvedAt,
+		&r.RejectedByUserID, &rejectedAt, &r.RejectedReason,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.ChangeRecord{}, false, nil
+	}
+	if err != nil {
+		return store.ChangeRecord{}, false, err
+	}
+	if approvedAt.Valid {
+		r.ApprovedAt = approvedAt.Time
+	}
+	if rejectedAt.Valid {
+		r.RejectedAt = rejectedAt.Time
+	}
+	return r, true, nil
+}
+
+func (s *Store) GetChangeRecordForArtifact(artifactID string) (store.ChangeRecord, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var r store.ChangeRecord
+	var approvedAt, rejectedAt sql.NullTime
+	err := s.pool.QueryRow(ctx, `
+		SELECT record_id, artifact_id, safety_class, impact_summary, risk_controls, status,
+		       created_by_user_id, updated_at, created_at,
+		       approved_by_user_id, approved_at,
+		       rejected_by_user_id, rejected_at, rejected_reason
+		FROM iec62304_change_records WHERE artifact_id = $1
+	`, artifactID).Scan(
+		&r.RecordID, &r.ArtifactID, &r.SafetyClass, &r.ImpactSummary, &r.RiskControls, &r.Status,
+		&r.CreatedByUserID, &r.UpdatedAt, &r.CreatedAt,
+		&r.ApprovedByUserID, &approvedAt,
+		&r.RejectedByUserID, &rejectedAt, &r.RejectedReason,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.ChangeRecord{}, false, nil
+	}
+	if err != nil {
+		return store.ChangeRecord{}, false, err
+	}
+	if approvedAt.Valid {
+		r.ApprovedAt = approvedAt.Time
+	}
+	if rejectedAt.Valid {
+		r.RejectedAt = rejectedAt.Time
+	}
+	return r, true, nil
+}
+
+func (s *Store) UpdateChangeRecord(record store.ChangeRecord) (store.ChangeRecord, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	record.UpdatedAt = time.Now().UTC()
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE iec62304_change_records
+		SET safety_class = $2, impact_summary = $3, risk_controls = $4, status = $5,
+		    approved_by_user_id = $6, approved_at = $7,
+		    rejected_by_user_id = $8, rejected_at = $9, rejected_reason = $10,
+		    updated_at = $11
+		WHERE record_id = $1
+	`, record.RecordID, record.SafetyClass, record.ImpactSummary, record.RiskControls, record.Status,
+		record.ApprovedByUserID, nullTime(record.ApprovedAt),
+		record.RejectedByUserID, nullTime(record.RejectedAt), record.RejectedReason,
+		record.UpdatedAt)
+	if err != nil {
+		return store.ChangeRecord{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return store.ChangeRecord{}, store.ErrChangeRecordNotFound
+	}
+	return record, nil
+}
+
+func nullTime(t time.Time) interface{} {
+	if t.IsZero() {
+		return nil
+	}
+	return t
+}
+
+func (s *Store) SetArtifactVexObjectKey(artifactID, vexObjectKey string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := s.pool.Exec(ctx,
+		`UPDATE artifacts SET vex_object_key = $2 WHERE artifact_id = $1`,
+		artifactID, vexObjectKey,
+	)
+	return err
+}
+
+func (s *Store) UpsertVexAssertion(assertion store.VexAssertion) (store.VexAssertion, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	assertion.CreatedAt = time.Now().UTC()
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO vex_assertions
+		    (assertion_id, artifact_id, cve_id, component_name, assertion, justification, actor_user_id, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (artifact_id, cve_id, component_name)
+		DO UPDATE SET
+		    assertion_id   = EXCLUDED.assertion_id,
+		    assertion      = EXCLUDED.assertion,
+		    justification  = EXCLUDED.justification,
+		    actor_user_id  = EXCLUDED.actor_user_id,
+		    created_at     = EXCLUDED.created_at
+	`, assertion.AssertionID, assertion.ArtifactID, assertion.CVEID,
+		assertion.ComponentName, assertion.Assertion,
+		assertion.Justification, assertion.ActorUserID, assertion.CreatedAt)
+	if err != nil {
+		return store.VexAssertion{}, err
+	}
+	return assertion, nil
+}
+
+func (s *Store) ListVexAssertions(artifactID string) ([]store.VexAssertion, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `
+		SELECT assertion_id, artifact_id, cve_id, component_name,
+		       assertion, justification, actor_user_id, created_at
+		FROM vex_assertions WHERE artifact_id = $1
+		ORDER BY cve_id, component_name
+	`, artifactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.VexAssertion
+	for rows.Next() {
+		var a store.VexAssertion
+		if err := rows.Scan(&a.AssertionID, &a.ArtifactID, &a.CVEID, &a.ComponentName,
+			&a.Assertion, &a.Justification, &a.ActorUserID, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }

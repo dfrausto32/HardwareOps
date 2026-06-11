@@ -84,6 +84,9 @@ type ArtifactResponse struct {
 	ReferenceCount     int             `json:"referenceCount"`
 	Duplicate          bool            `json:"duplicate,omitempty"`
 	SBOMObjectKey      string          `json:"sbomObjectKey,omitempty"`
+	// VexObjectKey and EosDate are medical-profile only (omitted on standard deployments).
+	VexObjectKey       string          `json:"vexObjectKey,omitempty"`
+	EosDate            *time.Time      `json:"eosDate,omitempty"`
 }
 
 type ArtifactListResponse struct {
@@ -1777,6 +1780,8 @@ func artifactToResponse(a store.Artifact, refs int) ArtifactResponse {
 		DeleteAfter:        timePtr(a.DeleteAfter),
 		ReferenceCount:     refs,
 		SBOMObjectKey:      a.SBOMObjectKey,
+		VexObjectKey:       a.VexObjectKey,
+		EosDate:            timePtr(a.EosDate),
 	}
 }
 

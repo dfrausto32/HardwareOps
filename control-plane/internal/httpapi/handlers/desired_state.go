@@ -77,14 +77,18 @@ type desiredStateReleaseAutoTrigger interface {
 }
 
 func PutDesiredStateGroup(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
-	return putDesiredStateGroup(logger, st, trustProxy, ArtifactSignaturePolicy{}, nil)
+	return putDesiredStateGroup(logger, st, trustProxy, ArtifactSignaturePolicy{}, nil, false)
 }
 
 func PutDesiredStateGroupWithPolicy(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto desiredStateReleaseAutoTrigger) http.HandlerFunc {
-	return putDesiredStateGroup(logger, st, trustProxy, sigPolicy, releaseAuto)
+	return putDesiredStateGroup(logger, st, trustProxy, sigPolicy, releaseAuto, false)
 }
 
-func putDesiredStateGroup(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto desiredStateReleaseAutoTrigger) http.HandlerFunc {
+func PutDesiredStateGroupWithPolicyMedical(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto desiredStateReleaseAutoTrigger) http.HandlerFunc {
+	return putDesiredStateGroup(logger, st, trustProxy, sigPolicy, releaseAuto, true)
+}
+
+func putDesiredStateGroup(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto desiredStateReleaseAutoTrigger, requireChangeApproval bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "groupId")
 		if groupID == "" {
@@ -125,6 +129,14 @@ func putDesiredStateGroup(logger *log.Logger, st store.Store, trustProxy bool, s
 			return
 		}
 		legacy := legacyFromComponents(components)
+
+		if requireChangeApproval {
+			bypass := r.URL.Query().Get("bypass_change_approval") == "true"
+			if err := enforceChangeApprovalGate(r, logger, st, trustProxy, components, bypass); err != nil {
+				http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+				return
+			}
+		}
 
 		state := store.DesiredStateGroup{
 			GroupID:          groupID,
@@ -174,14 +186,18 @@ func putDesiredStateGroup(logger *log.Logger, st store.Store, trustProxy bool, s
 }
 
 func PutDesiredStateDevice(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
-	return putDesiredStateDevice(logger, st, trustProxy, ArtifactSignaturePolicy{}, nil)
+	return putDesiredStateDevice(logger, st, trustProxy, ArtifactSignaturePolicy{}, nil, false)
 }
 
 func PutDesiredStateDeviceWithPolicy(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto desiredStateReleaseAutoTrigger) http.HandlerFunc {
-	return putDesiredStateDevice(logger, st, trustProxy, sigPolicy, releaseAuto)
+	return putDesiredStateDevice(logger, st, trustProxy, sigPolicy, releaseAuto, false)
 }
 
-func putDesiredStateDevice(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto desiredStateReleaseAutoTrigger) http.HandlerFunc {
+func PutDesiredStateDeviceWithPolicyMedical(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto desiredStateReleaseAutoTrigger) http.HandlerFunc {
+	return putDesiredStateDevice(logger, st, trustProxy, sigPolicy, releaseAuto, true)
+}
+
+func putDesiredStateDevice(logger *log.Logger, st store.Store, trustProxy bool, sigPolicy ArtifactSignaturePolicy, releaseAuto desiredStateReleaseAutoTrigger, requireChangeApproval bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		deviceID := chi.URLParam(r, "deviceId")
 		if deviceID == "" {
@@ -230,6 +246,14 @@ func putDesiredStateDevice(logger *log.Logger, st store.Store, trustProxy bool, 
 				return
 			}
 		}
+		if requireChangeApproval {
+			bypass := r.URL.Query().Get("bypass_change_approval") == "true"
+			if err := enforceChangeApprovalGate(r, logger, st, trustProxy, components, bypass); err != nil {
+				http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+				return
+			}
+		}
+
 		legacy := legacyFromComponents(components)
 
 		state := store.DesiredStateDevice{
@@ -622,4 +646,51 @@ func mergeLegacyDesiredComponents(components map[string]DesiredComponentResponse
 		components["app_bundle"] = comp
 	}
 	return components
+}
+
+// enforceChangeApprovalGate blocks desired-state pushes for Class B/C artifacts
+// unless an approved change record exists. When bypass=true (admin break-glass),
+// the push proceeds and a bypass audit event is written per the roadmap spec.
+func enforceChangeApprovalGate(r *http.Request, logger *log.Logger, st store.Store, trustProxy bool, components map[string]DesiredComponentResponse, bypass bool) error {
+	for _, comp := range components {
+		if comp.ArtifactID == "" {
+			continue
+		}
+		artifact, ok, err := st.GetArtifact(comp.ArtifactID)
+		if err != nil || !ok {
+			continue
+		}
+		sc := artifact.SafetyClass
+		if sc != "ClassB" && sc != "ClassC" {
+			continue
+		}
+		rec, hasRec, err := st.GetChangeRecordForArtifact(comp.ArtifactID)
+		if err != nil {
+			logger.Printf("change approval gate lookup error artifact=%s: %v", comp.ArtifactID, err)
+			return fmt.Errorf("storage error checking change record for artifact %s", comp.ArtifactID)
+		}
+		if !hasRec || rec.Status != "approved" {
+			if bypass {
+				// Break-glass: admin bypasses the gate; emit auditable event.
+				event := buildAuditEvent(r, trustProxy, actorUser("ui"), "change_record.bypassed", "artifact", comp.ArtifactID)
+				event.MetadataJSON = auditJSON(map[string]any{
+					"safetyClass": sc,
+					"hasRecord":   hasRec,
+					"recordStatus": func() string {
+						if hasRec {
+							return rec.Status
+						}
+						return "none"
+					}(),
+				})
+				writeAudit(logger, st, event, nil)
+				continue
+			}
+			if !hasRec {
+				return fmt.Errorf("artifact %s (safety class %s) requires an approved change record before deployment", comp.ArtifactID, sc)
+			}
+			return fmt.Errorf("artifact %s (safety class %s) change record status is %q; must be 'approved'", comp.ArtifactID, sc, rec.Status)
+		}
+	}
+	return nil
 }

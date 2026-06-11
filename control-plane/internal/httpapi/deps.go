@@ -98,6 +98,13 @@ type Dependencies struct {
 	// DeploymentProfile is "standard" (default) or "medical". Medical-only routes
 	// return 404 when this is "standard".
 	DeploymentProfile               string
+	// RequireChangeApproval gates desired-state pushes on an approved IEC 62304
+	// change record for Class B and C artifacts. Enabled automatically when
+	// DeploymentProfile is "medical".
+	RequireChangeApproval           bool
+	// AuditMinRetentionDays enforces a floor on the audit retention policy (0 = none).
+	// Medical deployments set this to store.HIPAAMinRetentionDays (2190).
+	AuditMinRetentionDays           int
 	ArtifactPullCreds               artifactingest.CredentialResolver
 	ArtifactPullCredsManager        *artifactingest.PullCredentialManager
 	ReleaseAutoUpdate               *releaseautoupdate.Manager

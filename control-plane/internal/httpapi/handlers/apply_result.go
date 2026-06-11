@@ -110,7 +110,7 @@ func PostApplyResult(logger *log.Logger, st store.Store, hub *events.Hub, trustP
 			CreatedAt:        time.Now().UTC(),
 		}
 
-		event := buildAuditEvent(r, trustProxy, actorDevice(device.DeviceID), "device.apply_result", "device", device.DeviceID)
+		event := withPHI(buildAuditEvent(r, trustProxy, actorDevice(device.DeviceID), "device.apply_result", "device", device.DeviceID), "device_apply_logs")
 		event.MetadataJSON = auditJSON(map[string]any{
 			"applyId":          res.ApplyID,
 			"artifactId":       res.ArtifactID,

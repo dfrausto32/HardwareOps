@@ -25,7 +25,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 | Phase D — Scale & Cloud Optionality | 🟡 In progress | AWS reference deployment and least-privilege IAM shipped. WAF attached; ingress CIDR split in place. Acceptance runbook and gate script created. Plaintext DATABASE_URL eliminated; ECS exec off by default; CloudWatch alarms Terraform-managed. Connected email delivery complete. TOTP MFA for local accounts shipped. Remaining Phase D work is live-deployment acceptance gate execution (operational) and full VPC reference diagram (docs). |
 | Phase E — Federated Multi-Region | 🟡 In progress | Hub-and-spoke federation layer: global management plane above regional control planes. Agents unchanged. E1–E5 (aggregation, artifact federation, policy push, sync reconciler, enrollment profiles) complete. Global-plane operator auth: Phase 1 (local login + audit) and Phase 2 (OIDC SSO) complete. Phase 3 (LDAP) is roadmap. E6 (global PKI) deferred. |
 | Phase F — Bare-Metal Embedded & Constrained-Transport Devices | ⬜ Planned | True remote firmware OTA to microcontrollers (e.g. Raspberry Pi Pico) that cannot run the agent and have no IP. Pi-class gateway relays firmware over Bluetooth behind a pluggable transport abstraction. F1 (transport seam), F2 (agent-resident firmware apply), F3 (gateway/device-of-devices), F4 (BLE OTA), F5 (RP2040 bare-metal target), F6 (additional transports, backlog). Design in `docs/development/bare-metal-firmware-ota.md`. |
-| Phase G — Medical / IoMT Compliance | 🟡 In Progress | G1 ✅ (`DEPLOYMENT_PROFILE=medical`, license `variant`, `MedicalOnly` middleware, `migrations/medical/0001`). G2–G5 planned. |
+| Phase G — Medical / IoMT Compliance | ✅ Complete | G1–G5 all complete. G5: 8-file QMS evidence ZIP (manifest, SBOM, VEX, attestations, change record+audit trail, vuln summary, deployment audit trail), prerequisite 422 with structured checklist, on-demand presigned URL, 12 tests. |
 
 ### Active work queue (what is still to do)
 
@@ -924,7 +924,7 @@ Design detail lives in `development/bare-metal-firmware-ota.md`. The agent-resid
   - Standard deployments: no schema change, no new fields, no new routes.
 
 #### G2 — IEC 62304 change control workflow
-- **Status:** ⬜ Planned
+- **Status:** ✅ Complete
 - **Scope:** Treat every deployment of a Class B or C artifact as a regulated change event. Gate the desired-state push on a completed and approved change record.
   - New `iec62304_change_records` table (`migrations/medical/0002_change_records.sql`): artifact ID, safety class, impact assessment text, risk control measures, approver user ID, approved-at timestamp, status (`draft` | `pending_approval` | `approved` | `rejected`).
   - `POST /api/v1/artifacts/{id}/change-record` — create or update a change record for an artifact version (operator).
@@ -941,7 +941,7 @@ Design detail lives in `development/bare-metal-firmware-ota.md`. The agent-resid
   - Standard deployments: `iec62304_change_records` table does not exist; routes return 404.
 
 #### G3 — FDA SBOM / VEX (March 2026 enforcement)
-- **Status:** ⬜ Planned
+- **Status:** ✅ Complete
 - **Scope:** Extend the existing SBOM pipeline (CycloneDX via Trivy, `internal/sbom/`) to produce VEX (Vulnerability Exploitability eXchange) files alongside each SBOM, and add lifecycle metadata fields required by the FDA June 2025 guidance.
   - VEX generation job (`internal/sbom/vex.go`): runs after each vulnerability scan completes; maps scan findings to SBOM components; produces a CycloneDX VEX document with exploitability assertions (`affected` / `not_affected` / `under_investigation` / `fixed`) per CVE per component.
   - VEX stored in MinIO at `sboms/{artifactID}.vex.json`; `vexObjectKey` field added to `artifacts` table via `migrations/medical/0003_vex.sql`.
@@ -959,7 +959,7 @@ Design detail lives in `development/bare-metal-firmware-ota.md`. The agent-resid
   - Standard deployments: VEX routes return 404; no `vexObjectKey` field; no `eosDate` field.
 
 #### G4 — HIPAA audit hardening
-- **Status:** ⬜ Planned
+- **Status:** ✅ Complete
 - **Scope:** Extend the existing audit log to produce HIPAA-grade structured output consumable by an OEM's BAA documentation and compliance team.
   - `phi_touched` boolean field added to `audit_events` via `migrations/medical/0004_audit_phi.sql`; set to `true` on any event where the handler operates on a resource that may contain or reference PHI (device metadata, telemetry, logs).
   - `minimum_necessary` field on audit events: records which specific fields/scopes were accessed (not the data itself — just the access classification).
@@ -974,7 +974,7 @@ Design detail lives in `development/bare-metal-firmware-ota.md`. The agent-resid
   - Standard deployments: `/hipaa-export` returns 404; `phi_touched` and `minimum_necessary` fields absent from audit events.
 
 #### G5 — QMS artifact package (QMSR / ISO 13485 evidence bundle)
-- **Status:** ⬜ Planned
+- **Status:** ✅ Complete
 - **Scope:** Produce a single downloadable evidence bundle per artifact version that an OEM's QMS team can attach to their Device Master Record at design transfer. This is the primary deliverable that makes Parcel's medical variant worth buying over a general OTA tool.
   - `POST /api/v1/artifacts/{id}/qms-package` — generates and returns a presigned download URL for a ZIP containing:
     - `manifest.json` — artifact metadata (name, version, type, safety class, SBOM key, VEX key, attestation list, eos date)
@@ -1025,10 +1025,10 @@ All files in `handlers/medical/` carry `//go:build medical`. The standard `go te
 ### Feature Templates
 
 #### QM1 — Medical unit test suite
-- **Status:** ⬜ Planned
+- **Status:** ✅ Complete
 - **Scope:** Handler-level unit tests for all G1–G5 API surface using the `//go:build medical` tag and an in-memory medical store fake. Covers: safety class enforcement, change record state machine (draft → pending_approval → approved/rejected), deployment gate (class B/C blocked, class A passes, break-glass audited), VEX generation trigger, HIPAA export field set, QMS package prerequisite validation and ZIP contents.
 - **Acceptance:** Each G1–G5 handler has unit test coverage; the medical CI job (`go test -tags medical ./...`) is a required check for any PR touching `migrations/medical/` or `handlers/medical/`.
-- **Notes:** Follow the same in-memory store + `httptest` pattern as the standard handler tests. Do not add medical assertions to existing standard test files.
+- **Notes:** 51 tests across 5 files in `internal/httpapi/handlers/medical/`. Activated with `go test -tags medical ./...`; invisible to standard `./...` run via build constraints.
 
 #### QM2 — Medical E2E suite (`e2e-suite-medical.sh`)
 - **Status:** ⬜ Planned

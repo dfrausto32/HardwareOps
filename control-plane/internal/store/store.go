@@ -15,6 +15,8 @@ var (
 	ErrPendingEnrollmentToken     = errors.New("pending enrollment token invalid")
 	ErrPendingEnrollmentState     = errors.New("pending enrollment state invalid")
 	ErrPendingEnrollmentThrottled = errors.New("pending enrollment approval throttled")
+	ErrChangeRecordNotFound       = errors.New("change record not found")
+	ErrChangeRecordState          = errors.New("change record state transition invalid")
 )
 
 type Device struct {
@@ -141,6 +143,12 @@ type Artifact struct {
 	DeprecatedAt       time.Time
 	DeleteAfter        time.Time
 	SBOMObjectKey      string
+	// SafetyClass is the IEC 62304 classification (ClassA, ClassB, ClassC).
+	// Only populated in medical-profile deployments (migrations/medical/0001).
+	SafetyClass  string
+	// VexObjectKey and EosDate are medical-profile only (migrations/medical/0003).
+	VexObjectKey string
+	EosDate      time.Time
 }
 
 type TrustedSigningKey struct {
@@ -265,6 +273,10 @@ type AuditEvent struct {
 	BeforeJSON     []byte
 	AfterJSON      []byte
 	MetadataJSON   []byte
+	// PhiTouched and MinimumNecessary are medical-profile only (migrations/medical/0004).
+	// On standard deployments these are always zero-value and not persisted.
+	PhiTouched        bool
+	MinimumNecessary  string
 }
 
 type AuditRetention struct {
@@ -303,6 +315,9 @@ type CertRotationState struct {
 	CleanedReason       string
 }
 
+// HIPAAMinRetentionDays is the minimum audit retention required by HIPAA (6 years).
+const HIPAAMinRetentionDays = 2190
+
 type AuditEventFilter struct {
 	Action     string
 	ActorType  string
@@ -315,6 +330,9 @@ type AuditEventFilter struct {
 	Until      time.Time
 	Limit      int
 	Offset     int
+	// PhiTouched filters to only phi_touched=true events when non-nil.
+	// Medical-profile only; ignored on standard deployments.
+	PhiTouched *bool
 }
 
 type User struct {
@@ -472,6 +490,40 @@ type GlobalPolicyCache struct {
 	CheckinInterval  int
 	ReceivedAt       time.Time
 	UpdatedAt        time.Time
+}
+
+// VexAssertion is a manually-set FDA VEX exploitability assertion for a CVE/component pair.
+// Only present in medical-profile deployments (migrations/medical/0003_vex.sql).
+type VexAssertion struct {
+	AssertionID   string
+	ArtifactID    string
+	CVEID         string
+	ComponentName string
+	// Assertion is one of: affected | not_affected | under_investigation | fixed
+	Assertion     string
+	Justification string
+	ActorUserID   string
+	CreatedAt     time.Time
+}
+
+// ChangeRecord is an IEC 62304 change control record attached to an artifact.
+// Only present in medical-profile deployments (migrations/medical/0002_change_records.sql).
+type ChangeRecord struct {
+	RecordID         string
+	ArtifactID       string
+	SafetyClass      string // ClassA | ClassB | ClassC
+	ImpactSummary    string
+	RiskControls     string
+	// Status is the state machine: draft → pending_approval → approved | rejected.
+	Status           string
+	CreatedByUserID  string
+	UpdatedAt        time.Time
+	CreatedAt        time.Time
+	ApprovedByUserID string
+	ApprovedAt       time.Time
+	RejectedByUserID string
+	RejectedAt       time.Time
+	RejectedReason   string
 }
 
 // FederationIngest tracks artifact metadata pushed from the global plane.
@@ -636,4 +688,17 @@ type Store interface {
 	ListGlobalPolicyCaches() ([]GlobalPolicyCache, error)
 	GetGlobalPolicyCacheForDevice(deviceID string) (GlobalPolicyCache, bool, error)
 	DeleteGlobalPolicyCache(groupID string) error
+
+	// IEC 62304 change records — medical-profile only.
+	// The underlying table (iec62304_change_records) is created by migrations/medical/0002.
+	// On standard deployments these methods are never called (MedicalOnly middleware gates all callers).
+	CreateChangeRecord(record ChangeRecord) (ChangeRecord, error)
+	GetChangeRecord(recordID string) (ChangeRecord, bool, error)
+	GetChangeRecordForArtifact(artifactID string) (ChangeRecord, bool, error)
+	UpdateChangeRecord(record ChangeRecord) (ChangeRecord, error)
+
+	// VEX assertions — medical-profile only (migrations/medical/0003).
+	SetArtifactVexObjectKey(artifactID, vexObjectKey string) error
+	UpsertVexAssertion(assertion VexAssertion) (VexAssertion, error)
+	ListVexAssertions(artifactID string) ([]VexAssertion, error)
 }

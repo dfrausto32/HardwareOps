@@ -413,6 +413,20 @@ func main() {
 		artifactSBOMJob = sbom.NewArtifactSBOMJob(cfg.SBOMBin, objStore.(sbom.ObjectStore), cfg.S3Bucket, store, logger)
 		logger.Printf("artifact SBOM generation enabled (trivy CycloneDX)")
 	}
+
+	// --- VEX generation (medical profile only) --------------------------------
+	if cfg.IsMedical() && objStore != nil {
+		vexJob := sbom.NewVexJob(objStore.(sbom.ObjectStore), cfg.S3Bucket, store, logger)
+		if artifactScanJob != nil {
+			artifactScanJob.SetOnComplete(vexJob.Trigger)
+			logger.Printf("VEX generation enabled: triggers after each completed vuln scan")
+		}
+		// Also wire to the SBOM job so VEX is generated when SBOM completes for
+		// artifacts that already have a completed scan (e.g. re-scanned artifacts).
+		if artifactSBOMJob != nil {
+			artifactSBOMJob.SetOnComplete(vexJob.Trigger)
+		}
+	}
 	// --------------------------------------------------------------------------
 
 	var nessusSyncJob *vulnscan.NessusSyncJob
@@ -539,6 +553,13 @@ func main() {
 		ArtifactSignatureKeyID:          cfg.ArtifactSignatureKeyID,
 		HardenedProfile:                 cfg.HardenedProfile,
 		DeploymentProfile:               cfg.DeploymentProfile,
+		RequireChangeApproval:           cfg.IsMedical(),
+		AuditMinRetentionDays: func() int {
+			if cfg.IsMedical() {
+				return storepkg.HIPAAMinRetentionDays
+			}
+			return 0
+		}(),
 		ArtifactPullCreds:               pullCredentialManager,
 		ArtifactPullCredsManager:        pullCredentialManager,
 		ReleaseAutoUpdate:               releaseAutoUpdateManager,

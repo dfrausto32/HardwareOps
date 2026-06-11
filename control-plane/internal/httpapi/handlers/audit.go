@@ -110,6 +110,14 @@ func writeAudit(logger *log.Logger, st store.Store, event store.AuditEvent, err 
 	}
 }
 
+// withPHI marks an audit event as touching Protected Health Information.
+// minNecessary describes the minimum-necessary access classification (e.g. "device_telemetry").
+func withPHI(event store.AuditEvent, minNecessary string) store.AuditEvent {
+	event.PhiTouched = true
+	event.MinimumNecessary = minNecessary
+	return event
+}
+
 func auditJSON(v any) []byte {
 	if v == nil {
 		return nil

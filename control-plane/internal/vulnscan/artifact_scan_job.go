@@ -12,10 +12,11 @@ import (
 
 // ArtifactScanJob wraps a Scanner and persists results to the store.
 type ArtifactScanJob struct {
-	scanner Scanner
-	store   store.Store
-	hub     *events.Hub
-	logger  *log.Logger
+	scanner    Scanner
+	store      store.Store
+	hub        *events.Hub
+	logger     *log.Logger
+	onComplete func(artifactID string) // called after a successful scan; nil if unused
 }
 
 // NewArtifactScanJob creates an ArtifactScanJob.
@@ -26,6 +27,12 @@ func NewArtifactScanJob(scanner Scanner, st store.Store, hub *events.Hub, logger
 		hub:     hub,
 		logger:  logger,
 	}
+}
+
+// SetOnComplete registers a callback that fires after each successful scan.
+// Used to chain the VEX generation job in medical-profile deployments.
+func (j *ArtifactScanJob) SetOnComplete(fn func(artifactID string)) {
+	j.onComplete = fn
 }
 
 // Trigger starts a background scan for the given artifact.
@@ -88,6 +95,9 @@ func (j *ArtifactScanJob) run(artifactID, objectKey, sha256 string) {
 		j.logger.Printf("vulnscan: save results for %s: %v", artifactID, err)
 	}
 	j.emitEvent(artifactID, "completed", result.SeverityCounts)
+	if j.onComplete != nil {
+		j.onComplete(artifactID)
+	}
 }
 
 func (j *ArtifactScanJob) emitEvent(artifactID, status string, counts interface{}) {

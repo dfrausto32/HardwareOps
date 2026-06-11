@@ -208,7 +208,7 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 				At:       now,
 				Payload:  identityPayload,
 			})
-			auditEvent := buildAuditEvent(r, trustProxy, actorDevice(req.DeviceID), "device.identity_violation", "device", req.DeviceID)
+			auditEvent := withPHI(buildAuditEvent(r, trustProxy, actorDevice(req.DeviceID), "device.identity_violation", "device", req.DeviceID), "device_telemetry")
 			auditEvent.MetadataJSON = identityPayload
 			if policy.Mode == deviceIdentityModeEnforce {
 				auditEvent.Status = "denied"
@@ -487,7 +487,7 @@ func DeviceCheckin(logger *log.Logger, st store.Store, hub *events.Hub, trustPro
 				At:       now,
 				Payload:  signalPayload,
 			})
-			auditEvent := buildAuditEvent(r, trustProxy, actorDevice(req.DeviceID), "device.clone_suspected", "device", req.DeviceID)
+			auditEvent := withPHI(buildAuditEvent(r, trustProxy, actorDevice(req.DeviceID), "device.clone_suspected", "device", req.DeviceID), "device_telemetry")
 			auditEvent.MetadataJSON = signalPayload
 			writeAudit(logger, st, auditEvent, nil)
 			logger.Printf("clone suspicion device=%s reasons=%v source_ip=%s", req.DeviceID, cloneSignal.Reasons, sourceIP)
