@@ -1,0 +1,98 @@
+# Medical / IoMT compliance pipeline (Phase G, QM1 + QM2).
+#
+# Kept separate from the standard pipeline by design: these jobs encode
+# regulatory requirements (IEC 62304 gate logic, VEX completeness, HIPAA
+# retention) and must be independently auditable. The standard pipeline
+# never compiles medical-variant tests (//go:build medical), and this one
+# adds them on top.
+#
+# medical-unit-tests runs on every PR rather than path-filtered: it takes
+# under a minute, and unfiltered jobs can be made required branch-protection
+# checks without the skipped-check deadlock that path filters cause.
+# medical-e2e runs on schedule (not per-PR) due to runtime, per QM2.
+name: Medical Compliance Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * *" # nightly medical-e2e
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  medical-unit-tests:
+    name: Medical unit tests (-tags medical)
+    # Unit tests are per-PR/push; the nightly schedule only needs the E2E job.
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: control-plane/go.mod
+          cache: true
+          cache-dependency-path: control-plane/go.sum
+
+      - name: Medical-variant unit tests
+        working-directory: control-plane
+        run: go test -tags medical ./...
+
+  medical-e2e:
+    name: Medical E2E suite
+    # Scheduled nightly + manual dispatch only — too slow for per-PR.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: control-plane/go.mod
+          cache: true
+          cache-dependency-path: control-plane/go.sum
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin v0.71.0
+          trivy --version
+
+      - name: Run medical E2E suite
+        env:
+          LOG_DIR: /tmp/parcel-medical-e2e-logs
+        run: |
+          mkdir -p "$LOG_DIR"
+          ./scripts/e2e-suite-medical.sh
+        timeout-minutes: 25
+
+      - name: Upload medical E2E logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: medical-e2e-logs-${{ github.run_number }}
+          path: /tmp/parcel-medical-e2e-logs/
+          retention-days: 7
+
+      - name: Stop infrastructure
+        if: always()
+        run: docker compose -f deploy/compose/docker-compose.e2e.yml down -v --remove-orphans
