@@ -42,6 +42,10 @@ type RateLimitConfig struct {
 	CheckinRPM         int
 	ApplyResultRPM     int
 	AuthLoginRPM       int
+	// ArtifactUploadRPM / ArtifactDeleteRPM throttle artifact ingest and
+	// deletion (ransomware control R-02).
+	ArtifactUploadRPM int
+	ArtifactDeleteRPM int
 }
 
 type PendingEnrollmentGuardrailConfig struct {

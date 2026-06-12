@@ -2,7 +2,9 @@ package objectstore
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -11,6 +13,14 @@ import (
 
 type MinIOStore struct {
 	client *minio.Client
+	// objectLock enables WORM retention on buckets this store creates
+	// (ransomware control R-01): objects cannot be deleted or overwritten
+	// until the retention period expires, even by the application credential.
+	objectLock        bool
+	lockRetentionDays int
+
+	lockMu         sync.Mutex
+	lockConfigured map[string]bool
 }
 
 type MinIOConfig struct {
@@ -19,6 +29,12 @@ type MinIOConfig struct {
 	SecretKey string
 	UseSSL    bool
 	Region    string
+	// ObjectLock creates buckets with object locking and applies a default
+	// GOVERNANCE retention of ObjectLockRetentionDays. Locking can only be
+	// enabled at bucket creation: pointing this at a pre-existing unlocked
+	// bucket fails EnsureBucket with a migration hint.
+	ObjectLock              bool
+	ObjectLockRetentionDays int
 }
 
 func NewMinIO(cfg MinIOConfig) (*MinIOStore, error) {
@@ -30,7 +46,16 @@ func NewMinIO(cfg MinIOConfig) (*MinIOStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &MinIOStore{client: client}, nil
+	days := cfg.ObjectLockRetentionDays
+	if days <= 0 {
+		days = 35
+	}
+	return &MinIOStore{
+		client:            client,
+		objectLock:        cfg.ObjectLock,
+		lockRetentionDays: days,
+		lockConfigured:    map[string]bool{},
+	}, nil
 }
 
 func (s *MinIOStore) PresignGet(ctx context.Context, bucket, key string, expires time.Duration) (string, error) {
@@ -63,10 +88,37 @@ func (s *MinIOStore) EnsureBucket(ctx context.Context, bucket string) error {
 	if err != nil {
 		return err
 	}
-	if ok {
+	if !ok {
+		if err := s.client.MakeBucket(ctx, bucket, minio.MakeBucketOptions{ObjectLocking: s.objectLock}); err != nil {
+			return err
+		}
+	}
+	if s.objectLock {
+		return s.ensureObjectLockConfig(ctx, bucket)
+	}
+	return nil
+}
+
+// ensureObjectLockConfig applies the default GOVERNANCE retention rule. It
+// fails for buckets created without object locking — locking cannot be
+// retrofitted, so the operator must migrate objects to a new locked bucket.
+func (s *MinIOStore) ensureObjectLockConfig(ctx context.Context, bucket string) error {
+	s.lockMu.Lock()
+	done := s.lockConfigured[bucket]
+	s.lockMu.Unlock()
+	if done {
 		return nil
 	}
-	return s.client.MakeBucket(ctx, bucket, minio.MakeBucketOptions{})
+	mode := minio.Governance
+	validity := uint(s.lockRetentionDays)
+	unit := minio.Days
+	if err := s.client.SetObjectLockConfig(ctx, bucket, &mode, &validity, &unit); err != nil {
+		return fmt.Errorf("object lock requested (S3_OBJECT_LOCK=1) but bucket %q does not support it — object locking can only be enabled at bucket creation; migrate objects to a freshly created locked bucket: %w", bucket, err)
+	}
+	s.lockMu.Lock()
+	s.lockConfigured[bucket] = true
+	s.lockMu.Unlock()
+	return nil
 }
 
 func (s *MinIOStore) DeleteObject(ctx context.Context, bucket, key string) error {

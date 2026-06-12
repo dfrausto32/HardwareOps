@@ -128,11 +128,13 @@ func main() {
 	var objStore httpapi.ObjectStore
 	if cfg.S3Endpoint != "" && cfg.S3Bucket != "" {
 		store, err := objectstore.NewMinIO(objectstore.MinIOConfig{
-			Endpoint:  cfg.S3Endpoint,
-			AccessKey: cfg.S3AccessKey,
-			SecretKey: cfg.S3SecretKey,
-			UseSSL:    cfg.S3UseSSL,
-			Region:    cfg.S3Region,
+			Endpoint:                cfg.S3Endpoint,
+			AccessKey:               cfg.S3AccessKey,
+			SecretKey:               cfg.S3SecretKey,
+			UseSSL:                  cfg.S3UseSSL,
+			Region:                  cfg.S3Region,
+			ObjectLock:              cfg.S3ObjectLock,
+			ObjectLockRetentionDays: cfg.S3ObjectLockRetentionDays,
 		})
 		if err != nil {
 			logger.Fatalf("object store init: %v", err)
@@ -519,6 +521,8 @@ func main() {
 			CheckinRPM:         cfg.CheckinRPM,
 			ApplyResultRPM:     cfg.ApplyResultRPM,
 			AuthLoginRPM:       cfg.AuthLoginRPM,
+			ArtifactUploadRPM:  cfg.ArtifactUploadRPM,
+			ArtifactDeleteRPM:  cfg.ArtifactDeleteRPM,
 		},
 		PendingEnrollmentGuardrails: httpapi.PendingEnrollmentGuardrailConfig{
 			RequestRPMPerSource:  cfg.PendingEnrollRequestRPMPerSource,

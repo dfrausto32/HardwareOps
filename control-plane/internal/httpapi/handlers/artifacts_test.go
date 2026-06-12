@@ -605,7 +605,7 @@ func TestArtifactLifecycle_DeprecateRestoreDelete(t *testing.T) {
 	deprecateReq := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts/"+artifactID+"/deprecate", bytes.NewReader([]byte(`{"deleteAfterDays":7}`)))
 	deprecateReq = withURLParam(deprecateReq, "artifactId", artifactID)
 	deprecateW := httptest.NewRecorder()
-	DeprecateArtifact(logger, mem, false).ServeHTTP(deprecateW, deprecateReq)
+	DeprecateArtifact(logger, mem, false, nil).ServeHTTP(deprecateW, deprecateReq)
 	if deprecateW.Code != http.StatusOK {
 		t.Fatalf("deprecate expected 200, got %d body=%s", deprecateW.Code, deprecateW.Body.String())
 	}
@@ -637,7 +637,7 @@ func TestArtifactLifecycle_DeprecateRestoreDelete(t *testing.T) {
 	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/v1/artifacts/"+artifactID, nil)
 	deleteReq = withURLParam(deleteReq, "artifactId", artifactID)
 	deleteW := httptest.NewRecorder()
-	DeleteArtifact(logger, mem, newFakeObjectStore(), "artifacts", false).ServeHTTP(deleteW, deleteReq)
+	DeleteArtifact(logger, mem, newFakeObjectStore(), "artifacts", false, nil).ServeHTTP(deleteW, deleteReq)
 	if deleteW.Code != http.StatusConflict {
 		t.Fatalf("delete active expected 409, got %d", deleteW.Code)
 	}
@@ -645,7 +645,7 @@ func TestArtifactLifecycle_DeprecateRestoreDelete(t *testing.T) {
 	deprecateReq2 := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts/"+artifactID+"/deprecate", nil)
 	deprecateReq2 = withURLParam(deprecateReq2, "artifactId", artifactID)
 	deprecateW2 := httptest.NewRecorder()
-	DeprecateArtifact(logger, mem, false).ServeHTTP(deprecateW2, deprecateReq2)
+	DeprecateArtifact(logger, mem, false, nil).ServeHTTP(deprecateW2, deprecateReq2)
 	if deprecateW2.Code != http.StatusOK {
 		t.Fatalf("deprecate expected 200, got %d", deprecateW2.Code)
 	}
@@ -653,7 +653,7 @@ func TestArtifactLifecycle_DeprecateRestoreDelete(t *testing.T) {
 	deleteReq2 := httptest.NewRequest(http.MethodDelete, "/api/v1/artifacts/"+artifactID, nil)
 	deleteReq2 = withURLParam(deleteReq2, "artifactId", artifactID)
 	deleteW2 := httptest.NewRecorder()
-	DeleteArtifact(logger, mem, newFakeObjectStore(), "artifacts", false).ServeHTTP(deleteW2, deleteReq2)
+	DeleteArtifact(logger, mem, newFakeObjectStore(), "artifacts", false, nil).ServeHTTP(deleteW2, deleteReq2)
 	if deleteW2.Code != http.StatusNoContent {
 		t.Fatalf("delete deprecated expected 204, got %d body=%s", deleteW2.Code, deleteW2.Body.String())
 	}
@@ -1150,4 +1150,47 @@ func (f *fakeObjectStore) GetObject(_ context.Context, _ string, key string) (io
 		return nil, io.EOF
 	}
 	return io.NopCloser(bytes.NewReader(data)), nil
+}
+
+// Ransomware control R-04: force=true must produce the distinct
+// artifact.force_delete audit action (the admin RBAC elevation is enforced in
+// the router's force-aware guard).
+func TestDeleteArtifact_ForceDeleteAuditAction(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	mem := memory.New()
+
+	artifactID := "11111111-2222-3333-4444-555555555555"
+	if err := mem.CreateArtifact(store.Artifact{
+		ArtifactID: artifactID,
+		Name:       "force-del",
+		Version:    "1.0.0",
+		Type:       "app_bundle",
+		Status:     "active", // not deprecated: only force can delete it
+		ObjectKey:  "artifacts/force-del.tar.gz",
+	}); err != nil {
+		t.Fatalf("seed artifact: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/artifacts/"+artifactID+"?force=true", nil)
+	req = withURLParam(req, "artifactId", artifactID)
+	w := httptest.NewRecorder()
+	DeleteArtifact(logger, mem, newFakeObjectStore(), "artifacts", false, nil).ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("force delete expected 204, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	events, err := mem.ListAuditEvents(store.AuditEventFilter{Action: "artifact.force_delete", Limit: 10})
+	if err != nil {
+		t.Fatalf("list audit events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 artifact.force_delete audit event, got %d", len(events))
+	}
+	plain, err := mem.ListAuditEvents(store.AuditEventFilter{Action: "artifact.delete", Limit: 10})
+	if err != nil {
+		t.Fatalf("list audit events: %v", err)
+	}
+	if len(plain) != 0 {
+		t.Fatalf("force delete must not be recorded as plain artifact.delete (got %d)", len(plain))
+	}
 }

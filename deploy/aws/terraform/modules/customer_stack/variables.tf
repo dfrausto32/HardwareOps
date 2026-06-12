@@ -442,3 +442,47 @@ variable "enable_execute_command" {
   type        = bool
   default     = false
 }
+
+# ── Ransomware controls (R-01 / R-05) ────────────────────────────────────────
+
+variable "artifact_store_enable_object_lock" {
+  description = "R-01: enable S3 Object Lock (WORM, GOVERNANCE mode) on the artifact bucket. Object Lock is set at bucket creation; enabling on an existing stack forces bucket replacement."
+  type        = bool
+  default     = false
+}
+
+variable "artifact_store_object_lock_retention_days" {
+  description = "R-01: default GOVERNANCE retention in days for artifact objects."
+  type        = number
+  default     = 35
+}
+
+variable "artifact_store_governance_bypass_role_arns" {
+  description = "R-01: break-glass IAM role ARNs allowed to bypass GOVERNANCE retention on the artifact bucket."
+  type        = list(string)
+  default     = []
+}
+
+variable "enable_backup_store" {
+  description = "R-05: provision an isolated backup bucket the ECS task role can only write to (never read or delete)."
+  type        = bool
+  default     = true
+}
+
+variable "backup_bucket_name" {
+  description = "Backup bucket name. If null, derived from name_prefix."
+  type        = string
+  default     = null
+}
+
+variable "backup_retention_days_s3" {
+  description = "Expire backup objects after this many days (>= 30 to overlap the artifact deprecation window)."
+  type        = number
+  default     = 35
+}
+
+variable "backup_store_enable_object_lock" {
+  description = "R-05/R-01: also WORM-lock the backup bucket."
+  type        = bool
+  default     = false
+}

@@ -215,6 +215,26 @@ module "artifact_store" {
   create_kms_key    = var.artifact_store_create_kms_key
   enable_versioning = true
   tags              = var.tags
+
+  # Ransomware control R-01 (opt-in: enabling forces bucket replacement on
+  # existing deployments — migrate objects first).
+  enable_object_lock          = var.artifact_store_enable_object_lock
+  object_lock_retention_days  = var.artifact_store_object_lock_retention_days
+  governance_bypass_role_arns = var.artifact_store_governance_bypass_role_arns
+}
+
+# Ransomware control R-05: isolated, write-only backup destination. The ECS
+# task role can put backups but never read or delete them.
+module "backup_store" {
+  count  = var.enable_backup_store ? 1 : 0
+  source = "../backup_store"
+
+  name_prefix           = var.name_prefix
+  bucket_name           = var.backup_bucket_name
+  writer_role_arns      = [module.ecs.task_role_arn]
+  backup_retention_days = var.backup_retention_days_s3
+  enable_object_lock    = var.backup_store_enable_object_lock
+  tags                  = var.tags
 }
 
 module "database" {

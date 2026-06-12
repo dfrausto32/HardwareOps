@@ -87,3 +87,8 @@ output "alerts_sns_topic_arn" {
   description = "SNS topic ARN for CloudWatch alarm notifications."
   value       = aws_sns_topic.parcel_alerts.arn
 }
+
+output "backup_bucket_name" {
+  description = "Isolated backup bucket name (R-05), if enabled."
+  value       = var.enable_backup_store ? module.backup_store[0].bucket_name : null
+}

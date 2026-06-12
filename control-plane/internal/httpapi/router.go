@@ -38,6 +38,12 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 	checkinLimiter := NewRateLimiter(deps.RateLimits.CheckinRPM, time.Minute, deps.TrustProxy, "checkin", deps.Metrics)
 	applyLimiter := NewRateLimiter(deps.RateLimits.ApplyResultRPM, time.Minute, deps.TrustProxy, "apply_result", deps.Metrics)
 	loginLimiter := NewRateLimiter(deps.RateLimits.AuthLoginRPM, time.Minute, deps.TrustProxy, "auth_login", deps.Metrics)
+	// Ransomware control R-02: throttle artifact ingest and deletion so a
+	// compromised credential cannot mass-destroy or mass-publish quickly.
+	artifactUploadLimiter := NewRateLimiter(deps.RateLimits.ArtifactUploadRPM, time.Minute, deps.TrustProxy, "artifact_upload", deps.Metrics)
+	artifactDeleteLimiter := NewRateLimiter(deps.RateLimits.ArtifactDeleteRPM, time.Minute, deps.TrustProxy, "artifact_delete", deps.Metrics)
+	// Ransomware control R-03: alert on anomalous per-actor deletion rates.
+	bulkDeleteDetector := handlers.NewBulkDeletionDetector(logger, deps.Events, deps.Store)
 	pendingEnrollmentGuard := handlers.NewPendingEnrollmentGuard(handlers.PendingEnrollmentGuardConfig{
 		RequestRPMPerSource:  deps.PendingEnrollmentGuardrails.RequestRPMPerSource,
 		RequestRPMPerProfile: deps.PendingEnrollmentGuardrails.RequestRPMPerProfile,
@@ -193,17 +199,30 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(admin).Post("/trusted-signing-keys/{keyId}/retire", handlers.RetireTrustedSigningKey(logger, deps.Store, deps.TrustProxy))
 		r.With(operator).Get("/artifact-trust/policy", handlers.GetArtifactTrustPolicy(logger, deps.Store, deps.TrustProxy, artifactSigPolicy))
 		r.With(admin).Put("/artifact-trust/policy", handlers.PutArtifactTrustPolicy(logger, deps.Store, deps.TrustProxy, artifactSigPolicy))
-		r.With(operator).Post("/artifacts", handlers.CreateArtifactWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events, vulnScanTrigger, deps.VulnSkipArtifactTypes, sbomGenTrigger, deps.SBOMSkipArtifactTypes))
-		r.With(operator).Post("/artifacts/upload", handlers.UploadArtifactWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, deps.Metrics, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events, vulnScanTrigger, deps.VulnSkipArtifactTypes, sbomGenTrigger, deps.SBOMSkipArtifactTypes))
-		r.With(artifactPublisher).Post("/artifacts/pull", handlers.PullArtifactWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.ArtifactPullHosts, deps.ArtifactPullMaxBytes, deps.ArtifactPullTimeout, deps.ArtifactPullAllowInsecureHTTP, deps.ArtifactPullCreds, deps.TrustProxy, deps.Metrics, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events, vulnScanTrigger, deps.VulnSkipArtifactTypes, sbomGenTrigger, deps.SBOMSkipArtifactTypes))
+		r.With(artifactUploadLimiter.Middleware, operator).Post("/artifacts", handlers.CreateArtifactWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events, vulnScanTrigger, deps.VulnSkipArtifactTypes, sbomGenTrigger, deps.SBOMSkipArtifactTypes))
+		r.With(artifactUploadLimiter.Middleware, operator).Post("/artifacts/upload", handlers.UploadArtifactWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, deps.Metrics, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events, vulnScanTrigger, deps.VulnSkipArtifactTypes, sbomGenTrigger, deps.SBOMSkipArtifactTypes))
+		r.With(artifactUploadLimiter.Middleware, artifactPublisher).Post("/artifacts/pull", handlers.PullArtifactWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.ArtifactPullHosts, deps.ArtifactPullMaxBytes, deps.ArtifactPullTimeout, deps.ArtifactPullAllowInsecureHTTP, deps.ArtifactPullCreds, deps.TrustProxy, deps.Metrics, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events, vulnScanTrigger, deps.VulnSkipArtifactTypes, sbomGenTrigger, deps.SBOMSkipArtifactTypes))
 		r.With(artifactPublisher).Post("/artifacts/presign-upload", handlers.PresignArtifactUpload(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.PresignExpires, deps.TrustProxy, deps.Metrics))
-		r.With(artifactPublisher).Post("/artifacts/complete", handlers.CompleteArtifactUploadWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, deps.Metrics, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events, vulnScanTrigger, deps.VulnSkipArtifactTypes, sbomGenTrigger, deps.SBOMSkipArtifactTypes))
+		r.With(artifactUploadLimiter.Middleware, artifactPublisher).Post("/artifacts/complete", handlers.CompleteArtifactUploadWithRealtime(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, deps.Metrics, artifactSigPolicy, deps.ReleaseAutoUpdate, deps.Events, vulnScanTrigger, deps.VulnSkipArtifactTypes, sbomGenTrigger, deps.SBOMSkipArtifactTypes))
 		r.With(admin).Get("/artifacts/pull-credentials", handlers.GetPullCredentialStatus(logger, deps.ArtifactPullCredsManager))
 		r.With(admin).Post("/artifacts/pull-credentials/reload", handlers.ReloadPullCredentials(logger, deps.Store, deps.ArtifactPullCredsManager, deps.TrustProxy))
 		r.With(artifactViewer).Get("/artifacts/{artifactId}", handlers.GetArtifact(logger, deps.Store, deps.TrustProxy))
-		r.With(operator).Post("/artifacts/{artifactId}/deprecate", handlers.DeprecateArtifact(logger, deps.Store, deps.TrustProxy))
+		r.With(artifactDeleteLimiter.Middleware, operator).Post("/artifacts/{artifactId}/deprecate", handlers.DeprecateArtifact(logger, deps.Store, deps.TrustProxy, bulkDeleteDetector))
 		r.With(operator).Post("/artifacts/{artifactId}/restore", handlers.RestoreArtifact(logger, deps.Store, deps.TrustProxy))
-		r.With(operator).Delete("/artifacts/{artifactId}", handlers.DeleteArtifact(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy))
+		// Ransomware control R-04: force=true bypasses the deprecation window,
+		// so it requires admin; the plain delete path stays operator.
+		forceAwareDelete := func(next http.Handler) http.Handler {
+			operatorGuarded := operator(next)
+			adminGuarded := admin(next)
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if handlers.ForceDeleteRequested(r) {
+					adminGuarded.ServeHTTP(w, r)
+					return
+				}
+				operatorGuarded.ServeHTTP(w, r)
+			})
+		}
+		r.With(artifactDeleteLimiter.Middleware, forceAwareDelete).Delete("/artifacts/{artifactId}", handlers.DeleteArtifact(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, bulkDeleteDetector))
 		r.With(artifactViewer).Post("/artifacts/{artifactId}/presign", handlers.PresignArtifact(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.PresignExpires, deps.TrustProxy, deps.Metrics))
 		r.With(artifactViewer).Post("/artifacts/{artifactId}/sbom/presign", handlers.PresignArtifactSBOM(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.PresignExpires, deps.TrustProxy))
 		r.With(operator).Post("/artifacts/{artifactId}/attestations", handlers.PostArtifactAttestation(logger, deps.Store, deps.ArtifactFulcioRootCert, deps.ArtifactRekorURL, deps.ArtifactRequireRekorLog))

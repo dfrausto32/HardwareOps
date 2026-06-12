@@ -98,15 +98,17 @@ The following controls are required and must be implemented per the timeline in 
 - **On-premises deployments:** The `BACKUP_RUNNER_TOKEN` and backup destination URL must point to an endpoint that is not reachable by the MinIO primary credential. The backup system must reject connections from the primary MinIO service account.
 - **Acceptance gate:** Confirm that the ECS task role cannot call `s3:GetObject` or `s3:DeleteObject` on the backup bucket.
 
-### 3.3 Implementation Timeline
+### 3.3 Implementation Status
 
-| Control | Priority | Target Date |
-|---------|----------|-------------|
-| R-04: Force-delete elevated to admin | High | 2026-04-27 |
-| R-02: Rate limiting on upload/delete | High | 2026-04-27 |
-| R-05: Isolated backup credentials | High | 2026-05-11 |
-| R-01: Object store WORM locks | High | 2026-05-11 |
-| R-03: Bulk deletion anomaly detection | Medium | 2026-06-08 |
+| Control | Priority | Target Date | Status |
+|---------|----------|-------------|--------|
+| R-04: Force-delete elevated to admin | High | 2026-04-27 | ✅ Implemented 2026-06-12 — force-aware RBAC guard in `httpapi/router.go` (operator → 403 on `force=true`); distinct `artifact.force_delete` audit action |
+| R-02: Rate limiting on upload/delete | High | 2026-04-27 | ✅ Implemented 2026-06-12 — `ARTIFACT_UPLOAD_RPM` (60) / `ARTIFACT_DELETE_RPM` (20); applied to all ingest routes (`/artifacts`, `/upload`, `/pull`, `/complete`) and to delete + deprecate; 429 with `Retry-After` |
+| R-05: Isolated backup credentials | High | 2026-05-11 | ✅ Implemented 2026-06-12 (AWS) — `modules/backup_store`: write-only bucket policy for the ECS task role (PutObject allowed; Get/Delete/policy actions denied), separate encryption key, ≥30-day retention validation. On-prem remains operational guidance (§3.1 remote backup runner) |
+| R-01: Object store WORM locks | High | 2026-05-11 | ✅ Implemented 2026-06-12 — AWS: `enable_object_lock` on `modules/artifact_store` (GOVERNANCE, 35-day default retention, bucket policy denies `s3:BypassGovernanceRetention`/`s3:DeleteObjectVersion` except break-glass ARNs). On-prem/MinIO: `S3_OBJECT_LOCK=1` + `S3_OBJECT_LOCK_RETENTION_DAYS` — control-plane creates the bucket with locking and applies the default GOVERNANCE retention; fails closed if pointed at a pre-existing unlocked bucket |
+| R-03: Bulk deletion anomaly detection | Medium | 2026-06-08 | ✅ Implemented 2026-06-12 — `handlers.BulkDeletionDetector`: >10 deletions/deprecations per actor per 5-minute window emits ERROR log + `security.anomaly.bulk_artifact_deletion` runtime event (streamed + persisted); re-alerts at most once per window; 7 unit tests |
+
+**Deployment notes:** R-01/R-05 Terraform controls are opt-in/default-on respectively (`artifact_store_enable_object_lock`, `enable_backup_store` in `customer_stack`) and take effect on the next `terraform apply`; enabling Object Lock on an existing artifact bucket forces bucket replacement — migrate objects first. R-02/R-03/R-04 are active in the control-plane binary as of this date with no configuration required.
 
 ---
 

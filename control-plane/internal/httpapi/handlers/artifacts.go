@@ -1363,7 +1363,15 @@ func PresignArtifactSBOM(logger *log.Logger, st store.Store, objStore ObjectStor
 	}
 }
 
-func DeleteArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool) http.HandlerFunc {
+// ForceDeleteRequested reports whether the request carries force=true. The
+// router uses it to elevate the RBAC requirement to admin (ransomware control
+// R-04): force bypasses the deprecation window, so it must not be available to
+// a compromised operator token.
+func ForceDeleteRequested(r *http.Request) bool {
+	return parseBool(r.URL.Query().Get("force"))
+}
+
+func DeleteArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bucket string, trustProxy bool, detector *BulkDeletionDetector) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		artifactID := chi.URLParam(r, "artifactId")
 		if artifactID == "" {
@@ -1385,6 +1393,11 @@ func DeleteArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 			return
 		}
 		force := parseBool(r.URL.Query().Get("force"))
+		// Distinct audit action for force deletes (ransomware control R-04).
+		auditAction := "artifact.delete"
+		if force {
+			auditAction = "artifact.force_delete"
+		}
 		refs, err := st.CountArtifactReferences(artifactID)
 		if err != nil {
 			logger.Printf("count artifact refs error: %v", err)
@@ -1403,7 +1416,7 @@ func DeleteArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 		if objStore != nil && bucket != "" && artifact.ObjectKey != "" {
 			if err := objStore.DeleteObject(r.Context(), bucket, artifact.ObjectKey); err != nil {
 				logger.Printf("delete artifact object error: %v", err)
-				writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.delete", "artifact", artifactID), err)
+				writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), auditAction, "artifact", artifactID), err)
 				http.Error(w, "object delete error", http.StatusInternalServerError)
 				return
 			}
@@ -1411,11 +1424,12 @@ func DeleteArtifact(logger *log.Logger, st store.Store, objStore ObjectStore, bu
 
 		if err := st.DeleteArtifact(artifactID); err != nil {
 			logger.Printf("delete artifact error: %v", err)
-			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.delete", "artifact", artifactID), err)
+			writeAudit(logger, st, buildAuditEvent(r, trustProxy, actorUser("ui"), auditAction, "artifact", artifactID), err)
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
-		event := buildAuditEvent(r, trustProxy, actorUser("ui"), "artifact.delete", "artifact", artifactID)
+		detector.Record(changeRecordActorID(r))
+		event := buildAuditEvent(r, trustProxy, actorUser("ui"), auditAction, "artifact", artifactID)
 		event.BeforeJSON = auditJSON(map[string]any{
 			"artifactId": artifact.ArtifactID,
 			"name":       artifact.Name,
@@ -1513,7 +1527,7 @@ func SetArtifactLifecyclePolicy(logger *log.Logger, st store.Store, trustProxy b
 	}
 }
 
-func DeprecateArtifact(logger *log.Logger, st store.Store, trustProxy bool) http.HandlerFunc {
+func DeprecateArtifact(logger *log.Logger, st store.Store, trustProxy bool, detector *BulkDeletionDetector) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		artifactID := chi.URLParam(r, "artifactId")
 		if artifactID == "" {
@@ -1559,6 +1573,7 @@ func DeprecateArtifact(logger *log.Logger, st store.Store, trustProxy bool) http
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+		detector.Record(changeRecordActorID(r))
 		updated, _, _ := st.GetArtifact(artifactID)
 		refs, _ := st.CountArtifactReferences(artifactID)
 

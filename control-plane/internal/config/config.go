@@ -30,11 +30,15 @@ type Config struct {
 	S3SecretKey                            string
 	S3Region                               string
 	S3UseSSL                               bool
+	S3ObjectLock                           bool
+	S3ObjectLockRetentionDays              int
 	PresignTTL                             time.Duration
 	EnrollmentTokenRPM                     int
 	EnrollRPM                              int
 	CheckinRPM                             int
 	ApplyResultRPM                         int
+	ArtifactUploadRPM                      int
+	ArtifactDeleteRPM                      int
 	LogIngestAddr                          string
 	LogDir                                 string
 	LogLevel                               string
@@ -242,11 +246,15 @@ func FromEnv() Config {
 		S3SecretKey:                            os.Getenv("S3_SECRET_KEY"),
 		S3Region:                               os.Getenv("S3_REGION"),
 		S3UseSSL:                               os.Getenv("S3_USE_SSL") == "1",
+		S3ObjectLock:                           parseBoolEnv("S3_OBJECT_LOCK"),
+		S3ObjectLockRetentionDays:              getenvInt("S3_OBJECT_LOCK_RETENTION_DAYS", 35),
 		PresignTTL:                             parseDuration(getenvDefault("S3_PRESIGN_TTL", "5m")),
 		EnrollmentTokenRPM:                     getenvInt("ENROLLMENT_TOKEN_RPM", 30),
 		EnrollRPM:                              getenvInt("ENROLL_RPM", 60),
 		CheckinRPM:                             getenvInt("CHECKIN_RPM", 300),
 		ApplyResultRPM:                         getenvInt("APPLY_RESULT_RPM", 300),
+		ArtifactUploadRPM:                      getenvInt("ARTIFACT_UPLOAD_RPM", 60),
+		ArtifactDeleteRPM:                      getenvInt("ARTIFACT_DELETE_RPM", 20),
 		LogIngestAddr:                          os.Getenv("LOG_INGEST_ADDR"),
 		LogDir:                                 getenvDefault("LOG_DIR", "./logs"),
 		LogLevel:                               getenvDefault("LOG_LEVEL", "info"),
