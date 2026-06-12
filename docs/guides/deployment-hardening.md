@@ -355,3 +355,19 @@ All data in transit between services is encrypted:
 | Secrets Manager secrets | ✅ AES-256 | AWS-managed or CMK via `secret_kms_key_arns` |
 
 No unencrypted persistent storage exists in the AWS deployment path.
+
+## 7) Ransomware controls
+
+The preventive controls from `docs/compliance/policies/ransomware-protection-policy.md` §3 and their switches:
+
+| Control | Switch | Default |
+|---|---|---|
+| Artifact ingest rate limit | `ARTIFACT_UPLOAD_RPM` | 60/min |
+| Artifact delete/deprecate rate limit | `ARTIFACT_DELETE_RPM` | 20/min |
+| Bulk-deletion anomaly alert (>10 per actor / 5 min) | always on | — |
+| Force delete requires admin + `artifact.force_delete` audit | always on | — |
+| Object Lock (WORM) on artifact bucket — on-prem MinIO | `S3_OBJECT_LOCK=1`, `S3_OBJECT_LOCK_RETENTION_DAYS` | off / 35 days |
+| Object Lock (WORM) on artifact bucket — AWS | `artifact_store_enable_object_lock` (Terraform) | off (creation-time only; enabling on an existing stack replaces the bucket) |
+| Isolated write-only backup bucket — AWS | `enable_backup_store` (Terraform) | on |
+
+For production: enable Object Lock on new stacks, keep the backup store enabled, and alert on `security.anomaly.bulk_artifact_deletion` runtime events.

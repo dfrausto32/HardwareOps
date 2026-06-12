@@ -105,3 +105,20 @@ Critical operations should always leave audit records:
 - artifact registration
 - certificate rotation
 - device decommission
+- artifact deletion (`artifact.delete`) and force deletion (`artifact.force_delete`)
+
+## 7. Ransomware protections
+
+Parcel ships layered controls against the two ransomware blast radii — destruction of the control plane's data, and abuse of Parcel as a delivery channel to your fleet (see `docs/compliance/policies/ransomware-protection-policy.md` for the full policy):
+
+**Always on (no configuration):**
+- Artifact deletion requires a two-phase soft delete (30-day deprecation window). Bypassing it with `force=true` requires the **admin** role and is audited under a distinct `artifact.force_delete` action.
+- Artifact ingest and deletion are rate limited (`ARTIFACT_UPLOAD_RPM`, default 60/min; `ARTIFACT_DELETE_RPM`, default 20/min).
+- Bulk-deletion anomaly detection: more than 10 deletions/deprecations by one actor within 5 minutes raises a `security.anomaly.bulk_artifact_deletion` event on the live event stream and an ERROR log. Treat it as a P1 until scoped.
+- Agents verify artifact signatures independently before applying — a compromised control-plane API cannot push an executable payload to devices without the signing key.
+
+**Opt-in (recommended for production):**
+- **Object Lock / WORM** on the artifact store: AWS via the `artifact_store_enable_object_lock` Terraform variable; on-prem MinIO via `S3_OBJECT_LOCK=1` (+ `S3_OBJECT_LOCK_RETENTION_DAYS`, default 35). Locked objects cannot be deleted or overwritten within retention, even by the application credential. Object locking can only be enabled at bucket creation.
+- **Isolated backup bucket** (AWS, on by default in the `customer_stack` module): the application role can only *write* backups — it cannot read, delete, or re-policy them — so a compromised credential cannot destroy the backups alongside the primary store.
+
+**If you suspect an active event:** enable maintenance mode first (`MAINTENANCE_MODE=1`) to halt all artifact delivery to the fleet, then revoke the suspect credential. The full playbook is in `docs/incidents/ir-runbook.md` §9.

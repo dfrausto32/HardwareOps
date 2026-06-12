@@ -165,16 +165,16 @@ All paths below are full paths.
 |---|---|---|---|
 | GET | `/api/v1/artifacts` | viewer or `artifact.read` scope | list artifacts |
 | GET | `/api/v1/artifacts/{artifactId}` | viewer or `artifact.read` scope | artifact detail |
-| POST | `/api/v1/artifacts` | operator | register artifact metadata |
-| POST | `/api/v1/artifacts/upload` | operator | multipart upload + register |
-| POST | `/api/v1/artifacts/pull` | operator or `artifact.publish` scope | control-plane pull ingest |
+| POST | `/api/v1/artifacts` | operator | register artifact metadata (rate limited: `ARTIFACT_UPLOAD_RPM`, default 60/min) |
+| POST | `/api/v1/artifacts/upload` | operator | multipart upload + register (rate limited: `ARTIFACT_UPLOAD_RPM`) |
+| POST | `/api/v1/artifacts/pull` | operator or `artifact.publish` scope | control-plane pull ingest (rate limited: `ARTIFACT_UPLOAD_RPM`) |
 | POST | `/api/v1/artifacts/presign-upload` | operator or `artifact.publish` scope | presigned upload init |
-| POST | `/api/v1/artifacts/complete` | operator or `artifact.publish` scope | finalize presigned upload |
+| POST | `/api/v1/artifacts/complete` | operator or `artifact.publish` scope | finalize presigned upload (rate limited: `ARTIFACT_UPLOAD_RPM`) |
 | POST | `/api/v1/artifacts/{artifactId}/attestations` | operator | submit in-toto / SLSA attestation; keyless bundles verified at upload |
 | GET | `/api/v1/artifacts/{artifactId}/attestations` | viewer or `artifact.read` scope | list attestations for an artifact |
-| POST | `/api/v1/artifacts/{artifactId}/deprecate` | operator | deprecate artifact |
+| POST | `/api/v1/artifacts/{artifactId}/deprecate` | operator | deprecate artifact (rate limited: `ARTIFACT_DELETE_RPM`, default 20/min) |
 | POST | `/api/v1/artifacts/{artifactId}/restore` | operator | restore deprecated artifact |
-| DELETE | `/api/v1/artifacts/{artifactId}` | operator | hard delete (guarded by refs/policy) |
+| DELETE | `/api/v1/artifacts/{artifactId}` | operator; `force=true` requires **admin** | hard delete (guarded by refs/policy; rate limited: `ARTIFACT_DELETE_RPM`). `force=true` bypasses the deprecation window, requires admin (operator → 403), and is audited as `artifact.force_delete` |
 | POST | `/api/v1/artifacts/{artifactId}/presign` | viewer or `artifact.read` scope | presign download |
 | GET | `/api/v1/artifacts/lifecycle/policy` | viewer or `artifact.read` scope | lifecycle policy |
 | PUT | `/api/v1/artifacts/lifecycle/policy` | admin | set lifecycle policy |
@@ -209,7 +209,7 @@ All paths below are full paths.
 | GET | `/api/v1/audit.csv` | admin | CSV export |
 | GET | `/api/v1/audit/retention` | admin | audit retention config |
 | PUT | `/api/v1/audit/retention` | admin | set audit retention |
-| GET | `/api/v1/events/history` | viewer | runtime event history |
+| GET | `/api/v1/events/history` | viewer | runtime event history; includes security anomaly events (`security.anomaly.bulk_artifact_deletion` — emitted when one actor deletes/deprecates >10 artifacts in 5 minutes) |
 | GET | `/api/v1/events` | viewer | realtime event stream |
 | GET | `/api/v1/events/retention` | admin | event retention config |
 | PUT | `/api/v1/events/retention` | admin | set event retention |

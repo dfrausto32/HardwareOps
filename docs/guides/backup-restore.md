@@ -90,3 +90,4 @@ curl --cacert /opt/parcel/certs/ca.crt -X POST \
 - **Long‑running backups:** expect check‑ins to pause during maintenance.
 - **Retention:** keep multiple backups (e.g., daily for 7–14 days).
 - **Test restores:** perform a restore at least once to validate the process.
+- **Ransomware resistance (AWS):** the `customer_stack` Terraform module provisions an isolated backup bucket (`modules/backup_store`) that the application role can only write to — restores require a separate administrator role with no ECS attachment. Keep on-prem backup destinations equally unreachable by the primary MinIO credential (see `docs/compliance/policies/ransomware-protection-policy.md` §6).
