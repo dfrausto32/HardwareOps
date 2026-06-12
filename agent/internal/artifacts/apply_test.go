@@ -42,7 +42,7 @@ func TestApplySuccess(t *testing.T) {
 		Type:       "app_bundle",
 	}
 
-	outcome, err := Apply(root, desired, meta, server.Client(), nil, ApplyOptions{VerificationMode: "allow_unsigned"})
+	outcome, err := Apply(root, desired, meta, HTTPDownloader{server.Client()}, nil, ApplyOptions{VerificationMode: "allow_unsigned"})
 	if err != nil {
 		t.Fatalf("apply failed: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestApplyUnsupportedTypeFails(t *testing.T) {
 		Type:       "firmware",
 	}
 
-	_, err := Apply(root, desired, meta, server.Client(), nil, ApplyOptions{VerificationMode: "allow_unsigned"})
+	_, err := Apply(root, desired, meta, HTTPDownloader{server.Client()}, nil, ApplyOptions{VerificationMode: "allow_unsigned"})
 	if err == nil {
 		t.Fatalf("expected error for unsupported type")
 	}
@@ -117,7 +117,7 @@ func TestApplyUnsupportedTypeAllowed(t *testing.T) {
 		Type:       "firmware",
 	}
 
-	outcome, err := Apply(root, desired, meta, server.Client(), nil, ApplyOptions{AllowUnsupported: true, VerificationMode: "allow_unsigned"})
+	outcome, err := Apply(root, desired, meta, HTTPDownloader{server.Client()}, nil, ApplyOptions{AllowUnsupported: true, VerificationMode: "allow_unsigned"})
 	if err != nil {
 		t.Fatalf("apply failed: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestApplySignatureRequiredMissing(t *testing.T) {
 		Type:       "app_bundle",
 	}
 
-	_, err := Apply(root, desired, meta, server.Client(), nil, ApplyOptions{RequireSignature: true})
+	_, err := Apply(root, desired, meta, HTTPDownloader{server.Client()}, nil, ApplyOptions{RequireSignature: true})
 	if err == nil || !strings.Contains(err.Error(), "signature required") {
 		t.Fatalf("expected signature required error, got %v", err)
 	}
@@ -186,7 +186,7 @@ func TestApplySignatureVerificationSuccess(t *testing.T) {
 		SignatureKeyID: keyID,
 	}
 
-	_, err := Apply(root, desired, meta, server.Client(), nil, ApplyOptions{
+	_, err := Apply(root, desired, meta, HTTPDownloader{server.Client()}, nil, ApplyOptions{
 		SigningPublicKeyPath: pubPath,
 		SigningKeyID:         keyID,
 		RequireSignature:     true,
@@ -221,7 +221,7 @@ func TestApplySignatureVerificationFails(t *testing.T) {
 		SignatureKeyID: keyID,
 	}
 
-	_, err := Apply(root, desired, meta, server.Client(), nil, ApplyOptions{
+	_, err := Apply(root, desired, meta, HTTPDownloader{server.Client()}, nil, ApplyOptions{
 		SigningPublicKeyPath: pubPath,
 		SigningKeyID:         keyID,
 		RequireSignature:     true,

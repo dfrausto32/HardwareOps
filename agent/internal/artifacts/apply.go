@@ -65,7 +65,32 @@ type Logger interface {
 	Errorf(format string, args ...any)
 }
 
-func Apply(root string, desired Desired, meta ArtifactMeta, httpClient *http.Client, logger Logger, opts ApplyOptions) (ApplyOutcome, error) {
+// Downloader streams artifact content from a transport-specific locator
+// (Phase F1 seam). client.Transport satisfies it; HTTPDownloader adapts a
+// bare *http.Client for tests and non-agent callers.
+type Downloader interface {
+	DownloadArtifact(url string) (io.ReadCloser, error)
+}
+
+// HTTPDownloader adapts an *http.Client to the Downloader interface with the
+// apply path's historical semantics: non-200 responses are errors.
+type HTTPDownloader struct {
+	Client *http.Client
+}
+
+func (d HTTPDownloader) DownloadArtifact(url string) (io.ReadCloser, error) {
+	resp, err := d.Client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("download failed: status=%d", resp.StatusCode)
+	}
+	return resp.Body, nil
+}
+
+func Apply(root string, desired Desired, meta ArtifactMeta, downloader Downloader, logger Logger, opts ApplyOptions) (ApplyOutcome, error) {
 	downloads := filepath.Join(root, "downloads")
 	versions := filepath.Join(root, "versions")
 	current := filepath.Join(root, "current")
@@ -87,7 +112,7 @@ func Apply(root string, desired Desired, meta ArtifactMeta, httpClient *http.Cli
 	if logger != nil {
 		logger.Infof("download start url=%s", desired.DownloadURL)
 	}
-	sum, err := downloadAndVerify(httpClient, desired.DownloadURL, archivePath, meta.SHA256)
+	sum, err := downloadAndVerify(downloader, desired.DownloadURL, archivePath, meta.SHA256)
 	if err != nil {
 		return outcome, err
 	}
@@ -196,18 +221,15 @@ func loadPlan(root string) (*plan.Plan, error) {
 	return p, nil
 }
 
-func downloadAndVerify(client *http.Client, url, dest, expectedSHA string) (string, error) {
+func downloadAndVerify(downloader Downloader, url, dest, expectedSHA string) (string, error) {
 	if url == "" {
 		return "", fmt.Errorf("missing download url")
 	}
-	resp, err := client.Get(url)
+	body, err := downloader.DownloadArtifact(url)
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download failed: status=%d", resp.StatusCode)
-	}
+	defer body.Close()
 
 	tmpDest := dest + ".tmp"
 	f, err := os.OpenFile(tmpDest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
@@ -217,7 +239,7 @@ func downloadAndVerify(client *http.Client, url, dest, expectedSHA string) (stri
 
 	h := sha256.New()
 	mw := io.MultiWriter(f, h)
-	if _, err := io.Copy(mw, resp.Body); err != nil {
+	if _, err := io.Copy(mw, body); err != nil {
 		f.Close()
 		_ = os.Remove(tmpDest)
 		return "", err

@@ -94,6 +94,9 @@ func main() {
 
 	tlsConfig := buildTLSConfig(cfg, logger)
 	c := client.NewWithTLS(cfg.ControlPlaneURL, tlsConfig)
+	// The check-in loop and apply dispatch run against the Transport seam
+	// (F1); c stays around for the HTTP-specific re-enrollment path.
+	var transport client.Transport = c
 	interval := cfg.CheckinInterval
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
@@ -105,7 +108,7 @@ func main() {
 		}
 	}
 	for {
-		resp, err := c.CheckIn(st, capabilities)
+		resp, err := transport.CheckIn(st, capabilities)
 		if err != nil {
 			if rl, ok := err.(client.RateLimitError); ok {
 				wait := rl.RetryAfter
@@ -134,6 +137,7 @@ func main() {
 				} else if reenrolled {
 					tlsConfig = buildTLSConfig(cfg, logger)
 					c = client.NewWithTLS(cfg.ControlPlaneURL, tlsConfig)
+					transport = c
 				}
 			}
 			desiredComponents := desiredComponents(resp.Desired)
@@ -152,7 +156,7 @@ func main() {
 					TrustKeys:           trustKeysFromState(st),
 					VerificationMode:    cfg.VerificationMode,
 				}
-				applyErr := applyDesiredComponents(cfg.ArtifactRoot, c, desiredComponents, &st, logger, applyOpts, cfg.MaxConsecutiveFailures)
+				applyErr := applyDesiredComponents(cfg.ArtifactRoot, transport, desiredComponents, &st, logger, applyOpts, cfg.MaxConsecutiveFailures)
 				if applyErr != nil {
 					if err := saveState(cfg.StatePath, st); err != nil {
 						logger.Warnf("save state: %v", err)
@@ -437,7 +441,7 @@ func desiredSourceForLog(desired *client.DesiredState) string {
 	return source
 }
 
-func applyDesiredComponents(root string, c *client.Client, desired map[string]client.DesiredComponent, st *state.State, logger *logging.Logger, applyOpts artifacts.ApplyOptions, maxConsecFail int) error {
+func applyDesiredComponents(root string, t client.Transport, desired map[string]client.DesiredComponent, st *state.State, logger *logging.Logger, applyOpts artifacts.ApplyOptions, maxConsecFail int) error {
 	if len(desired) == 0 {
 		return nil
 	}
@@ -455,14 +459,14 @@ func applyDesiredComponents(root string, c *client.Client, desired map[string]cl
 		if compDesired.ArtifactID == "" {
 			continue
 		}
-		if err := applyDesiredComponent(component, root, c, compDesired, st, logger, applyOpts, maxConsecFail); err != nil {
+		if err := applyDesiredComponent(component, root, t, compDesired, st, logger, applyOpts, maxConsecFail); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func applyDesiredComponent(component, root string, c *client.Client, desired client.DesiredComponent, st *state.State, logger *logging.Logger, applyOpts artifacts.ApplyOptions, maxConsecFail int) error {
+func applyDesiredComponent(component, root string, t client.Transport, desired client.DesiredComponent, st *state.State, logger *logging.Logger, applyOpts artifacts.ApplyOptions, maxConsecFail int) error {
 	st.EnsureComponents()
 	compState := st.Components[component]
 
@@ -474,7 +478,7 @@ func applyDesiredComponent(component, root string, c *client.Client, desired cli
 
 	// failReport calls reportApplyError and then increments ConsecutiveFailures.
 	failReport := func(errMsg string, outcome artifacts.ApplyOutcome, artifactID string) error {
-		applyErr := reportApplyError(c, st, component, errMsg, outcome, logger, artifactID)
+		applyErr := reportApplyError(t, st, component, errMsg, outcome, logger, artifactID)
 		st.EnsureComponents()
 		cs := st.Components[component]
 		cs.ConsecutiveFailures = compState.ConsecutiveFailures + 1
@@ -485,14 +489,14 @@ func applyDesiredComponent(component, root string, c *client.Client, desired cli
 	oldVersion := compState.CurrentVersion
 	targetVersion := desired.SoftwareVersion
 
-	meta, err := c.GetArtifact(desired.ArtifactID)
+	meta, err := t.GetArtifact(desired.ArtifactID)
 	if err != nil {
 		return failReport(fmt.Sprintf("get artifact: %v", err), artifacts.ApplyOutcome{}, desired.ArtifactID)
 	}
 
 	presign := desired.DownloadURL
 	if presign == "" {
-		pres, err := c.PresignArtifact(desired.ArtifactID)
+		pres, err := t.PresignArtifact(desired.ArtifactID)
 		if err != nil {
 			return failReport(fmt.Sprintf("presign artifact: %v", err), artifacts.ApplyOutcome{}, desired.ArtifactID)
 		}
@@ -528,7 +532,7 @@ func applyDesiredComponent(component, root string, c *client.Client, desired cli
 		SignatureKeyID:     signatureKeyIDFromMetadata(meta),
 		VerificationStatus: meta.VerificationStatus,
 		VerificationError:  meta.VerificationError,
-	}, c.HTTPClient(), logger, componentOpts)
+	}, t, logger, componentOpts)
 	if err != nil {
 		errMsg := fmt.Sprintf("apply artifact: %v", err)
 		if oldVersion != "" {
@@ -558,7 +562,7 @@ func applyDesiredComponent(component, root string, c *client.Client, desired cli
 	}
 	logger.Infof("apply success component=%s version=%s", component, targetVersion)
 
-	if err := c.PostApplyResult(st.DeviceID, client.ApplyResultRequest{
+	if err := t.PostApplyResult(st.DeviceID, client.ApplyResultRequest{
 		Status:           "success",
 		ArtifactID:       desired.ArtifactID,
 		Component:        component,
@@ -663,7 +667,7 @@ func signatureTypeFromMetadata(meta *client.ArtifactResponse) string {
 	return strings.TrimSpace(val)
 }
 
-func reportApplyError(c *client.Client, st *state.State, component string, errMsg string, outcome artifacts.ApplyOutcome, logger *logging.Logger, artifactID string) error {
+func reportApplyError(t client.Transport, st *state.State, component string, errMsg string, outcome artifacts.ApplyOutcome, logger *logging.Logger, artifactID string) error {
 	st.EnsureComponents()
 	compState := st.Components[component]
 	compState.LastApplyStatus = "error"
@@ -679,7 +683,7 @@ func reportApplyError(c *client.Client, st *state.State, component string, errMs
 	if component == "app_bundle" {
 		syncTopLevelFromComponent(st, compState)
 	}
-	if err := c.PostApplyResult(st.DeviceID, client.ApplyResultRequest{
+	if err := t.PostApplyResult(st.DeviceID, client.ApplyResultRequest{
 		Status:         "error",
 		ArtifactID:     artifactID,
 		Component:      component,
