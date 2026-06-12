@@ -28,12 +28,26 @@ type Config struct {
 	LogExportAddr          string
 	LogLevel               string
 	AllowUnsupportedApply  bool
-	SigningPubKeyPath       string
-	SigningKeyID            string
-	RequireSignature        bool
-	AutoReenroll            bool
-	VerificationMode        string
-	MaxConsecutiveFailures  int
+	SigningPubKeyPath      string
+	SigningKeyID           string
+	RequireSignature       bool
+	AutoReenroll           bool
+	VerificationMode       string
+	MaxConsecutiveFailures int
+
+	// Firmware apply (Phase F2). Flashing activates when slot paths (A/B) or
+	// a single-image path are configured; otherwise firmware artifacts keep
+	// returning "not implemented" (or use the ALLOW_UNSUPPORTED_APPLY demo path).
+	FirmwareDeviceModel     string
+	FirmwareHWRevision      string
+	FirmwareSlotAPath       string
+	FirmwareSlotBPath       string
+	FirmwareSingleImagePath string
+	FirmwareStateFile       string
+	FirmwareStagingDir      string
+	FirmwarePreflightCmd    string
+	FirmwareBootSwitchCmd   string
+	FirmwareHealthCmd       string
 }
 
 func FromEnv() Config {
@@ -109,10 +123,10 @@ func FromEnv() Config {
 		LogExportAddr:          os.Getenv("LOG_EXPORT_ADDR"),
 		LogLevel:               os.Getenv("LOG_LEVEL"),
 		AllowUnsupportedApply:  parseBoolEnv("ALLOW_UNSUPPORTED_APPLY"),
-		SigningPubKeyPath:       os.Getenv("SIGNING_PUB_KEY_PATH"),
-		SigningKeyID:            os.Getenv("SIGNING_KEY_ID"),
-		RequireSignature:        parseBoolEnv("REQUIRE_ARTIFACT_SIGNATURE"),
-		AutoReenroll:            parseBoolEnvDefault("AUTO_REENROLL", true),
+		SigningPubKeyPath:      os.Getenv("SIGNING_PUB_KEY_PATH"),
+		SigningKeyID:           os.Getenv("SIGNING_KEY_ID"),
+		RequireSignature:       parseBoolEnv("REQUIRE_ARTIFACT_SIGNATURE"),
+		AutoReenroll:           parseBoolEnvDefault("AUTO_REENROLL", true),
 		VerificationMode: func() string {
 			mode := strings.TrimSpace(strings.ToLower(os.Getenv("ARTIFACT_SIGNING_MODE")))
 			if mode == "" {
@@ -121,6 +135,17 @@ func FromEnv() Config {
 			return mode
 		}(),
 		MaxConsecutiveFailures: maxConsecFail,
+
+		FirmwareDeviceModel:     strings.TrimSpace(os.Getenv("FIRMWARE_DEVICE_MODEL")),
+		FirmwareHWRevision:      strings.TrimSpace(os.Getenv("FIRMWARE_HW_REVISION")),
+		FirmwareSlotAPath:       strings.TrimSpace(os.Getenv("FIRMWARE_SLOT_A_PATH")),
+		FirmwareSlotBPath:       strings.TrimSpace(os.Getenv("FIRMWARE_SLOT_B_PATH")),
+		FirmwareSingleImagePath: strings.TrimSpace(os.Getenv("FIRMWARE_SINGLE_IMAGE_PATH")),
+		FirmwareStateFile:       strings.TrimSpace(os.Getenv("FIRMWARE_STATE_FILE")),
+		FirmwareStagingDir:      strings.TrimSpace(os.Getenv("FIRMWARE_STAGING_DIR")),
+		FirmwarePreflightCmd:    strings.TrimSpace(os.Getenv("FIRMWARE_PREFLIGHT_CMD")),
+		FirmwareBootSwitchCmd:   strings.TrimSpace(os.Getenv("FIRMWARE_BOOT_SWITCH_CMD")),
+		FirmwareHealthCmd:       strings.TrimSpace(os.Getenv("FIRMWARE_HEALTH_CMD")),
 	}
 }
 

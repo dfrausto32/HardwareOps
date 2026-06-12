@@ -25,6 +25,7 @@ import (
 	"github.com/parcel/agent/internal/artifacts"
 	"github.com/parcel/agent/internal/client"
 	"github.com/parcel/agent/internal/config"
+	"github.com/parcel/agent/internal/firmware"
 	"github.com/parcel/agent/internal/logging"
 	"github.com/parcel/agent/internal/state"
 )
@@ -92,6 +93,33 @@ func main() {
 		}
 	}
 
+	// Firmware flashing (F2) activates only when slot paths are configured;
+	// otherwise firmware artifacts keep the stub/demo behavior.
+	if cfg.FirmwareSlotAPath != "" || cfg.FirmwareSingleImagePath != "" {
+		fwStateFile := cfg.FirmwareStateFile
+		if fwStateFile == "" {
+			fwStateFile = filepath.Join(cfg.ArtifactRoot, "firmware", "state.json")
+		}
+		fwApplier, err := firmware.New(firmware.Config{
+			DeviceModel:     cfg.FirmwareDeviceModel,
+			HWRevision:      cfg.FirmwareHWRevision,
+			SlotAPath:       cfg.FirmwareSlotAPath,
+			SlotBPath:       cfg.FirmwareSlotBPath,
+			SingleImagePath: cfg.FirmwareSingleImagePath,
+			StateFile:       fwStateFile,
+			StagingDir:      cfg.FirmwareStagingDir,
+			PreflightCmd:    cfg.FirmwarePreflightCmd,
+			BootSwitchCmd:   cfg.FirmwareBootSwitchCmd,
+			HealthCmd:       cfg.FirmwareHealthCmd,
+		})
+		if err != nil {
+			logger.Errorf("firmware apply disabled: %v", err)
+		} else {
+			artifacts.SetFirmwareApplier(fwApplier)
+			logger.Infof("firmware apply enabled (state=%s)", fwStateFile)
+		}
+	}
+
 	tlsConfig := buildTLSConfig(cfg, logger)
 	c := client.NewWithTLS(cfg.ControlPlaneURL, tlsConfig)
 	// The check-in loop and apply dispatch run against the Transport seam
@@ -149,12 +177,12 @@ func main() {
 
 			if len(desiredComponents) > 0 {
 				applyOpts := artifacts.ApplyOptions{
-					AllowUnsupported:    cfg.AllowUnsupportedApply,
+					AllowUnsupported:     cfg.AllowUnsupportedApply,
 					SigningPublicKeyPath: cfg.SigningPubKeyPath,
-					SigningKeyID:        cfg.SigningKeyID,
-					RequireSignature:    cfg.RequireSignature,
-					TrustKeys:           trustKeysFromState(st),
-					VerificationMode:    cfg.VerificationMode,
+					SigningKeyID:         cfg.SigningKeyID,
+					RequireSignature:     cfg.RequireSignature,
+					TrustKeys:            trustKeysFromState(st),
+					VerificationMode:     cfg.VerificationMode,
 				}
 				applyErr := applyDesiredComponents(cfg.ArtifactRoot, transport, desiredComponents, &st, logger, applyOpts, cfg.MaxConsecutiveFailures)
 				if applyErr != nil {

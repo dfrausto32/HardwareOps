@@ -63,3 +63,11 @@ func (containerImageApplierStub) ApplyContainerImage(_ ApplyContext) error {
 
 var defaultFirmwareApplier FirmwareApplier = firmwareApplierStub{}
 var defaultContainerImageApplier ContainerImageApplier = containerImageApplierStub{}
+
+// SetFirmwareApplier replaces the stub with a real implementation (Phase F2).
+// Called once at agent startup when firmware flashing is configured.
+func SetFirmwareApplier(applier FirmwareApplier) {
+	if applier != nil {
+		defaultFirmwareApplier = applier
+	}
+}
