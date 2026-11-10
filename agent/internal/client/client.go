@@ -102,6 +102,8 @@ type CheckinComponent struct {
 	LastPreApplyStatus  string     `json:"lastPreApplyStatus,omitempty"`
 	LastPreApplyError   string     `json:"lastPreApplyError,omitempty"`
 	LastPreApplyAt      *time.Time `json:"lastPreApplyAt,omitempty"`
+	// Download is present only while a download is in flight or deferred.
+	Download *state.DownloadState `json:"download,omitempty"`
 }
 
 type DesiredState struct {
@@ -326,6 +328,7 @@ func (c *Client) CheckIn(st state.State, capabilities any) (*CheckinResponse, er
 				LastPreApplyStatus:  comp.LastPreApplyStatus,
 				LastPreApplyError:   comp.LastPreApplyError,
 				LastPreApplyAt:      timePtr(comp.LastPreApplyAt),
+				Download:            comp.Download,
 			}
 		}
 	}

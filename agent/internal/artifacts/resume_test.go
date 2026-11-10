@@ -343,7 +343,7 @@ func (p plainDownloader) DownloadArtifact(string) (io.ReadCloser, error) {
 func TestNonRangeDownloaderFallsBack(t *testing.T) {
 	payload, sum := testPayload(2_000)
 	dest := filepath.Join(t.TempDir(), "a.tar.gz")
-	got, err := downloadAndVerify(plainDownloader{payload}, "stub://x", dest, sum, nil)
+	got, err := downloadAndVerify(plainDownloader{payload}, "stub://x", dest, sum, ApplyOptions{})
 	if err != nil || got != sum {
 		t.Fatalf("fallback failed: %v %s", err, got)
 	}

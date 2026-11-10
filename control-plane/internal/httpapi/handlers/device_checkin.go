@@ -40,15 +40,65 @@ type DeviceCurrent struct {
 }
 
 type DeviceCurrentComponent struct {
-	SoftwareVersion     string     `json:"softwareVersion,omitempty"`
-	ConfigRev           string     `json:"configRev,omitempty"`
-	LastApplyStatus     string     `json:"lastApplyStatus,omitempty"`
-	LastApplyError      string     `json:"lastApplyError,omitempty"`
-	LastApplyAt         *time.Time `json:"lastApplyAt,omitempty"`
-	LastApplyArtifactID string     `json:"lastApplyArtifactId,omitempty"`
-	LastPreApplyStatus  string     `json:"lastPreApplyStatus,omitempty"`
-	LastPreApplyError   string     `json:"lastPreApplyError,omitempty"`
-	LastPreApplyAt      *time.Time `json:"lastPreApplyAt,omitempty"`
+	SoftwareVersion     string          `json:"softwareVersion,omitempty"`
+	ConfigRev           string          `json:"configRev,omitempty"`
+	LastApplyStatus     string          `json:"lastApplyStatus,omitempty"`
+	LastApplyError      string          `json:"lastApplyError,omitempty"`
+	LastApplyAt         *time.Time      `json:"lastApplyAt,omitempty"`
+	LastApplyArtifactID string          `json:"lastApplyArtifactId,omitempty"`
+	LastPreApplyStatus  string          `json:"lastPreApplyStatus,omitempty"`
+	LastPreApplyError   string          `json:"lastPreApplyError,omitempty"`
+	LastPreApplyAt      *time.Time      `json:"lastPreApplyAt,omitempty"`
+	Download            *DeviceDownload `json:"download,omitempty"`
+}
+
+// DeviceDownload is an agent-reported in-flight or deferred artifact download
+// (resumable-download track T3). It is replaced wholesale on every check-in:
+// absence means no download is in progress. It never affects device status —
+// a slow or deferred download is not a degraded device.
+type DeviceDownload struct {
+	ArtifactID     string    `json:"artifactId"`
+	State          string    `json:"state"` // "downloading" | "waiting"
+	Reason         string    `json:"reason,omitempty"`
+	BytesDone      int64     `json:"bytesDone"`
+	BytesTotal     int64     `json:"bytesTotal"`
+	StartedAt      time.Time `json:"startedAt"`
+	LastProgressAt time.Time `json:"lastProgressAt"`
+	Attempts       int       `json:"attempts"`
+}
+
+const maxDownloadReasonLen = 200
+
+// sanitizeDownload validates agent-supplied progress before it is stored and
+// shown to operators: unknown states are dropped, counters are clamped to be
+// non-negative and consistent, and free text is length-bounded.
+func sanitizeDownload(d *DeviceDownload) *DeviceDownload {
+	if d == nil {
+		return nil
+	}
+	if d.State != "downloading" && d.State != "waiting" {
+		return nil
+	}
+	out := *d
+	if out.BytesDone < 0 {
+		out.BytesDone = 0
+	}
+	if out.BytesTotal < 0 {
+		out.BytesTotal = 0
+	}
+	if out.BytesTotal > 0 && out.BytesDone > out.BytesTotal {
+		out.BytesDone = out.BytesTotal
+	}
+	if out.Attempts < 0 {
+		out.Attempts = 0
+	}
+	if len(out.Reason) > maxDownloadReasonLen {
+		out.Reason = out.Reason[:maxDownloadReasonLen]
+	}
+	if len(out.ArtifactID) > 128 {
+		out.ArtifactID = out.ArtifactID[:128]
+	}
+	return &out
 }
 
 type DeviceComponentState struct {
@@ -61,6 +111,9 @@ type DeviceComponentState struct {
 	LastPreApplyStatus  string     `json:"lastPreApplyStatus,omitempty"`
 	LastPreApplyError   string     `json:"lastPreApplyError,omitempty"`
 	LastPreApplyAt      *time.Time `json:"lastPreApplyAt,omitempty"`
+	// Download is the agent's current download progress; not carried over from
+	// the previous check-in (absent = nothing downloading).
+	Download *DeviceDownload `json:"download,omitempty"`
 }
 
 type DeviceCheckinResponse struct {
@@ -587,6 +640,7 @@ func mergeComponentCurrent(cur DeviceCurrentComponent, prev DeviceComponentState
 		LastPreApplyStatus:  cur.LastPreApplyStatus,
 		LastPreApplyError:   cur.LastPreApplyError,
 		LastPreApplyAt:      cur.LastPreApplyAt,
+		Download:            sanitizeDownload(cur.Download),
 	}
 	if state.CurrentVersion == "" {
 		state.CurrentVersion = prev.CurrentVersion

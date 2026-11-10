@@ -48,7 +48,28 @@ type ComponentState struct {
 	LastPreApplyError   string    `json:"lastPreApplyError,omitempty"`
 	LastPreApplyAt      time.Time `json:"lastPreApplyAt,omitempty"`
 	ConsecutiveFailures int       `json:"consecutiveFailures,omitempty"`
+	// Download is set while an artifact download is in flight or deferred
+	// (roadmap T3); nil when nothing is downloading.
+	Download *DownloadState `json:"download,omitempty"`
 }
+
+// DownloadState is the agent-side view of an in-progress resumable download,
+// reported to the control plane on check-in.
+type DownloadState struct {
+	ArtifactID     string    `json:"artifactId"`
+	State          string    `json:"state"`            // "downloading" | "waiting"
+	Reason         string    `json:"reason,omitempty"` // why waiting (window, budget, stalled link...)
+	BytesDone      int64     `json:"bytesDone"`
+	BytesTotal     int64     `json:"bytesTotal"`
+	StartedAt      time.Time `json:"startedAt"`
+	LastProgressAt time.Time `json:"lastProgressAt"`
+	Attempts       int       `json:"attempts"`
+}
+
+const (
+	DownloadStateDownloading = "downloading"
+	DownloadStateWaiting     = "waiting"
+)
 
 func Load(path string) (State, error) {
 	f, err := os.Open(path)

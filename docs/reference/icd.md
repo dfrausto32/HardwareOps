@@ -298,6 +298,35 @@ Deploy triggers signal one or more devices to skip their normal check-in interva
 
 When a trigger is pending, the device's next `POST /devices/checkin` response includes `"immediateRecheckin": true`, causing the agent to skip its sleep interval and re-check in within seconds.
 
+#### Download progress in check-in (`currentComponents[*].download`)
+
+While an artifact download is in flight or deliberately deferred, the agent includes a `download` object on the affected component of `POST /devices/checkin` (also sent as throttled heartbeat check-ins during long transfers):
+
+```json
+{
+  "currentComponents": {
+    "app_bundle": {
+      "softwareVersion": "1.0.0",
+      "download": {
+        "artifactId": "uuid",
+        "state": "downloading",
+        "reason": "",
+        "bytesDone": 4194304,
+        "bytesTotal": 10485760,
+        "startedAt": "2026-11-10T10:00:00Z",
+        "lastProgressAt": "2026-11-10T10:05:00Z",
+        "attempts": 2
+      }
+    }
+  }
+}
+```
+
+- `state`: `downloading` (bytes flowing) or `waiting` (paused by the agent; `reason` is a short, non-sensitive string such as `outside transfer window`, `byte budget reached`, `stalled after N attempts`). Any other value is discarded.
+- The object is replaced on every check-in: omitting it means nothing is downloading. The control plane clamps counters (`bytesDone ≤ bytesTotal`, non-negative) and bounds string lengths.
+- It is returned to operators in `GET /api/v1/devices/{id}` under `current.components.<name>.download`. Progress never changes device `status`: a downloading or waiting device stays `active`, and no failed apply result is posted for transient transfer problems. Integrity failures (SHA-256 mismatch) and permanent errors still fail the apply.
+- Agent downloads are resumable via HTTP `Range`/`If-Range` against the presigned object URL; see `docs/development/resumable-downloads.md`.
+
 ### 5.10 Metrics
 
 - Metrics route is configurable (`MetricsPath` in control-plane config; commonly `/metrics`)

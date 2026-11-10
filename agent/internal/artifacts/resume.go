@@ -42,7 +42,40 @@ type resumeConfig struct {
 	CheckpointBytes    int64         // fsync + persist sidecar every N bytes
 	MaxRefreshes       int           // consecutive URL refreshes without progress before failing
 	Sleep              func(time.Duration)
+
+	// Transfer controls (roadmap T3). Zero values mean "unlimited".
+	MaxBytesPerSec int64               // pace body reads to at most this rate
+	ByteBudget     int64               // stop (deferred, not failed) after this many bytes this call
+	Throttle       func(time.Duration) // sleep used for pacing; defaults to time.Sleep
+	OnProgress     func(committed, total int64)
+
+	budget *transferBudget
 }
+
+type transferBudget struct{ left int64 }
+
+var errBudgetReached = errors.New("byte budget reached")
+
+// DownloadIncompleteError reports a download that did not finish for a
+// transient reason (stalled link, busy partial, byte budget). It is NOT an
+// apply failure: the partial is kept and the next check-in resumes it, so
+// callers must not count it toward consecutive-failure safe-halt or post a
+// failed apply result.
+type DownloadIncompleteError struct {
+	Committed, Total int64
+	Reason           string
+	Err              error
+}
+
+func (e *DownloadIncompleteError) Error() string {
+	msg := fmt.Sprintf("download incomplete (%s) at %d/%d bytes", e.Reason, e.Committed, e.Total)
+	if e.Err != nil {
+		msg += ": " + e.Err.Error()
+	}
+	return msg
+}
+
+func (e *DownloadIncompleteError) Unwrap() error { return e.Err }
 
 var defaultResumeConfig = resumeConfig{
 	MaxStalledAttempts: 6,
@@ -52,6 +85,18 @@ var defaultResumeConfig = resumeConfig{
 	CheckpointBytes:    4 << 20,
 	MaxRefreshes:       3,
 	Sleep:              time.Sleep,
+}
+
+// ConfigureDownloadRetry overrides the in-attempt retry policy (consecutive
+// attempts without progress, and the jittered backoff bounds) and returns a
+// function that restores the previous policy. Intended for tests and
+// operator tuning at startup; not safe to call while downloads are running.
+func ConfigureDownloadRetry(maxStalled int, base, max time.Duration) (restore func()) {
+	prev := defaultResumeConfig
+	defaultResumeConfig.MaxStalledAttempts = maxStalled
+	defaultResumeConfig.BaseBackoff = base
+	defaultResumeConfig.MaxBackoff = max
+	return func() { defaultResumeConfig = prev }
 }
 
 // partState is the persisted sidecar describing a partial download.
@@ -113,9 +158,15 @@ func downloadResumableWith(cfg resumeConfig, rd RangeDownloader, url, dest, expe
 	// One writer per partial: two agents/applies must not interleave bytes.
 	release, err := acquirePartLock(partPath + ".lock")
 	if err != nil {
-		return "", err
+		return "", &DownloadIncompleteError{Reason: "busy", Err: err}
 	}
 	defer release()
+	if cfg.ByteBudget > 0 {
+		cfg.budget = &transferBudget{left: cfg.ByteBudget}
+	}
+	if cfg.Throttle == nil {
+		cfg.Throttle = time.Sleep
+	}
 
 	st, ok := loadPartState(metaPath)
 	// A partial is only trusted when it belongs to this exact artifact hash.
@@ -130,7 +181,7 @@ func downloadResumableWith(cfg resumeConfig, rd RangeDownloader, url, dest, expe
 	var lastErr error
 	for {
 		if stalled > cfg.MaxStalledAttempts {
-			return "", fmt.Errorf("download stalled after %d attempts (partial kept at %d bytes): %w", stalled, st.Committed, lastErr)
+			return "", &DownloadIncompleteError{Committed: st.Committed, Total: st.Total, Reason: fmt.Sprintf("stalled after %d attempts", stalled), Err: lastErr}
 		}
 		if stalled > 0 {
 			cfg.Sleep(backoff(cfg, stalled))
@@ -141,6 +192,9 @@ func downloadResumableWith(cfg resumeConfig, rd RangeDownloader, url, dest, expe
 			sum, ferr := finalizeDownload(partPath, metaPath, dest, expectedSHA)
 			_ = os.Remove(partPath + ".lock")
 			return sum, ferr
+		}
+		if errors.Is(err, errBudgetReached) {
+			return "", &DownloadIncompleteError{Committed: st.Committed, Total: st.Total, Reason: "byte budget reached"}
 		}
 		if err != nil {
 			var se httprange.StatusError
@@ -247,24 +301,60 @@ func resumeAttempt(cfg resumeConfig, rd RangeDownloader, url, partPath, metaPath
 		return false, false, err
 	}
 
-	buf := make([]byte, 32<<10)
+	// Chunks are capped near one second of data at the paced rate so the
+	// idle-read watchdog never mistakes deliberate pacing for a dead link.
+	bufSize := int64(32 << 10)
+	if cfg.MaxBytesPerSec > 0 && cfg.MaxBytesPerSec < bufSize {
+		bufSize = cfg.MaxBytesPerSec
+		if bufSize < 512 {
+			bufSize = 512
+		}
+	}
+	buf := make([]byte, bufSize)
 	sinceCheckpoint := int64(0)
 	start := st.Committed
+	t0 := time.Now()
+	budgetHit := false
 	var copyErr error
+	if cfg.OnProgress != nil {
+		cfg.OnProgress(st.Committed, st.Total)
+	}
 	for {
-		n, rerr := body.Read(buf)
+		p := buf
+		if cfg.budget != nil {
+			if cfg.budget.left <= 0 {
+				budgetHit = true
+				break
+			}
+			if int64(len(p)) > cfg.budget.left {
+				p = p[:cfg.budget.left]
+			}
+		}
+		n, rerr := body.Read(p)
 		if n > 0 {
-			if _, werr := f.Write(buf[:n]); werr != nil {
+			if _, werr := f.Write(p[:n]); werr != nil {
 				copyErr = werr
 				break
 			}
 			st.Committed += int64(n)
 			sinceCheckpoint += int64(n)
+			if cfg.budget != nil {
+				cfg.budget.left -= int64(n)
+			}
 			if sinceCheckpoint >= cfg.CheckpointBytes {
 				if err := f.Sync(); err == nil {
 					savePartState(metaPath, *st)
 				}
 				sinceCheckpoint = 0
+				if cfg.OnProgress != nil {
+					cfg.OnProgress(st.Committed, st.Total)
+				}
+			}
+			if cfg.MaxBytesPerSec > 0 {
+				want := time.Duration((st.Committed - start) * int64(time.Second) / cfg.MaxBytesPerSec)
+				if d := want - time.Since(t0); d > 0 {
+					cfg.Throttle(d)
+				}
 			}
 		}
 		if rerr == io.EOF {
@@ -283,8 +373,14 @@ func resumeAttempt(cfg resumeConfig, rd RangeDownloader, url, partPath, metaPath
 		copyErr = err
 	}
 	progressed = st.Committed > start
+	if cfg.OnProgress != nil {
+		cfg.OnProgress(st.Committed, st.Total)
+	}
 	if copyErr != nil {
 		return progressed, false, copyErr
+	}
+	if budgetHit && !(st.Total > 0 && st.Committed == st.Total) {
+		return progressed, false, errBudgetReached
 	}
 	if st.Total > 0 && st.Committed != st.Total {
 		return progressed, false, fmt.Errorf("short body: have %d of %d bytes", st.Committed, st.Total)

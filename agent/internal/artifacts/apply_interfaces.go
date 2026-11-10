@@ -13,6 +13,12 @@ type ApplyOptions struct {
 	// for resume; zero selects defaults (7 days, 2 GiB).
 	PartialMaxAge   time.Duration
 	PartialMaxBytes int64
+	// Transfer controls for constrained links (roadmap T3); zero = unlimited.
+	TransferWindow *TransferWindow // downloads only start inside this window; nil = always
+	MaxBytesPerSec int64           // pace downloads to at most this rate
+	ByteBudget     int64 // max bytes fetched per apply; the rest resumes next check-in
+	// OnProgress is called with (committed, total) as bytes are persisted.
+	OnProgress func(committed, total int64)
 
 	AllowUnsupported      bool
 	SigningPublicKeyPath  string
