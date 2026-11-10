@@ -31,6 +31,7 @@ Use this section as the single source of truth for "what is done" vs "what is le
 
 - ✅ **Global-plane operator-auth Phase 2 shipped** — generic OIDC SSO on the global-plane via `auth.NewOIDCProviderWithConfig` (reuses regional stack: provider discovery, code exchange, group→role mapping, user upsert, audit). `OIDCConfig` struct + `OIDCStore` interface extracted from `auth.OIDCProvider` so any store can satisfy it. New users created on first SSO login; existing users updated by role. `Sign in with SSO` button in global UI. 6 new Go tests with mock OIDC IdP. (PR: `feat/global-plane-auth-phase2`)
 - ✅ **Ransomware controls R-01–R-05 shipped (2026-06-12)** — all five overdue controls from `ransomware-protection-policy.md` §3.2 implemented: R-01 Object Lock/WORM (Terraform `enable_object_lock` + MinIO `S3_OBJECT_LOCK=1`), R-02 artifact upload/delete rate limits (`ARTIFACT_UPLOAD_RPM`/`ARTIFACT_DELETE_RPM`), R-03 bulk-deletion anomaly detection (`security.anomaly.bulk_artifact_deletion` runtime event), R-04 force-delete elevated to admin with distinct `artifact.force_delete` audit action, R-05 isolated write-only backup bucket (`modules/backup_store`). Remaining: enable the two opt-in Terraform controls per production stack.
+- **Resumable downloads for contested networks (T1–T4)** — planned 2026-11-10. Agent currently restarts at byte 0 on any interruption and a 30s whole-request client timeout fails any longer download. See "Contested-Network Transfer Resilience" section and `development/resumable-downloads.md`. Start with T1.
 - **Stand up the comprehensive test & simulation pipeline** — see the new "Quality Engineering" section (Q1–Q5): coverage backlog, extended/nightly E2E, embedded-device simulation repo (`parcel-device-sim`), and unreliable-network simulation.
 - **Create `security@parcel.io` inbox** — `SECURITY.md` (VDP) is published and references this address. The mailbox must exist before the repo goes public or is shared with customers. Assign to ops/legal owner.
 - **Populate IR runbook escalation contacts** — `docs/incidents/ir-runbook.md` Section 5 has placeholder names/contacts for IC, Technical Lead, Communications Lead, Legal, and Executive escalation. Replace before first production deployment.
@@ -772,6 +773,51 @@ Inter-plane authentication uses the existing service token mechanism (`federatio
 
 ---
 
+## Contested-Network Transfer Resilience (Resumable Downloads)
+**Goal:** Artifact delivery completes on intermittent, contested, bandwidth-constrained links by resuming from the last verified byte instead of restarting. Design and phased plan: `development/resumable-downloads.md`.
+
+**Current gap (reviewed 2026-11-10):** `downloadAndVerify` (`agent/internal/artifacts/apply.go`) opens the temp file with `O_TRUNC` and issues a plain `GET`; any mid-stream error deletes the partial file and the next attempt restarts at byte 0. The shared agent `http.Client` has `Timeout: 30s` (`agent/internal/client/client.go`), which in Go bounds the *entire* request including body read — so any artifact that takes longer than 30s to download fails every time. There is no `Range`/`If-Range` use anywhere in agent or control-plane, and no in-attempt retry.
+
+### Definition of Done
+- An interrupted download resumes via HTTP `Range` from the persisted partial file across drops, agent restarts, and presigned-URL expiry
+- Resumed content is verified end-to-end (SHA-256 of the full file + existing signature check) before apply; corrupt/changed partials are discarded, never applied
+- Large artifacts download over slow links without being killed by a whole-request timeout
+- Transfers back off with jitter and respect bandwidth/metered-link limits
+- Behavior is proven under Q4 network-fault injection
+
+### Feature Templates
+
+#### T1 — Resumable agent download (core)
+- **Status:** 🟢 Complete (2026-11-10)
+- **Implemented:** `agent/internal/artifacts/resume.go` (`downloadResumable`): `<id>.tar.gz.part` + `.part.meta` sidecar keyed by expected SHA-256, `Range`/`If-Range`, handling of 200/206/416, fsync checkpoints every 4 MiB, progress-based retry budget with exponential full-jitter backoff, 60s idle-read watchdog, 4xx (non-408/429) not retried, SHA-256 mismatch discards the partial (fail closed). `agent/internal/httprange` shares the ranged GET between `client.Client` and `HTTPDownloader`. Agent bulk downloads use a separate `http.Client` with no whole-request timeout (the 30s control-call timeout is unchanged). Transports without `RangeDownloader` (stubs, future BLE/serial) fall back to the old single-shot fetch, so the `Transport` interface is unchanged. 9 fault-injection tests (repeated mid-body drops with exact-byte-count assertion, restart-survival, ETag change, wrong-artifact partial, 200-ignores-range, 403 vs 503, idle stall), clean under `-race`. Not yet done: re-presign on expiry and kill -9 hardening (T2), progress reporting (T3).
+- **Scope:** Replace truncate-and-restart with a resumable fetch: persist `<id>.tar.gz.part` plus a small sidecar (artifact SHA-256, expected size, ETag/validator, bytes committed); on retry send `Range: bytes=N-` with `If-Range`; accept `206`, fall back to full restart on `200`/`416`/validator mismatch; hash the existing prefix on resume (or persist hash state) so the final SHA-256 covers the whole file. Bounded in-attempt retry with exponential backoff + jitter. Replace the 30s whole-request client timeout with dial/TLS/response-header/idle-read timeouts for the download client.
+- **Dependencies:** None (MinIO presigned GETs already honor `Range`). Builds on the F1 `Transport.DownloadArtifact` seam — extend it to take an offset (e.g. `DownloadArtifactRange(url, offset)`).
+- **Risks:** Hash-state correctness on resume; stale partials after the artifact is re-uploaded/replaced (key partials by artifact ID + SHA-256, not ID alone); disk exhaustion from abandoned partials.
+- **Acceptance:** Test server that drops the connection mid-body N times still yields a byte-identical, hash-verified artifact; a changed ETag/SHA discards the partial; a transfer slower than 30s succeeds; `go test ./...` in `agent/` green.
+
+#### T2 — Presigned-URL expiry & checkpoint durability
+- **Status:** ⬜ Planned
+- **Scope:** On `401/403` (expired presign) mid-resume, re-run `PresignArtifact` and continue from the same offset. Fsync the partial and sidecar at checkpoint intervals so a power loss or agent crash resumes safely; truncate any bytes beyond the last checkpoint. Partial-file GC (age/space cap) and a per-component lock so concurrent applies don't corrupt a shared partial.
+- **Dependencies:** T1.
+- **Risks:** Re-presign requires reaching the control plane — when only the object store is reachable this must degrade to "wait and retry", not fail the apply permanently.
+- **Acceptance:** Download that outlives the presign TTL completes; kill -9 of the agent mid-download resumes without restart from zero; stale partials are garbage-collected.
+
+#### T3 — Offline-tolerant apply scheduling & progress reporting
+- **Status:** ⬜ Planned
+- **Scope:** Treat "download incomplete" as in-progress, not failed: do not post a failed apply-result for transient transport errors; report `downloading` progress (bytes/total, last-progress time) via check-in so operators see stalled vs. progressing devices. Add configurable transfer windows, bandwidth cap, and per-attempt byte budget for metered/contested links.
+- **Dependencies:** T1; control-plane device status model (Phase A); UI device detail.
+- **Risks:** New device status values touch API contract (ICD) and UI; avoid noisy check-in payload growth.
+- **Acceptance:** A device on a flapping link shows `downloading` with advancing progress and never reports a spurious failure; transfer window/bandwidth settings are honored.
+
+#### T4 — Chunk-level integrity & multi-source (optional hardening)
+- **Status:** ⬜ Backlog
+- **Scope:** Publish per-chunk hashes in artifact metadata so a corrupt partial is repaired at chunk granularity rather than discarded; optional peer/gateway cache so one device's completed download serves siblings on the local link; control-plane Range/ETag passthrough for non-presigned (on-prem proxy) paths. Shares the chunked-resume design with F4 (BLE OTA).
+- **Dependencies:** T1–T3; F3/F4 for the gateway relay case.
+- **Risks:** Metadata/schema change and signing implications; peer sharing widens the trust surface (verification must stay at the receiver).
+- **Acceptance:** TBD after T1–T3 field data.
+
+---
+
 ## Quality Engineering — Comprehensive Test & Simulation Pipeline
 
 > **Goal:** Every component and cross-component flow is exercised in GitHub Actions on each change, in an environment that mimics real-world deployments as closely as possible — TLS/mTLS, real datastores, real built binaries, unreliable/offline networks, and eventually real embedded-device firmware. New development lands with tests at the appropriate layer; regressions are caught before merge, not in the field.
@@ -813,6 +859,7 @@ Inter-plane authentication uses the existing service token mechanism (`federatio
 - **Scope:** Explicitly test the core promise — operation in unreliable, bandwidth-constrained, intermittently-offline environments. Inject latency/jitter/packet-loss/partition (`tc netem`, toxiproxy) between agent↔control-plane and regional↔global. Assert: agents back off + jitter correctly, apply/rollback survive mid-transfer disconnects, federation reconcilers recover after partitions, and cached desired-state / enrollment-profiles are used when offline.
 - **Dependencies:** Q2 harness; network-shaping in CI.
 - **Acceptance:** deterministic scenarios for offline check-in, interrupted artifact download, and regional↔global partition recovery.
+- **Notes:** The interrupted-download scenario is the acceptance harness for T1–T3 (Contested-Network Transfer Resilience, above): drop/throttle the agent↔MinIO link mid-transfer and assert resume-from-offset, not restart.
 
 #### Q5 — CI orchestration & required checks
 - **Status:** 🟡 In progress

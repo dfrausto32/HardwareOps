@@ -225,6 +225,15 @@ func downloadAndVerify(downloader Downloader, url, dest, expectedSHA string) (st
 	if url == "" {
 		return "", fmt.Errorf("missing download url")
 	}
+	// Resumable path (roadmap T1) when the transport can do ranged reads;
+	// otherwise fall back to a single full fetch.
+	if rd, ok := downloader.(RangeDownloader); ok {
+		return downloadResumable(defaultResumeConfig, rd, url, dest, expectedSHA)
+	}
+	return downloadAndVerifyOnce(downloader, url, dest, expectedSHA)
+}
+
+func downloadAndVerifyOnce(downloader Downloader, url, dest, expectedSHA string) (string, error) {
 	body, err := downloader.DownloadArtifact(url)
 	if err != nil {
 		return "", err

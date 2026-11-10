@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/parcel/agent/internal/httprange"
 	"github.com/parcel/agent/internal/state"
 )
 
@@ -48,7 +49,7 @@ func (c *Client) DownloadArtifact(url string) (io.ReadCloser, error) {
 	if url == "" {
 		return nil, fmt.Errorf("missing download url")
 	}
-	resp, err := c.http.Get(url)
+	resp, err := c.downloadHTTP().Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -57,4 +58,28 @@ func (c *Client) DownloadArtifact(url string) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("download failed: status=%d", resp.StatusCode)
 	}
 	return resp.Body, nil
+}
+
+// DownloadArtifactRange performs one ranged GET for the resumable download
+// path (roadmap T1). It satisfies artifacts.RangeDownloader; transports that
+// cannot resume simply omit it and the apply path falls back to a full fetch.
+func (c *Client) DownloadArtifactRange(url string, offset int64, validator string) (int, string, int64, io.ReadCloser, error) {
+	if url == "" {
+		return 0, "", 0, nil, fmt.Errorf("missing download url")
+	}
+	res, err := httprange.Get(c.downloadHTTP(), url, offset, validator)
+	if err != nil {
+		return 0, "", 0, nil, err
+	}
+	return res.Status, res.ETag, res.Total, res.Body, nil
+}
+
+// downloadHTTP returns the bulk-transfer client: same transport/TLS as the
+// control client but without the 30s whole-request deadline, which in Go
+// includes reading the body and so would abort any longer download.
+func (c *Client) downloadHTTP() *http.Client {
+	if c.dl != nil {
+		return c.dl
+	}
+	return c.http
 }
