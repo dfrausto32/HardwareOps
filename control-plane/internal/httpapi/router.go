@@ -262,6 +262,7 @@ func NewRouter(logger *log.Logger, deps Dependencies) http.Handler {
 		r.With(checkinLimiter.Middleware).Post("/devices/checkin", handlers.DeviceCheckin(logger, deps.Store, deps.Events, deps.TrustProxy, deps.ClientCertHeader, activeCAPool, identityPolicy, deps.Metrics, artifactSigPolicy))
 		r.With(checkinLimiter.Middleware).Post("/devices/reenroll", handlers.DeviceReenroll(logger, deps.Store, deps.Signer, deps.TrustProxy, deps.ClientCertHeader))
 		r.Get("/devices/artifacts/{artifactId}", handlers.GetAssignedArtifact(logger, deps.Store, deps.TrustProxy, deps.ClientCertHeader))
+		r.Get("/devices/artifacts/{artifactId}/chunks", handlers.GetAssignedArtifactChunks(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.TrustProxy, deps.ClientCertHeader))
 		r.Post("/devices/artifacts/{artifactId}/presign", handlers.PresignAssignedArtifact(logger, deps.Store, deps.ObjectStore, deps.S3Bucket, deps.PresignExpires, deps.TrustProxy, deps.ClientCertHeader, deps.Metrics))
 		r.With(enrollmentLimiter.Middleware).With(operator).Post("/enrollments", handlers.CreateEnrollmentToken(logger, deps.Store, deps.License, deps.TrustProxy, deps.Metrics))
 		r.With(operator).Get("/enrollment-profiles", handlers.ListEnrollmentProfiles(logger, deps.Store, deps.TrustProxy))

@@ -233,6 +233,7 @@ func downloadAndVerify(downloader Downloader, url, dest, expectedSHA string, opt
 		cfg.MaxBytesPerSec = opts.MaxBytesPerSec
 		cfg.ByteBudget = opts.ByteBudget
 		cfg.OnProgress = opts.OnProgress
+		cfg.ChunkSource = opts.ChunkSource
 		return downloadResumableWith(cfg, rd, url, dest, expectedSHA, opts.RefreshDownloadURL)
 	}
 	return downloadAndVerifyOnce(downloader, url, dest, expectedSHA)

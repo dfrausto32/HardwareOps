@@ -136,6 +136,7 @@ All paths below are full paths.
 | POST | `/api/v1/devices/{deviceId}/apply-result` | device path | rate limited |
 | POST | `/api/v1/devices/checkin` | device path | rate limited; response includes `immediateRecheckin: true` when a deploy trigger is pending |
 | POST | `/api/v1/devices/reenroll` | device path | rate limited |
+| GET | `/api/v1/devices/artifacts/{artifactId}/chunks?chunkSize=N` | device path (mTLS, artifact must be assigned) | per-chunk SHA-256 manifest used by agents to repair a corrupt download chunk-by-chunk. `chunkSize` must be a power of two in 64 KiB–8 MiB (default 1 MiB). Computed on first request, cached (content is immutable), refused with 500 if the stored object no longer matches the registered SHA-256/size. Advisory only — not signed; the agent always re-verifies the full SHA-256 and signature. Response: `{artifactId, sha256, size, chunkSize, chunks[]}` |
 | GET | `/api/v1/devices/{deviceId}/vulnerability-scans` | viewer or `device.read` scope | list vulnerability scans for a device (Nessus-sourced) |
 | GET | `/api/v1/devices/{deviceId}/vulnerability-scans/latest` | viewer or `device.read` scope | most recent vulnerability scan for a device |
 | POST | `/api/v1/devices/{deviceId}/trigger-apply` | operator or `deployment.trigger` scope | signal a specific device to re-check in immediately |

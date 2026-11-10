@@ -43,6 +43,21 @@ Extend F1 `Transport`/`Downloader` with an offset-aware method, e.g. `DownloadAr
 | T3 | `downloading` progress status, no spurious failures, transfer windows / bandwidth cap | flapping-link scenario shows advancing progress, no failed apply-result |
 | T4 | Per-chunk hashes, gateway/peer cache (optional) | decided after field data |
 
+## T4 — Chunk-level repair (implemented)
+
+**Problem:** a download that completes but fails the full SHA-256 (bit rot on the partial, a torn write that slipped past the checkpoint, a flaky storage medium) used to be discarded entirely — on a satellite or cellular link that can mean re-sending gigabytes for one bad sector.
+
+**Design**
+- The control plane serves `GET /devices/artifacts/{id}/chunks?chunkSize=N` (mTLS, assigned artifacts only): the SHA-256 of every fixed-size chunk. It is computed lazily in one streaming pass, cached in memory keyed by artifact SHA-256 + chunk size (content is immutable), de-duplicated across concurrent callers, and computed detached from the request so a device that gives up on a slow link finds it finished on retry. It refuses to publish a manifest if the stored object no longer matches the registered SHA-256/size. Chunk sizes are restricted to powers of two (64 KiB–8 MiB) so a client cannot force unbounded distinct passes.
+- **No ingest changes, no migration, no store interface change.** Computing at request time avoids touching the four ingest code paths and the `Store` interface.
+- **The manifest is deliberately not signed.** It is only an optimisation for *locating* corruption. The agent re-verifies the full SHA-256 after any repair, and the signature check (over that SHA-256) is unchanged, so a wrong or malicious manifest can only cause extra downloads or a failed apply — never acceptance of bad content. Re-fetched chunks are also verified against the manifest before being written.
+- Agent flow: full-hash mismatch → fetch the manifest (lazily, only now) → hash every chunk of the on-disk file → re-fetch only the mismatching chunks via exact-length `Range` reads (honouring byte budget, bandwidth cap and URL refresh) → re-hash the whole file → promote or discard. The manifest must agree with the artifact SHA-256, the file size and the chunk count, and at least one chunk must actually differ; otherwise it is distrusted and the file is discarded as before.
+- Repair rounds are bounded (3, persisted in the partial's sidecar), so a repair that never converges ends in a real SHA-256 failure rather than endless deferral. Transient failures (link down, byte budget) are deferrals that keep the partial; an older control plane (404/501) falls back to the previous discard behaviour.
+
+**Range/ETag passthrough review (non-presigned paths):** nothing needed changing. Artifact bytes are fetched from the presigned object-store URL (MinIO/S3), which natively supports `Range`, `If-Range` and `ETag`; the Caddy on-prem proxy (`deploy/compose/Caddyfile`) uses a plain `reverse_proxy` with no encoding/buffering directives that would alter ranges, and the nginx templates only front API routes, not artifact content. The control plane itself never streams artifact bodies. If a deployment ever fronts the object store with a caching proxy, it must forward `Range`/`If-Range` and not rewrite `ETag`.
+
+**Not done — peer/gateway cache (split out as T4b):** letting one device's finished download serve siblings on the local link. It needs a discovery mechanism, a trust model for serving untrusted peers (verification would stay at the receiver, which the existing hash+signature checks already provide), and the gateway/sub-device model from F3. Deferred until F3 exists and field data shows shared-link fleets that need it.
+
 ## Test plan
 - Unit: table tests for 200/206/416/401, validator mismatch, prefix re-hash, corrupted partial, sidecar/file disagreement.
 - Fault-injection server (Go `httptest`) that cuts the body at random offsets.

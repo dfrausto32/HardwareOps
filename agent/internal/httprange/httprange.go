@@ -4,12 +4,29 @@
 package httprange
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 )
+
+// ChunkManifest lists the SHA-256 of each fixed-size chunk of an artifact so a
+// corrupt download can be repaired chunk by chunk (roadmap T4). It is wire
+// data from the control plane and is NOT trusted for acceptance: the full
+// artifact SHA-256 and signature are always re-verified after any repair.
+type ChunkManifest struct {
+	ArtifactID string   `json:"artifactId"`
+	SHA256     string   `json:"sha256"`
+	Size       int64    `json:"size"`
+	ChunkSize  int      `json:"chunkSize"`
+	Chunks     []string `json:"chunks"`
+}
+
+// ErrNoChunkManifest means the control plane cannot provide a manifest (older
+// server, or it declined); callers fall back to discarding the corrupt file.
+var ErrNoChunkManifest = errors.New("chunk manifest not available")
 
 // StatusError is returned for HTTP statuses the resume protocol does not
 // handle itself (anything other than 200, 206, 416).

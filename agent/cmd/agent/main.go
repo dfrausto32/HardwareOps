@@ -26,6 +26,7 @@ import (
 	"github.com/parcel/agent/internal/client"
 	"github.com/parcel/agent/internal/config"
 	"github.com/parcel/agent/internal/firmware"
+	"github.com/parcel/agent/internal/httprange"
 	"github.com/parcel/agent/internal/logging"
 	"github.com/parcel/agent/internal/state"
 )
@@ -590,6 +591,15 @@ func applyDesiredComponent(component, root string, t client.Transport, desired c
 			return "", err
 		}
 		return pres.DownloadURL, nil
+	}
+	// T4: let a digest-mismatching download be repaired chunk by chunk rather
+	// than discarded, when the transport can fetch the control plane's manifest.
+	if cs, ok := t.(interface {
+		GetArtifactChunks(artifactID string, chunkSize int) (*httprange.ChunkManifest, error)
+	}); ok {
+		componentOpts.ChunkSource = func(chunkSize int) (*httprange.ChunkManifest, error) {
+			return cs.GetArtifactChunks(desired.ArtifactID, chunkSize)
+		}
 	}
 	// Track progress in agent state so it is reported on check-in (including
 	// throttled heartbeat check-ins during long transfers).

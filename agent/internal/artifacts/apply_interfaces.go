@@ -3,6 +3,8 @@ package artifacts
 import (
 	"fmt"
 	"time"
+
+	"github.com/parcel/agent/internal/httprange"
 )
 
 type ApplyOptions struct {
@@ -19,6 +21,9 @@ type ApplyOptions struct {
 	ByteBudget     int64 // max bytes fetched per apply; the rest resumes next check-in
 	// OnProgress is called with (committed, total) as bytes are persisted.
 	OnProgress func(committed, total int64)
+	// ChunkSource fetches the per-chunk hash manifest so a corrupt download is
+	// repaired chunk by chunk instead of discarded (roadmap T4). Optional.
+	ChunkSource func(chunkSize int) (*httprange.ChunkManifest, error)
 
 	AllowUnsupported      bool
 	SigningPublicKeyPath  string

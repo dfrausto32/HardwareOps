@@ -49,6 +49,11 @@ type resumeConfig struct {
 	Throttle       func(time.Duration) // sleep used for pacing; defaults to time.Sleep
 	OnProgress     func(committed, total int64)
 
+	// ChunkSource supplies the per-chunk hash manifest used to repair a
+	// download whose full digest mismatches (T4). Nil disables repair.
+	ChunkSource func(chunkSize int) (*httprange.ChunkManifest, error)
+	ChunkSize   int // manifest chunk size to request; 0 = 1 MiB
+
 	budget *transferBudget
 }
 
@@ -105,6 +110,9 @@ type partState struct {
 	ETag        string `json:"etag"`
 	Total       int64  `json:"total"`
 	Committed   int64  `json:"committed"`
+	// RepairTries counts chunk-repair rounds after a digest mismatch (T4) so a
+	// repair that never succeeds ends in a real failure, not endless deferral.
+	RepairTries int `json:"repairTries,omitempty"`
 }
 
 func partPaths(dest string) (part, meta string) { return dest + ".part", dest + ".part.meta" }
@@ -189,7 +197,10 @@ func downloadResumableWith(cfg resumeConfig, rd RangeDownloader, url, dest, expe
 
 		progressed, done, err := resumeAttempt(cfg, rd, url, partPath, metaPath, &st)
 		if err == nil && done {
-			sum, ferr := finalizeDownload(partPath, metaPath, dest, expectedSHA)
+			fetch := func(off, n int64) ([]byte, error) {
+				return fetchExact(cfg, rd, &url, refresh, off, n)
+			}
+			sum, ferr := finalizeDownload(cfg, &st, fetch, partPath, metaPath, dest, expectedSHA)
 			_ = os.Remove(partPath + ".lock")
 			return sum, ferr
 		}
@@ -388,23 +399,59 @@ func resumeAttempt(cfg resumeConfig, rd RangeDownloader, url, partPath, metaPath
 	return progressed, true, nil
 }
 
-// finalizeDownload hashes the complete partial, enforces the expected digest
-// and atomically moves it into place.
-func finalizeDownload(partPath, metaPath, dest, expectedSHA string) (string, error) {
-	f, err := os.Open(partPath)
+const maxRepairTries = 3
+
+func hashFile(path string) (string, error) {
+	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
+	defer f.Close()
 	h := sha256.New()
-	_, err = io.Copy(h, f)
-	f.Close()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// finalizeDownload hashes the complete partial, enforces the expected digest
+// and atomically moves it into place. On a digest mismatch, if a chunk
+// manifest source is configured (roadmap T4), only the corrupt chunks are
+// re-fetched and the file re-verified in full; the full SHA-256 remains the
+// sole authority, so a bad manifest can never make a corrupt file pass.
+// Without a usable manifest the partial is discarded (fail closed) as before.
+func finalizeDownload(cfg resumeConfig, st *partState, fetch func(off, n int64) ([]byte, error), partPath, metaPath, dest, expectedSHA string) (string, error) {
+	sum, err := hashFile(partPath)
 	if err != nil {
 		return "", err
 	}
-	sum := hex.EncodeToString(h.Sum(nil))
 	if expectedSHA != "" && !strings.EqualFold(sum, expectedSHA) {
-		discardPartial(partPath, metaPath)
-		return "", fmt.Errorf("sha256 mismatch: expected %s got %s", expectedSHA, sum)
+		mismatch := fmt.Errorf("sha256 mismatch: expected %s got %s", expectedSHA, sum)
+		if cfg.ChunkSource == nil || st.RepairTries >= maxRepairTries {
+			discardPartial(partPath, metaPath)
+			return "", mismatch
+		}
+		// Count the attempt before trying so a repair that keeps failing
+		// (e.g. the server cannot produce a manifest) cannot defer forever.
+		st.RepairTries++
+		savePartState(metaPath, *st)
+		repaired, rerr := repairCorruptChunks(cfg, partPath, expectedSHA, fetch)
+		switch {
+		case errors.Is(rerr, errBudgetReached):
+			return "", &DownloadIncompleteError{Committed: st.Committed, Total: st.Total, Reason: "byte budget reached"}
+		case errors.Is(rerr, httprange.ErrNoChunkManifest), errors.Is(rerr, errBadManifest):
+			discardPartial(partPath, metaPath)
+			return "", mismatch
+		case rerr != nil:
+			return "", &DownloadIncompleteError{Committed: st.Committed, Total: st.Total, Reason: "repairing corrupt chunks", Err: rerr}
+		}
+		if sum, err = hashFile(partPath); err != nil {
+			return "", err
+		}
+		if !strings.EqualFold(sum, expectedSHA) {
+			discardPartial(partPath, metaPath)
+			return "", fmt.Errorf("sha256 mismatch after repairing %d chunks: expected %s got %s", repaired, expectedSHA, sum)
+		}
 	}
 	if err := os.Rename(partPath, dest); err != nil {
 		return "", fmt.Errorf("rename download: %w", err)
