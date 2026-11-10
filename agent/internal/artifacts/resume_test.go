@@ -33,6 +33,7 @@ func fastCfg() resumeConfig {
 		MaxBackoff:         time.Millisecond,
 		IdleTimeout:        2 * time.Second,
 		CheckpointBytes:    1024,
+		MaxRefreshes:       3,
 		Sleep:              func(time.Duration) {},
 	}
 }
@@ -342,7 +343,7 @@ func (p plainDownloader) DownloadArtifact(string) (io.ReadCloser, error) {
 func TestNonRangeDownloaderFallsBack(t *testing.T) {
 	payload, sum := testPayload(2_000)
 	dest := filepath.Join(t.TempDir(), "a.tar.gz")
-	got, err := downloadAndVerify(plainDownloader{payload}, "stub://x", dest, sum)
+	got, err := downloadAndVerify(plainDownloader{payload}, "stub://x", dest, sum, nil)
 	if err != nil || got != sum {
 		t.Fatalf("fallback failed: %v %s", err, got)
 	}

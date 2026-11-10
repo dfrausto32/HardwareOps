@@ -40,6 +40,7 @@ type resumeConfig struct {
 	MaxBackoff         time.Duration
 	IdleTimeout        time.Duration // abort a body read that delivers no bytes for this long
 	CheckpointBytes    int64         // fsync + persist sidecar every N bytes
+	MaxRefreshes       int           // consecutive URL refreshes without progress before failing
 	Sleep              func(time.Duration)
 }
 
@@ -49,6 +50,7 @@ var defaultResumeConfig = resumeConfig{
 	MaxBackoff:         30 * time.Second,
 	IdleTimeout:        60 * time.Second,
 	CheckpointBytes:    4 << 20,
+	MaxRefreshes:       3,
 	Sleep:              time.Sleep,
 }
 
@@ -96,7 +98,24 @@ func discardPartial(partPath, metaPath string) {
 // discards the partial (fail closed). Transient failures keep the partial so
 // the next attempt, or the next check-in, continues from the last byte.
 func downloadResumable(cfg resumeConfig, rd RangeDownloader, url, dest, expectedSHA string) (string, error) {
+	return downloadResumableWith(cfg, rd, url, dest, expectedSHA, nil)
+}
+
+// downloadResumableWith is downloadResumable plus URL refresh (roadmap T2).
+// When the server rejects the URL with 401/403 (an expired presign), refresh
+// is called for a fresh locator and the transfer continues from the same
+// offset. If refresh itself fails — typically because only the object store,
+// not the control plane, is reachable — that is treated as a transient stall
+// (wait and retry), never a permanent failure.
+func downloadResumableWith(cfg resumeConfig, rd RangeDownloader, url, dest, expectedSHA string, refresh func() (string, error)) (string, error) {
 	partPath, metaPath := partPaths(dest)
+
+	// One writer per partial: two agents/applies must not interleave bytes.
+	release, err := acquirePartLock(partPath + ".lock")
+	if err != nil {
+		return "", err
+	}
+	defer release()
 
 	st, ok := loadPartState(metaPath)
 	// A partial is only trusted when it belongs to this exact artifact hash.
@@ -107,6 +126,7 @@ func downloadResumable(cfg resumeConfig, rd RangeDownloader, url, dest, expected
 	}
 
 	stalled := 0
+	refreshes := 0 // consecutive URL refreshes that produced no progress
 	var lastErr error
 	for {
 		if stalled > cfg.MaxStalledAttempts {
@@ -118,12 +138,27 @@ func downloadResumable(cfg resumeConfig, rd RangeDownloader, url, dest, expected
 
 		progressed, done, err := resumeAttempt(cfg, rd, url, partPath, metaPath, &st)
 		if err == nil && done {
-			return finalizeDownload(partPath, metaPath, dest, expectedSHA)
+			sum, ferr := finalizeDownload(partPath, metaPath, dest, expectedSHA)
+			_ = os.Remove(partPath + ".lock")
+			return sum, ferr
 		}
 		if err != nil {
 			var se httprange.StatusError
 			if errors.As(err, &se) && !se.Retryable() {
-				return "", err // e.g. 401/403 expired presign (T2), 404
+				expired := se.Code == http.StatusUnauthorized || se.Code == http.StatusForbidden
+				if !expired || refresh == nil || refreshes >= cfg.MaxRefreshes {
+					return "", err // 404 etc., or no/exhausted refresh
+				}
+				newURL, rerr := refresh()
+				if rerr != nil {
+					// Control plane unreachable: wait and retry, keep the partial.
+					lastErr = fmt.Errorf("refresh download url: %w", rerr)
+					stalled++
+					continue
+				}
+				url = newURL
+				refreshes++
+				continue
 			}
 			lastErr = err
 		} else {
@@ -131,6 +166,7 @@ func downloadResumable(cfg resumeConfig, rd RangeDownloader, url, dest, expected
 		}
 		if progressed {
 			stalled = 0
+			refreshes = 0
 		} else {
 			stalled++
 		}

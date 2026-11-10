@@ -1,8 +1,19 @@
 package artifacts
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 type ApplyOptions struct {
+	// RefreshDownloadURL returns a fresh download locator when the current
+	// presigned URL has expired mid-transfer (401/403). Optional.
+	RefreshDownloadURL func() (string, error)
+	// PartialMaxAge / PartialMaxBytes bound abandoned partial downloads kept
+	// for resume; zero selects defaults (7 days, 2 GiB).
+	PartialMaxAge   time.Duration
+	PartialMaxBytes int64
+
 	AllowUnsupported      bool
 	SigningPublicKeyPath  string
 	SigningKeyID          string

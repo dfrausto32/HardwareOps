@@ -541,6 +541,15 @@ func applyDesiredComponent(component, root string, t client.Transport, desired c
 		return nil
 	}
 	componentOpts := mergeApplyPolicyOptions(applyOpts, desired.ApplyPolicy)
+	// A presigned URL can expire during a long, interrupted transfer; let the
+	// resumable download fetch a fresh one and continue from the same offset.
+	componentOpts.RefreshDownloadURL = func() (string, error) {
+		pres, err := t.PresignArtifact(desired.ArtifactID)
+		if err != nil {
+			return "", err
+		}
+		return pres.DownloadURL, nil
+	}
 
 	componentRoot := componentRootPath(root, component)
 	logger.Infof("apply start component=%s artifact=%s version=%s", component, desired.ArtifactID, targetVersion)

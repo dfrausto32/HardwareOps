@@ -112,7 +112,8 @@ func Apply(root string, desired Desired, meta ArtifactMeta, downloader Downloade
 	if logger != nil {
 		logger.Infof("download start url=%s", desired.DownloadURL)
 	}
-	sum, err := downloadAndVerify(downloader, desired.DownloadURL, archivePath, meta.SHA256)
+	pruneStalePartials(downloads, archivePath+".part", opts.PartialMaxAge, opts.PartialMaxBytes)
+	sum, err := downloadAndVerify(downloader, desired.DownloadURL, archivePath, meta.SHA256, opts.RefreshDownloadURL)
 	if err != nil {
 		return outcome, err
 	}
@@ -221,14 +222,14 @@ func loadPlan(root string) (*plan.Plan, error) {
 	return p, nil
 }
 
-func downloadAndVerify(downloader Downloader, url, dest, expectedSHA string) (string, error) {
+func downloadAndVerify(downloader Downloader, url, dest, expectedSHA string, refresh func() (string, error)) (string, error) {
 	if url == "" {
 		return "", fmt.Errorf("missing download url")
 	}
 	// Resumable path (roadmap T1) when the transport can do ranged reads;
 	// otherwise fall back to a single full fetch.
 	if rd, ok := downloader.(RangeDownloader); ok {
-		return downloadResumable(defaultResumeConfig, rd, url, dest, expectedSHA)
+		return downloadResumableWith(defaultResumeConfig, rd, url, dest, expectedSHA, refresh)
 	}
 	return downloadAndVerifyOnce(downloader, url, dest, expectedSHA)
 }
