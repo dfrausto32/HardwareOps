@@ -35,6 +35,14 @@ type Config struct {
 	VerificationMode       string
 	MaxConsecutiveFailures int
 
+	// Transfer controls for constrained/contested links (roadmap T3).
+	// TransferWindow "HH:MM-HH:MM" (local time) limits when downloads start;
+	// MaxBytesPerSec paces downloads; TransferByteBudget caps bytes fetched per
+	// check-in (the remainder resumes next check-in). All default to unlimited.
+	TransferWindow     string
+	MaxBytesPerSec     int64
+	TransferByteBudget int64
+
 	// Firmware apply (Phase F2). Flashing activates when slot paths (A/B) or
 	// a single-image path are configured; otherwise firmware artifacts keep
 	// returning "not implemented" (or use the ALLOW_UNSUPPORTED_APPLY demo path).
@@ -136,7 +144,11 @@ func FromEnv() Config {
 		}(),
 		MaxConsecutiveFailures: maxConsecFail,
 
-		FirmwareDeviceModel:     strings.TrimSpace(os.Getenv("FIRMWARE_DEVICE_MODEL")),
+		TransferWindow:     strings.TrimSpace(os.Getenv("TRANSFER_WINDOW")),
+		MaxBytesPerSec:     parseInt64Env("TRANSFER_MAX_BYTES_PER_SEC"),
+		TransferByteBudget: parseInt64Env("TRANSFER_BYTE_BUDGET"),
+
+		FirmwareDeviceModel:    strings.TrimSpace(os.Getenv("FIRMWARE_DEVICE_MODEL")),
 		FirmwareHWRevision:      strings.TrimSpace(os.Getenv("FIRMWARE_HW_REVISION")),
 		FirmwareSlotAPath:       strings.TrimSpace(os.Getenv("FIRMWARE_SLOT_A_PATH")),
 		FirmwareSlotBPath:       strings.TrimSpace(os.Getenv("FIRMWARE_SLOT_B_PATH")),
@@ -176,6 +188,15 @@ func parseDurationEnv(key string, def time.Duration) time.Duration {
 		return d
 	}
 	return def
+}
+
+// parseInt64Env returns a non-negative int64 from the environment, 0 if unset or invalid.
+func parseInt64Env(key string) int64 {
+	n, err := strconv.ParseInt(strings.TrimSpace(os.Getenv(key)), 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 func parseFloatEnv(key string, def float64) float64 {

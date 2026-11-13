@@ -202,6 +202,25 @@ Expected result:
 - status is `active`
 - subsequent check-ins continue without rerunning the installer
 
+## Constrained-link transfer settings (optional)
+
+Artifact downloads resume automatically after drops, restarts and expired
+download URLs. On bandwidth-constrained, metered or contested links, add these
+to the agent environment (e.g. `/etc/parcel/agent.env`); all default to
+unlimited:
+
+| Variable | Example | Effect |
+|---|---|---|
+| `TRANSFER_WINDOW` | `22:00-05:00` | Downloads only start/continue inside this local-time window (wraps past midnight). Outside it the download is *deferred*, not failed. |
+| `TRANSFER_MAX_BYTES_PER_SEC` | `65536` | Paces downloads to at most this rate. |
+| `TRANSFER_BYTE_BUDGET` | `5242880` | Max bytes fetched per check-in; the remainder resumes at the next check-in. |
+
+A deferred or stalled download does not post a failed apply result and does not
+count toward `MAX_CONSECUTIVE_FAILURES` (safe-halt). The device shows the
+download under **Downloads** in the device drawer with `downloading`/`waiting`
+state, bytes done/total and time of last progress. Hash mismatches and
+permanent errors (e.g. 404) are still real failures.
+
 ## Legacy direct enrollment
 
 The direct token path is still available when you intentionally want the older flow:

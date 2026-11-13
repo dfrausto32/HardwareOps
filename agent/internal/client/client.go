@@ -17,6 +17,7 @@ import (
 type Client struct {
 	baseURL string
 	http    *http.Client
+	dl      *http.Client // bulk-download client without a whole-request timeout
 }
 
 type RateLimitError struct {
@@ -52,12 +53,17 @@ func NewWithTLS(baseURL string, tlsConfig *tls.Config) *Client {
 	if tlsConfig != nil {
 		transport.TLSClientConfig = tlsConfig
 	}
+	// Fail fast if the server accepts the connection but never answers; body
+	// stalls are handled by the download path's idle-read watchdog.
+	transport.ResponseHeaderTimeout = 60 * time.Second
 	return &Client{
 		baseURL: baseURL,
 		http: &http.Client{
 			Timeout:   30 * time.Second,
 			Transport: transport,
 		},
+		// Bulk downloads: no overall deadline (see downloadHTTP).
+		dl: &http.Client{Transport: transport},
 	}
 }
 
@@ -96,6 +102,8 @@ type CheckinComponent struct {
 	LastPreApplyStatus  string     `json:"lastPreApplyStatus,omitempty"`
 	LastPreApplyError   string     `json:"lastPreApplyError,omitempty"`
 	LastPreApplyAt      *time.Time `json:"lastPreApplyAt,omitempty"`
+	// Download is present only while a download is in flight or deferred.
+	Download *state.DownloadState `json:"download,omitempty"`
 }
 
 type DesiredState struct {
@@ -320,6 +328,7 @@ func (c *Client) CheckIn(st state.State, capabilities any) (*CheckinResponse, er
 				LastPreApplyStatus:  comp.LastPreApplyStatus,
 				LastPreApplyError:   comp.LastPreApplyError,
 				LastPreApplyAt:      timePtr(comp.LastPreApplyAt),
+				Download:            comp.Download,
 			}
 		}
 	}

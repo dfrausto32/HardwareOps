@@ -1,3 +1,5 @@
+import DownloadProgress from './DownloadProgress'
+
 export default function DeviceDrawer({
   activeArtifactGroups,
   addDeviceComponent,
@@ -123,6 +125,8 @@ export default function DeviceDrawer({
                     )}
                   </div>
                 </div>
+
+                <DownloadProgress components={deviceDetail.current?.components} />
 
                 {deviceDetail.current?.components && Object.keys(deviceDetail.current.components).some((key) => key !== 'app_bundle') && (
                   <div className="component-table">

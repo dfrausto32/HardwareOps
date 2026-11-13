@@ -1,8 +1,30 @@
 package artifacts
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+
+	"github.com/parcel/agent/internal/httprange"
+)
 
 type ApplyOptions struct {
+	// RefreshDownloadURL returns a fresh download locator when the current
+	// presigned URL has expired mid-transfer (401/403). Optional.
+	RefreshDownloadURL func() (string, error)
+	// PartialMaxAge / PartialMaxBytes bound abandoned partial downloads kept
+	// for resume; zero selects defaults (7 days, 2 GiB).
+	PartialMaxAge   time.Duration
+	PartialMaxBytes int64
+	// Transfer controls for constrained links (roadmap T3); zero = unlimited.
+	TransferWindow *TransferWindow // downloads only start inside this window; nil = always
+	MaxBytesPerSec int64           // pace downloads to at most this rate
+	ByteBudget     int64 // max bytes fetched per apply; the rest resumes next check-in
+	// OnProgress is called with (committed, total) as bytes are persisted.
+	OnProgress func(committed, total int64)
+	// ChunkSource fetches the per-chunk hash manifest so a corrupt download is
+	// repaired chunk by chunk instead of discarded (roadmap T4). Optional.
+	ChunkSource func(chunkSize int) (*httprange.ChunkManifest, error)
+
 	AllowUnsupported      bool
 	SigningPublicKeyPath  string
 	SigningKeyID          string

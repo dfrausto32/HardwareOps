@@ -26,6 +26,7 @@ import (
 	"github.com/parcel/agent/internal/client"
 	"github.com/parcel/agent/internal/config"
 	"github.com/parcel/agent/internal/firmware"
+	"github.com/parcel/agent/internal/httprange"
 	"github.com/parcel/agent/internal/logging"
 	"github.com/parcel/agent/internal/state"
 )
@@ -135,8 +136,33 @@ func main() {
 			time.Sleep(delay)
 		}
 	}
+	window, werr := artifacts.ParseTransferWindow(cfg.TransferWindow)
+	if werr != nil {
+		logger.Warnf("ignoring invalid TRANSFER_WINDOW: %v", werr)
+		window = nil
+	}
+	// Heartbeat check-ins during long downloads (T3). A heartbeat can consume a
+	// deploy trigger server-side, so remember its ImmediateRecheckin flag and
+	// honor it after the apply finishes.
+	var pendingImmediate bool
+	var lastCheckin time.Time
+	heartbeatHook = func(s *state.State) {
+		if time.Since(lastCheckin) < interval {
+			return
+		}
+		lastCheckin = time.Now()
+		r, herr := transport.CheckIn(*s, capabilities)
+		if herr != nil {
+			logger.Warnf("progress check-in failed: %v", herr)
+			return
+		}
+		if r != nil && r.ImmediateRecheckin {
+			pendingImmediate = true
+		}
+	}
 	for {
 		resp, err := transport.CheckIn(st, capabilities)
+		lastCheckin = time.Now()
 		if err != nil {
 			if rl, ok := err.(client.RateLimitError); ok {
 				wait := rl.RetryAfter
@@ -183,6 +209,9 @@ func main() {
 					RequireSignature:     cfg.RequireSignature,
 					TrustKeys:            trustKeysFromState(st),
 					VerificationMode:     cfg.VerificationMode,
+					TransferWindow:       window,
+					MaxBytesPerSec:       cfg.MaxBytesPerSec,
+					ByteBudget:           cfg.TransferByteBudget,
 				}
 				applyErr := applyDesiredComponents(cfg.ArtifactRoot, transport, desiredComponents, &st, logger, applyOpts, cfg.MaxConsecutiveFailures)
 				if applyErr != nil {
@@ -201,7 +230,8 @@ func main() {
 		if *once {
 			return
 		}
-		if shouldImmediateRecheck(resp) {
+		if shouldImmediateRecheck(resp) || pendingImmediate {
+			pendingImmediate = false
 			logger.Infof("deploy trigger: rechecking immediately")
 			continue
 		}
@@ -509,6 +539,7 @@ func applyDesiredComponent(component, root string, t client.Transport, desired c
 		applyErr := reportApplyError(t, st, component, errMsg, outcome, logger, artifactID)
 		st.EnsureComponents()
 		cs := st.Components[component]
+		cs.Download = nil // a real failure ends any in-flight/deferred download
 		cs.ConsecutiveFailures = compState.ConsecutiveFailures + 1
 		st.Components[component] = cs
 		return applyErr
@@ -538,9 +569,47 @@ func applyDesiredComponent(component, root string, t client.Transport, desired c
 		return failReport("desired version missing and artifact has no version", artifacts.ApplyOutcome{}, desired.ArtifactID)
 	}
 	if compState.CurrentVersion == targetVersion && compState.CurrentConfigRev == desired.ConfigRev {
+		if compState.Download != nil { // stale: already at the desired version
+			compState.Download = nil
+			st.Components[component] = compState
+		}
+		return nil
+	}
+	// Transfer window (T3): don't start/continue a download outside it. This is
+	// a deliberate wait, not a failure.
+	if !applyOpts.TransferWindow.Open(time.Now()) {
+		deferDownload(st, component, desired.ArtifactID, "outside transfer window", 0, 0)
+		logger.Infof("download deferred component=%s artifact=%s reason=outside transfer window", component, desired.ArtifactID)
 		return nil
 	}
 	componentOpts := mergeApplyPolicyOptions(applyOpts, desired.ApplyPolicy)
+	// A presigned URL can expire during a long, interrupted transfer; let the
+	// resumable download fetch a fresh one and continue from the same offset.
+	componentOpts.RefreshDownloadURL = func() (string, error) {
+		pres, err := t.PresignArtifact(desired.ArtifactID)
+		if err != nil {
+			return "", err
+		}
+		return pres.DownloadURL, nil
+	}
+	// T4: let a digest-mismatching download be repaired chunk by chunk rather
+	// than discarded, when the transport can fetch the control plane's manifest.
+	if cs, ok := t.(interface {
+		GetArtifactChunks(artifactID string, chunkSize int) (*httprange.ChunkManifest, error)
+	}); ok {
+		componentOpts.ChunkSource = func(chunkSize int) (*httprange.ChunkManifest, error) {
+			return cs.GetArtifactChunks(desired.ArtifactID, chunkSize)
+		}
+	}
+	// Track progress in agent state so it is reported on check-in (including
+	// throttled heartbeat check-ins during long transfers).
+	beginDownload(st, component, desired.ArtifactID)
+	componentOpts.OnProgress = func(done, total int64) {
+		recordDownloadProgress(st, component, desired.ArtifactID, done, total)
+		if heartbeatHook != nil {
+			heartbeatHook(st)
+		}
+	}
 
 	componentRoot := componentRootPath(root, component)
 	logger.Infof("apply start component=%s artifact=%s version=%s", component, desired.ArtifactID, targetVersion)
@@ -561,6 +630,16 @@ func applyDesiredComponent(component, root string, t client.Transport, desired c
 		VerificationStatus: meta.VerificationStatus,
 		VerificationError:  meta.VerificationError,
 	}, t, logger, componentOpts)
+	var incomplete *artifacts.DownloadIncompleteError
+	if errors.As(err, &incomplete) {
+		// Transient transfer problem (stalled link, byte budget, busy partial):
+		// keep the partial, report progress, and resume on the next check-in.
+		// Deliberately NOT a failure: no failed apply result, no
+		// consecutive-failure increment (which would trigger safe-halt).
+		deferDownload(st, component, desired.ArtifactID, incomplete.Reason, incomplete.Committed, incomplete.Total)
+		logger.Warnf("download deferred component=%s artifact=%s reason=%s bytes=%d/%d", component, desired.ArtifactID, incomplete.Reason, incomplete.Committed, incomplete.Total)
+		return nil
+	}
 	if err != nil {
 		errMsg := fmt.Sprintf("apply artifact: %v", err)
 		if oldVersion != "" {
@@ -579,6 +658,7 @@ func applyDesiredComponent(component, root string, t client.Transport, desired c
 	compState.LastApplyAt = time.Now().UTC()
 	compState.LastApplyArtifactID = desired.ArtifactID
 	compState.ConsecutiveFailures = 0
+	compState.Download = nil
 	if outcome.PreApplyStatus != "" {
 		compState.LastPreApplyStatus = outcome.PreApplyStatus
 		compState.LastPreApplyError = outcome.PreApplyError

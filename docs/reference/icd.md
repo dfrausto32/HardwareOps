@@ -136,6 +136,7 @@ All paths below are full paths.
 | POST | `/api/v1/devices/{deviceId}/apply-result` | device path | rate limited |
 | POST | `/api/v1/devices/checkin` | device path | rate limited; response includes `immediateRecheckin: true` when a deploy trigger is pending |
 | POST | `/api/v1/devices/reenroll` | device path | rate limited |
+| GET | `/api/v1/devices/artifacts/{artifactId}/chunks?chunkSize=N` | device path (mTLS, artifact must be assigned) | per-chunk SHA-256 manifest used by agents to repair a corrupt download chunk-by-chunk. `chunkSize` must be a power of two in 64 KiB–8 MiB (default 1 MiB). Computed on first request, cached (content is immutable), refused with 500 if the stored object no longer matches the registered SHA-256/size. Advisory only — not signed; the agent always re-verifies the full SHA-256 and signature. Response: `{artifactId, sha256, size, chunkSize, chunks[]}` |
 | GET | `/api/v1/devices/{deviceId}/vulnerability-scans` | viewer or `device.read` scope | list vulnerability scans for a device (Nessus-sourced) |
 | GET | `/api/v1/devices/{deviceId}/vulnerability-scans/latest` | viewer or `device.read` scope | most recent vulnerability scan for a device |
 | POST | `/api/v1/devices/{deviceId}/trigger-apply` | operator or `deployment.trigger` scope | signal a specific device to re-check in immediately |
@@ -297,6 +298,35 @@ Deploy triggers signal one or more devices to skip their normal check-in interva
 ```
 
 When a trigger is pending, the device's next `POST /devices/checkin` response includes `"immediateRecheckin": true`, causing the agent to skip its sleep interval and re-check in within seconds.
+
+#### Download progress in check-in (`currentComponents[*].download`)
+
+While an artifact download is in flight or deliberately deferred, the agent includes a `download` object on the affected component of `POST /devices/checkin` (also sent as throttled heartbeat check-ins during long transfers):
+
+```json
+{
+  "currentComponents": {
+    "app_bundle": {
+      "softwareVersion": "1.0.0",
+      "download": {
+        "artifactId": "uuid",
+        "state": "downloading",
+        "reason": "",
+        "bytesDone": 4194304,
+        "bytesTotal": 10485760,
+        "startedAt": "2026-11-10T10:00:00Z",
+        "lastProgressAt": "2026-11-10T10:05:00Z",
+        "attempts": 2
+      }
+    }
+  }
+}
+```
+
+- `state`: `downloading` (bytes flowing) or `waiting` (paused by the agent; `reason` is a short, non-sensitive string such as `outside transfer window`, `byte budget reached`, `stalled after N attempts`). Any other value is discarded.
+- The object is replaced on every check-in: omitting it means nothing is downloading. The control plane clamps counters (`bytesDone ≤ bytesTotal`, non-negative) and bounds string lengths.
+- It is returned to operators in `GET /api/v1/devices/{id}` under `current.components.<name>.download`. Progress never changes device `status`: a downloading or waiting device stays `active`, and no failed apply result is posted for transient transfer problems. Integrity failures (SHA-256 mismatch) and permanent errors still fail the apply.
+- Agent downloads are resumable via HTTP `Range`/`If-Range` against the presigned object URL; see `docs/development/resumable-downloads.md`.
 
 ### 5.10 Metrics
 
