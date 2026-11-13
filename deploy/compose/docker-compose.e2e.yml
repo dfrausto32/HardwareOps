@@ -26,7 +26,10 @@ services:
       retries: 20
 
   minio:
-    image: minio/minio:latest
+    # Docker Hub's minio/minio is no longer pullable (CI: "pull access denied");
+    # MinIO publishes official images on quay.io. Pinned to the same release the
+    # dev and on-prem compose files use.
+    image: quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z
     command: server /data --console-address ":9011"
     environment:
       MINIO_ROOT_USER: miniotest
