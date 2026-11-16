@@ -1,0 +1,194 @@
+name: MinIO image
+
+# Builds the Parcel-owned MinIO image (deploy/minio/Dockerfile) from the pinned
+# upstream source tag. Pull requests touching deploy/minio only *build and scan*
+# (nothing is pushed). Publishing is manual: run this workflow with a patch
+# revision to push an immutable tag to GHCR.
+#
+# Why: minio/minio (Docker Hub) and quay.io/minio/minio no longer pull, and the
+# signed release binaries on dl.min.io return 410. See deploy/minio/README.md.
+
+on:
+  pull_request:
+    paths:
+      - "deploy/minio/**"
+      - ".github/workflows/minio-image.yml"
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: "Patch revision of this build (immutable tag suffix, e.g. 1 -> <release>-p1). Bump when rebuilding the same MinIO release (new base image, Dockerfile fix)."
+        required: true
+        default: "1"
+      push:
+        description: "Push to GHCR (false = build + scan only)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/parcel-minio
+
+jobs:
+  build:
+    name: Build${{ github.event_name == 'workflow_dispatch' && inputs.push && ' and publish' || '' }} MinIO image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # keyless cosign signing
+      attestations: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read pinned release from the Dockerfile
+        id: pin
+        run: |
+          tag=$(sed -n 's/^ARG MINIO_TAG=//p' deploy/minio/Dockerfile | head -1)
+          [ -n "$tag" ] || { echo "MINIO_TAG not found" >&2; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Compute image tag
+        id: meta
+        env:
+          EVENT: ${{ github.event_name }}
+          REVISION: ${{ inputs.revision }}
+          PIN: ${{ steps.pin.outputs.tag }}
+        run: |
+          image=$(echo "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
+          rev="${REVISION:-ci}"
+          case "$rev" in (*[!0-9a-z]*) echo "revision must be [0-9a-z]+" >&2; exit 1;; esac
+          # Lowercase: image names must be; the RELEASE.* tag is a valid tag.
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "ref=$image:${PIN}-p${rev}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Single-arch build loaded locally so we can smoke-test and scan it. The
+      # source clone + commit-pin check inside the Dockerfile fails the build if
+      # the upstream tag has moved.
+      - name: Build (amd64, local) for verification
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/minio
+          platforms: linux/amd64
+          load: true
+          tags: parcel-minio:verify
+          cache-from: type=gha,scope=minio
+          cache-to: type=gha,mode=max,scope=minio
+
+      - name: Verify version, health and S3 / Object Lock behaviour
+        run: |
+          set -euo pipefail
+          want="${{ steps.pin.outputs.tag }}"
+          got=$(docker run --rm parcel-minio:verify minio --version | head -1)
+          echo "$got"
+          echo "$got" | grep -q "$want" || { echo "version mismatch: want $want" >&2; exit 1; }
+
+          docker network create mtn
+          docker run -d --name pm --network mtn -p 9920:9000 \
+            -e MINIO_ROOT_USER=miniotest -e MINIO_ROOT_PASSWORD=miniotest \
+            parcel-minio:verify server /data --console-address ":9011"
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:9920/minio/health/live >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:9920/minio/health/live >/dev/null
+          # In-container healthcheck compatibility (existing compose files use curl).
+          docker exec pm curl -sf http://localhost:9000/minio/health/live >/dev/null
+
+          cat > /tmp/s3check.sh <<'EOF'
+          set -e
+          export AWS_ACCESS_KEY_ID=miniotest AWS_SECRET_ACCESS_KEY=miniotest AWS_DEFAULT_REGION=us-east-1 AWS_EC2_METADATA_DISABLED=true
+          EP="--endpoint-url http://pm:9000"
+          aws $EP s3api create-bucket --bucket locked --object-lock-enabled-for-bucket >/dev/null
+          printf 'hello parcel' > /tmp/o.txt
+          UNTIL=$(date -u -d '+1 day' +%Y-%m-%dT%H:%M:%SZ)
+          aws $EP s3api put-object --bucket locked --key a/o.txt --body /tmp/o.txt --object-lock-mode GOVERNANCE --object-lock-retain-until-date "$UNTIL" >/dev/null
+          aws $EP s3api get-object --bucket locked --key a/o.txt /tmp/out.txt >/dev/null
+          [ "$(cat /tmp/out.txt)" = "hello parcel" ] || { echo "GET content mismatch"; exit 1; }
+          # Resumable downloads (roadmap T1-T4) depend on ranged GETs.
+          aws $EP s3api get-object --bucket locked --key a/o.txt --range bytes=6-11 /tmp/r.txt >/dev/null
+          [ "$(cat /tmp/r.txt)" = "parcel" ] || { echo "ranged GET mismatch"; exit 1; }
+          # Ransomware control R-01: a retained version must not be deletable.
+          VID=$(aws $EP s3api list-object-versions --bucket locked --query 'Versions[0].VersionId' --output text)
+          if aws $EP s3api delete-object --bucket locked --key a/o.txt --version-id "$VID" >/dev/null 2>&1; then
+            echo "locked version was deleted"; exit 1
+          fi
+          aws $EP s3 presign s3://locked/a/o.txt --expires-in 60 | grep -q 'X-Amz-Signature'
+          echo "S3 / Object Lock checks passed"
+          EOF
+          docker run --rm --network mtn -v /tmp/s3check.sh:/s3check.sh:ro \
+            --entrypoint sh amazon/aws-cli /s3check.sh
+
+      - name: Vulnerability scan (report only)
+        # Upstream is archived, so known CVEs in this frozen release are
+        # expected. This publishes the report; it deliberately does not fail
+        # the build (see deploy/minio/README.md, "Patching policy").
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: parcel-minio:verify
+          format: table
+          output: trivy-minio.txt
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Upload scan report
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-minio-report
+          path: trivy-minio.txt
+
+      - name: Log in to GHCR
+        if: github.event_name == 'workflow_dispatch' && inputs.push
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (multi-arch, SBOM + provenance)
+        id: push
+        if: github.event_name == 'workflow_dispatch' && inputs.push
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/minio
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.ref }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=minio
+
+      - name: Install cosign
+        if: github.event_name == 'workflow_dispatch' && inputs.push
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image (keyless)
+        if: github.event_name == 'workflow_dispatch' && inputs.push
+        run: cosign sign --yes "${{ steps.meta.outputs.image }}@${{ steps.push.outputs.digest }}"
+
+      - name: Summary
+        if: github.event_name == 'workflow_dispatch' && inputs.push
+        run: |
+          {
+            echo "### Published parcel-minio"
+            echo ""
+            echo "- Tag: \`${{ steps.meta.outputs.ref }}\`"
+            echo "- Digest: \`${{ steps.push.outputs.digest }}\`"
+            echo ""
+            echo "Pin deployments by digest:"
+            echo ""
+            echo "\`\`\`"
+            echo "${{ steps.meta.outputs.image }}@${{ steps.push.outputs.digest }}"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
